@@ -255,4 +255,4 @@ For postfix dispatch on user-defined enums, the engine would need the family reg
 
 ## Open questions
 
-1. **Flatten ambiguity.** `.flatten()` currently dispatches for arrays, Option, and Result. With prefixed kinds, the engine can distinguish Option/Result flatten from array flatten by checking whether `kind` has a prefix. But this means the engine inspects values to decide behavior — is that acceptable?
+1. **Flatten ambiguity.** `.flatten()` is overloaded across arrays, Option, and Result. Without `__union`, the postfix method can't disambiguate at build time. For now, Option/Result flatten use the existing Branch mechanism (prefix stripping makes this work), array flatten stays as the `Flatten` builtin. Revisit naming (`flattenToArray`, etc.) separately.
