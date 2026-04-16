@@ -38,9 +38,6 @@ export const resultMethods: UnionMethods = {
 // ---------------------------------------------------------------------------
 
 export const Result = {
-  /** Union dispatch info for Result. Pass to `createHandler`'s `returns` option. */
-  dispatch: { name: "Result", methods: resultMethods },
-
   /** Wrap a value as Ok. `TValue → Result<TValue, TError>` */
   ok<TValue, TError>(): TypedAction<TValue, ResultT<TValue, TError>> {
     return withUnion(

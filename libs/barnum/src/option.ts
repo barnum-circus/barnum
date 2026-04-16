@@ -51,9 +51,6 @@ export const optionMethods: UnionMethods = {
  * CollectSome builtin.
  */
 export const Option = {
-  /** Union dispatch info for Option. Pass to `createHandler`'s `returns` option. */
-  dispatch: { name: "Option", methods: optionMethods },
-
   /** Wrap a value as Some. `T → Option<T>` */
   some<T>(): TypedAction<T, OptionT<T>> {
     return withUnion(tag("Some") as TypedAction<T, OptionT<T>>, "Option", optionMethods);
