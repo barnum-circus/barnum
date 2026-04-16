@@ -112,14 +112,14 @@ Builtin::Tag { kind: String }
 // → { "kind": "Ok", "value": ... }
 
 // New
-Builtin::Tag { kind: String, enum_name: Option<String> }
+Builtin::Tag { kind: String, enum_name: String }
 // → { "kind": "Result.Ok", "value": ... }
 ```
 
-SDK-side `tag` gains an optional enum name parameter:
-- `tag("Ok", "Result")` → emits `Tag { kind: "Ok", enum_name: Some("Result") }` → Rust produces `{ kind: "Result.Ok", value: ... }`
+SDK-side `tag` takes a required enum name parameter:
+- `tag("Ok", "Result")` → emits `Tag { kind: "Ok", enum_name: "Result" }` → Rust produces `{ kind: "Result.Ok", value: ... }`
 - `tag("Some", "Option")` → same pattern
-- `tag("Foo")` → emits `Tag { kind: "Foo", enum_name: None }` → Rust produces `{ kind: "Foo", value: ... }` (no prefix)
+- `tag("HasErrors", "ClassifyResult")` → Rust produces `{ kind: "ClassifyResult.HasErrors", value: ... }`
 
 ### 6. New AST nodes replace Branch-based dispatch
 
