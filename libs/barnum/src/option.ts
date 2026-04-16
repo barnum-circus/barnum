@@ -20,8 +20,8 @@ import {
   splitLast,
   tag,
 } from "./builtins.js";
-// Lazy: resultMethods is only accessed inside function bodies, not at module init.
-import { resultMethods } from "./result.js";
+// Lazy: resultMethods and Result are only accessed inside function bodies, not at module init.
+import { Result, resultMethods } from "./result.js";
 // ---------------------------------------------------------------------------
 // Option dispatch table
 // ---------------------------------------------------------------------------
@@ -49,12 +49,17 @@ export const optionMethods: UnionMethods = {
  * CollectSome builtin.
  */
 export const Option = {
+  /** Tag combinator: wrap value as `Option.Some`. `T → Option<T>` */
+  some: tag("Some", "Option"),
+  /** Tag combinator: wrap value as `Option.None`. `void → Option<T>` */
+  none: tag("None", "Option"),
+
   /** Transform the Some value. `Option<T> → Option<U>` */
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
     return withUnion(
       branch({
-        Some: chain(toAction(action), toAction(tag("Some", "Option"))),
-        None: tag("None", "Option"),
+        Some: chain(toAction(action), toAction(Option.some)),
+        None: Option.none,
       }) as TypedAction<OptionT<T>, OptionT<U>>,
       "Option", optionMethods,
     );
@@ -70,7 +75,7 @@ export const Option = {
     return withUnion(
       branch({
         Some: action,
-        None: tag("None", "Option"),
+        None: Option.none,
       }) as TypedAction<OptionT<T>, OptionT<U>>,
       "Option", optionMethods,
     );
@@ -107,7 +112,7 @@ export const Option = {
     return withUnion(
       branch({
         Some: identity(),
-        None: tag("None", "Option"),
+        None: Option.none,
       }) as TypedAction<OptionT<OptionT<T>>, OptionT<T>>,
       "Option", optionMethods,
     );
@@ -123,7 +128,7 @@ export const Option = {
     return withUnion(
       branch({
         Some: predicate,
-        None: tag("None", "Option"),
+        None: Option.none,
       }) as TypedAction<OptionT<T>, OptionT<T>>,
       "Option", optionMethods,
     );
@@ -183,10 +188,10 @@ export const Option = {
     return withUnion(
       branch({
         Some: branch({
-          Ok: chain(toAction(tag("Some", "Option")), toAction(tag("Ok", "Result"))),
-          Err: tag("Err", "Result"),
+          Ok: chain(toAction(Option.some), toAction(Result.ok)),
+          Err: Result.err,
         }),
-        None: chain(toAction(drop.tag("None", "Option")), toAction(tag("Ok", "Result"))),
+        None: chain(toAction(chain(toAction(drop), toAction(Option.none))), toAction(Result.ok)),
       }) as TypedAction<
         OptionT<ResultT<TValue, TError>>,
         ResultT<OptionT<TValue>, TError>

@@ -10,7 +10,7 @@ import {
 } from "./ast.js";
 import { chain } from "./chain.js";
 import { constant, drop, identity, panic, tag } from "./builtins.js";
-import { optionMethods } from "./option.js";
+import { Option, optionMethods } from "./option.js";
 // ---------------------------------------------------------------------------
 // Result dispatch table
 // ---------------------------------------------------------------------------
@@ -36,14 +36,19 @@ export const resultMethods: UnionMethods = {
 // ---------------------------------------------------------------------------
 
 export const Result = {
+  /** Tag combinator: wrap value as `Result.Ok`. `TValue → Result<TValue, TError>` */
+  ok: tag("Ok", "Result"),
+  /** Tag combinator: wrap value as `Result.Err`. `TError → Result<TValue, TError>` */
+  err: tag("Err", "Result"),
+
   /** Transform the Ok value. `Result<TValue, TError> → Result<TOut, TError>` */
   map<TValue, TOut, TError>(
     action: Pipeable<TValue, TOut>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return withUnion(
       branch({
-        Ok: chain(toAction(action), toAction(tag("Ok", "Result"))),
-        Err: tag("Err", "Result"),
+        Ok: chain(toAction(action), toAction(Result.ok)),
+        Err: Result.err,
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       "Result", resultMethods,
     );
@@ -55,8 +60,8 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return withUnion(
       branch({
-        Ok: tag("Ok", "Result"),
-        Err: chain(toAction(action), toAction(tag("Err", "Result"))),
+        Ok: Result.ok,
+        Err: chain(toAction(action), toAction(Result.err)),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>,
       "Result", resultMethods,
     );
@@ -72,7 +77,7 @@ export const Result = {
     return withUnion(
       branch({
         Ok: action,
-        Err: tag("Err", "Result"),
+        Err: Result.err,
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       "Result", resultMethods,
     );
@@ -84,7 +89,7 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return withUnion(
       branch({
-        Ok: tag("Ok", "Result"),
+        Ok: Result.ok,
         Err: fallback,
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>,
       "Result", resultMethods,
@@ -98,7 +103,7 @@ export const Result = {
     return withUnion(
       branch({
         Ok: chain(drop, other),
-        Err: tag("Err", "Result"),
+        Err: Result.err,
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       "Result", resultMethods,
     );
@@ -139,7 +144,7 @@ export const Result = {
     return withUnion(
       branch({
         Ok: identity(),
-        Err: tag("Err", "Result"),
+        Err: Result.err,
       }) as TypedAction<
         ResultT<ResultT<TValue, TError>, TError>,
         ResultT<TValue, TError>
@@ -159,8 +164,8 @@ export const Result = {
   > {
     return withUnion(
       branch({
-        Ok: tag("Some", "Option"),
-        Err: drop.tag("None", "Option"),
+        Ok: Option.some,
+        Err: chain(toAction(drop), toAction(Option.none)),
       }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>,
       "Option", optionMethods,
     );
@@ -177,8 +182,8 @@ export const Result = {
   > {
     return withUnion(
       branch({
-        Ok: drop.tag("None", "Option"),
-        Err: tag("Some", "Option"),
+        Ok: chain(toAction(drop), toAction(Option.none)),
+        Err: Option.some,
       }) as TypedAction<ResultT<TValue, TError>, OptionT<TError>>,
       "Option", optionMethods,
     );
@@ -197,10 +202,10 @@ export const Result = {
     return withUnion(
       branch({
         Ok: branch({
-          Some: chain(toAction(tag("Ok", "Result")), toAction(tag("Some", "Option"))),
-          None: drop.tag("None", "Option"),
+          Some: chain(toAction(Result.ok), toAction(Option.some)),
+          None: chain(toAction(drop), toAction(Option.none)),
         }),
-        Err: chain(toAction(tag("Err", "Result")), toAction(tag("Some", "Option"))),
+        Err: chain(toAction(Result.err), toAction(Option.some)),
       }) as TypedAction<
         ResultT<OptionT<TValue>, TError>,
         OptionT<ResultT<TValue, TError>>

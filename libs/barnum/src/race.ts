@@ -1,7 +1,7 @@
 import {
   type Action,
   type Pipeable,
-  type Result,
+  type Result as ResultT,
   type TypedAction,
   toAction,
   typedAction,
@@ -9,6 +9,7 @@ import {
 } from "./ast.js";
 import { chain } from "./chain.js";
 import { identity, tag } from "./builtins.js";
+import { Result } from "./result.js";
 import {
   allocateRestartHandlerId,
   type RestartHandlerId,
@@ -137,19 +138,19 @@ Object.defineProperty(dynamicSleep, "__definition", {
 export function withTimeout<TIn, TOut>(
   ms: Pipeable<TIn, number>,
   body: Pipeable<TIn, TOut>,
-): TypedAction<TIn, Result<TOut, void>> {
+): TypedAction<TIn, ResultT<TOut, void>> {
   const restartHandlerId = allocateRestartHandlerId();
   const perform = breakPerform(restartHandlerId);
 
   // Branch 1: body → Tag("Ok") → Break → RestartPerform
   const bodyBranch = toAction(chain(
-    toAction(chain(toAction(body), toAction(tag("Ok", "Result")))),
+    toAction(chain(toAction(body), toAction(Result.ok))),
     toAction(perform),
   ));
 
   // Branch 2: ms → sleep() → Tag("Err") → Break → RestartPerform
   const sleepBranch = toAction(chain(
-    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(tag("Err", "Result")))),
+    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(Result.err))),
     toAction(perform),
   ));
 
