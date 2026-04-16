@@ -1,187 +1,195 @@
-# Handler Union Dispatch
+# Union Dispatch via `enumKind`
 
-How should pipeline nodes declare that they produce Result, Option, or other union types?
+Replace `__union` dispatch tables on pipeline nodes with self-describing values that carry their enum identity.
 
 ## Problem
 
-Postfix methods like `.unwrapOr()`, `.mapErr()`, `.map()` dispatch through `__union`, which is attached to TypedAction pipeline nodes at construction time. But most ways of producing a Result/Option-typed output don't set `__union`:
+Postfix methods (`.unwrapOr()`, `.map()`, `.mapErr()`) need to know the union family (Result vs Option) to dispatch. Currently this is tracked via `__union` on TypedAction pipeline nodes, but most ways of producing a union-typed output don't set it: `createHandler`, `getField`, `branch`, `identity`. There's no general fix — `__union` is a property of the static pipeline graph, and TypeScript compile-time type knowledge doesn't exist at runtime.
 
-- `createHandler` where the handler body returns `{ kind: "Ok", value: ... }`
-- `handler.getField("foo")` where `foo` is a Result
-- `branch({ A: ..., B: ... })` where a case returns a Result
-- `identity()` when the input happens to be a Result
+## Approach: `enumKind` in the wire format
 
-The root cause: `__union` is a property of the static pipeline graph, not of the runtime values flowing through it. TypeScript knows at compile time that `getField("foo")` returns `Result<string, string>`, but that type information doesn't exist at runtime.
+Values carry their enum identity:
 
-### The `{ foo: Result }` problem
-
-The problem is not specific to `createHandler`. Consider a handler that returns a struct containing a Result:
-
-```ts
-const myHandler = createHandler({
-  handle: async (): Promise<{ foo: Result<string, string>; bar: number }> => {
-    return { foo: { kind: "Ok", value: "hello" }, bar: 42 };
-  },
-});
-
-myHandler.getField("foo")  // TypedAction<..., Result<string, string>> — __union is null
-  .unwrapOr(fallback)       // RUNTIME ERROR
+```
+{ kind: "Ok", enumKind: "Result", value: "nice" }
+{ kind: "Some", enumKind: "Option", value: 42 }
 ```
 
-Any approach that annotates `createHandler` fails here — the Result appears only after `.getField("foo")`. This rules out handler-specific solutions as the general answer.
+The engine reads `enumKind` at runtime to dispatch union operations. `__union` is eliminated entirely.
+
+### Alternative: namespaced kind strings
+
+One field instead of two: `{ kind: "Result.Ok", value: "nice" }`.
+
+The engine extracts the enum name by splitting on `.`. Branch strips the prefix when matching: value `kind: "Result.Ok"` matches case key `"Ok"`.
+
+**TS type divergence problem:** `TaggedUnion` currently produces `kind: "Ok"`. Changing to `kind: "Result.Ok"` means either (a) TS types diverge from wire format, or (b) branch cases must use full names: `branch({ "Result.Ok": ... })`. Neither is great. With `enumKind` as a separate field, `kind` stays `"Ok"` everywhere — no divergence.
 
 ---
 
-## Approach A: `Result.from(action)` — explicit wrapper
+## Changes
 
-Attach `__union` to any TypedAction that produces a Result/Option, at the consumption site.
+### 1. Wire format
 
-```ts
-Result.from(myHandler.getField("foo")).unwrapOr(fallback)
+Tagged union values gain an `enumKind` field:
+
 ```
+// Before
+{ kind: "Ok", value: "nice" }
 
-Identity at the AST level — no new nodes, just attaches dispatch to the existing node.
-
-Pros:
-- Works everywhere: handlers, getField, branch, identity, any source
-- Compositional — not tied to createHandler
-- Type-safe — constrains the input to actually be a `Result<T, E>`
-- No engine changes
-
-Cons:
-- Every Result/Option-producing action needs explicit wrapping
-- Easy to forget (runtime error)
-
----
-
-## Approach B: `enumKind` in the wire format — self-describing values
-
-Embed the enum identity in the value itself:
-
-```ts
+// After
 { kind: "Ok", enumKind: "Result", value: "nice" }
 ```
 
-`Result.ok("nice")` becomes a **runtime value constructor** (not a pipeline node) that handlers use in their bodies:
+Branch matching is unchanged — still matches on `kind`. `enumKind` is read only by the new union-aware AST nodes.
+
+### 2. Runtime value constructors for handler bodies
+
+Handlers currently return bare objects. Add constructors that inject `enumKind`:
 
 ```ts
-handle: async (): Promise<StepResult> => Result.ok("nice")
-// → { kind: "Ok", enumKind: "Result", value: "nice" }
+Result.create.ok("nice")   // → { kind: "Ok", enumKind: "Result", value: "nice" }
+Result.create.err("bad")   // → { kind: "Err", enumKind: "Result", value: "bad" }
+Option.create.some(42)     // → { kind: "Some", enumKind: "Option", value: 42 }
+Option.create.none()       // → { kind: "None", enumKind: "Option", value: null }
 ```
 
-The `enumKind` field travels with the value through the pipeline. Any downstream node can inspect it to determine the union family. The Rust engine threads it through (or at least doesn't strip it).
+Separate from the pipeline combinators (`Result.ok()` etc.), which remain as `TypedAction` constructors.
 
-### How postfix methods work
+### 3. Tag builtin gets `enum_kind`
 
-`.unwrapOr()` no longer needs `__union` at construction time. It emits a generic AST node; the Rust engine reads `enumKind` from the runtime value to dispatch:
-
-```ts
-// TypeScript SDK — postfix method emits a generic node
-function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(toAction(this), {
-    kind: "UnwrapOr",
-    default_action: toAction(defaultAction),
-  });
-}
-```
-
-```
-// Rust engine at runtime:
-// 1. Reads enumKind from the input value
-// 2. enumKind "Result" → Ok arm = identity, Err arm = default_action
-// 3. enumKind "Option" → Some arm = identity, None arm = default_action
-// 4. Dispatches based on the value's kind field
-```
-
-### The `{ foo: Result }` problem vanishes
-
-The Result inside `foo` carries `enumKind: "Result"` in its value. After `getField("foo")`, the extracted value still has `enumKind`. No annotation needed — the value is self-describing.
-
-### Runtime constructors for handler bodies
-
-`Result.ok()` is already a pipeline combinator — it returns a `TypedAction` that emits a `Tag("Ok")` node. Handlers don't use it; they return bare JS objects (`{ kind: "Ok", value: "validated" }`).
-
-Under this approach, we add runtime value constructors for handler bodies:
-
-```ts
-// New: runtime value constructor (plain JS object, not a pipeline node)
-Result.create.ok("nice")
-// → { kind: "Ok", enumKind: "Result", value: "nice" }
-
-Result.create.err("bad")
-// → { kind: "Err", enumKind: "Result", value: "bad" }
-
-Option.create.some(42)
-// → { kind: "Some", enumKind: "Option", value: 42 }
-
-Option.create.none()
-// → { kind: "None", enumKind: "Option", value: null }
-```
-
-These are separate from the pipeline combinators. No overloading, no ambiguity.
-
-### Pipeline-level Tag nodes also need `enumKind`
-
-When the pipeline (not a handler) constructs a Result — e.g., `withTimeout` tags `Ok`/`Err` — the Tag builtin in the Rust engine must also inject `enumKind`. This means the Tag AST node needs to optionally carry an `enum_kind` field:
+The Rust Tag builtin must inject `enumKind` when producing tagged values in the pipeline:
 
 ```rust
 // Current
-Tag { kind: String }
-// → { kind: "Ok", value: ... }
+Builtin::Tag { kind: String }
+// → { "kind": "Ok", "value": ... }
 
 // New
-Tag { kind: String, enum_kind: Option<String> }
-// → { kind: "Ok", enumKind: "Result", value: ... }
+Builtin::Tag { kind: String, enum_kind: Option<String> }
+// → { "kind": "Ok", "enumKind": "Result", "value": ... }
 ```
 
-SDK-side, `Result.ok()` (the pipeline node) would emit `Tag { kind: "Ok", enum_kind: Some("Result") }`. The plain `tag("Ok")` (no enum context) emits `Tag { kind: "Ok", enum_kind: None }` for user-defined unions that don't need dispatch.
+SDK-side:
+- `Result.ok()` → emits `Tag { kind: "Ok", enum_kind: Some("Result") }`
+- `Option.some()` → emits `Tag { kind: "Some", enum_kind: Some("Option") }`
+- `tag("Foo")` → emits `Tag { kind: "Foo", enum_kind: None }` (user-defined unions, no dispatch)
 
-### New AST nodes in the Rust engine
+### 4. New AST nodes replace Branch-based dispatch
 
-Each union operation that currently compiles to a `Branch` would instead become a dedicated AST node the engine interprets at runtime:
+Postfix methods stop using `__union` dispatch tables. Instead they emit new AST node types that the engine interprets at runtime using `enumKind`:
 
-| TypeScript postfix | Current AST | New AST |
-|-------------------|-------------|---------|
+| TypeScript postfix | Current (Branch-based) | New AST node |
+|-------------------|------------------------|--------------|
 | `.unwrapOr(f)` | `Branch({ Ok: identity, Err: f })` | `UnwrapOr { default_action }` |
-| `.map(f)` | `Branch({ Ok: Chain(f, Tag("Ok")), Err: Tag("Err") })` | `MapOk { action }` |
-| `.mapErr(f)` | `Branch({ Ok: Tag("Ok"), Err: Chain(f, Tag("Err")) })` | `MapErr { action }` |
-| `.andThen(f)` | `Branch({ Ok: f, Err: Tag("Err") })` | `AndThen { action }` |
-| `.unwrap()` | `Branch({ Ok: identity, None: Panic })` | `Unwrap {}` |
-| `.flatten()` | `Branch({ Some: identity, None: Tag("None") })` | `Flatten {}` |
-| `.isOk()` / `.isSome()` | `Branch({ Ok: Constant(true), Err: Constant(false) })` | `IsOkVariant {}` |
+| `.unwrap()` | `Branch({ Ok: identity, Err: Panic })` | `Unwrap {}` |
+| `.map(f)` | `Branch({ Ok: Chain(f, Tag), Err: Tag })` | `MapInner { action }` |
+| `.mapErr(f)` | `Branch({ Ok: Tag, Err: Chain(f, Tag) })` | `MapError { action }` |
+| `.andThen(f)` | `Branch({ Ok: f, Err: Tag })` | `AndThen { action }` |
+| `.or(f)` | `Branch({ Ok: Tag, Err: f })` | `OrElse { fallback }` |
+| `.flatten()` | `Branch({ Some: identity, None: Tag })` | stays as Branch (or new `FlattenUnion`) |
+| `.isOk()` / `.isSome()` | `Branch({ Ok: true, Err: false })` | `IsSuccessVariant {}` |
+| `.isErr()` / `.isNone()` | `Branch({ Ok: false, Err: true })` | `IsFailureVariant {}` |
+| `.toOption()` | `Branch({ Ok: Tag("Some"), Err: Drop+Tag("None") })` | `ToOption {}` |
+| `.toOptionErr()` | `Branch({ Ok: Drop+Tag("None"), Err: Tag("Some") })` | `ToOptionErr {}` |
+| `.transpose()` | nested Branch | `Transpose {}` |
 
-The engine reads `enumKind` to determine which `kind` values map to the "success" and "failure" arms. This mapping is a small lookup table: `Result → { success: "Ok", failure: "Err" }`, `Option → { success: "Some", failure: "None" }`.
+The engine reads `enumKind` from the runtime value, looks up the enum family's variant mapping (`Result → { success: "Ok", failure: "Err" }`, `Option → { success: "Some", failure: "None" }`), and dispatches.
 
-### Branch still works as-is
+The new nodes also handle re-tagging: `MapInner` on a Result runs the action on the Ok value and re-wraps as `{ kind: "Ok", enumKind: "Result", value: result }`. The engine preserves `enumKind` through the re-tag.
 
-`branch({ Ok: ..., Err: ... })` continues to match on exact `kind` strings. No change needed. `enumKind` is orthogonal to branch — branch doesn't need to know the family, it just matches the variant.
+### 5. Remove `__union` from the TypeScript SDK
 
-Pros:
-- Eliminates `__union` entirely from the TypeScript SDK
-- The `{ foo: Result }` problem vanishes — values are self-describing
-- No annotation needed anywhere — handlers return values with `enumKind`, it just works
-- Clean separation: SDK constructs generic nodes, engine handles dispatch
-- `enumKind` is visible in JSON logs/traces — good for debugging
+Delete:
+- `UnionMethods`, `UnionDispatch`, `withUnion` from ast.ts
+- `__union` property from `TypedAction` type
+- `requireDispatch` helper
+- `resultMethods` dispatch table from result.ts
+- `optionMethods` dispatch table from option.ts
+- `dispatch` property from Result and Option namespaces
+- `returns` field from `createHandler` / `createHandlerWithConfig`
+- Chain propagation of `__union` in chain.ts
 
-Cons:
-- **Rust engine changes.** New AST node variants, `enumKind` threading, enum family lookup table.
-- **Wire format change.** Values gain an `enumKind` field. Existing handlers returning bare `{ kind: "Ok", value: ... }` would need to add `enumKind` (or use runtime constructors). Migration cost.
-- **Dual `Result.ok()` meaning** needs resolution (options above).
-- **Tag builtin change.** Needs optional `enum_kind` field.
-- **User-defined unions** need a way to register their enum family with the engine (kind→arm mapping).
+Postfix method implementations simplify from dispatch-table lookup to direct AST node emission:
+
+```ts
+// Before
+function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
+  const unwrapOr = requireDispatch(this.__union, "unwrapOr", (m) => m.unwrapOr);
+  return chain(toAction(this), toAction(unwrapOr(defaultAction)));
+}
+
+// After
+function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
+  return chain(toAction(this), typedAction({
+    kind: "UnwrapOr",
+    default_action: toAction(defaultAction),
+  }));
+}
+```
+
+### 6. Result/Option namespace simplification
+
+Standalone combinators (`Result.map()`, `Result.unwrapOr()`, etc.) become thin wrappers that emit the new AST nodes:
+
+```ts
+// Before: builds Branch + withUnion
+map<T, U>(action: Pipeable<T, U>): TypedAction<ResultT<T, E>, ResultT<U, E>> {
+  return withUnion(branch({ Ok: chain(action, tag("Ok")), Err: tag("Err") }), ...);
+}
+
+// After: emits MapInner node
+map<T, U>(action: Pipeable<T, U>): TypedAction<ResultT<T, E>, ResultT<U, E>> {
+  return typedAction({ kind: "MapInner", action: toAction(action) });
+}
+```
+
+The dispatch tables (`resultMethods`, `optionMethods`) go away. The Result and Option namespaces shrink to constructors + thin AST wrappers.
+
+### 7. Rust engine: enum family registry
+
+The engine needs a mapping from `enumKind` string to variant names:
+
+```rust
+struct EnumFamily {
+    success_variant: &'static str,  // "Ok" for Result, "Some" for Option
+    failure_variant: &'static str,  // "Err" for Result, "None" for Option
+}
+
+// Built-in families
+"Result" → EnumFamily { success_variant: "Ok", failure_variant: "Err" }
+"Option" → EnumFamily { success_variant: "Some", failure_variant: "None" }
+```
+
+When the engine encounters `UnwrapOr { default_action }`:
+1. Read `enumKind` from the input value → `"Result"`
+2. Look up family → `{ success: "Ok", failure: "Err" }`
+3. Read `kind` from the input value → `"Ok"`
+4. `kind` matches success → pass through `value`
+5. If `kind` matched failure → run `default_action`
+
+For user-defined enums, the config could carry additional family registrations.
+
+### 8. Migration
+
+Existing handlers return bare `{ kind: "Ok", value: ... }` without `enumKind`. These must change to use runtime constructors:
+
+```ts
+// Before
+handle: async () => ({ kind: "Ok", value: "validated" })
+
+// After
+handle: async () => Result.create.ok("validated")
+```
+
+The output validator (`Result.schema(...)`) could be enhanced to inject `enumKind` during validation — values without `enumKind` get it added. This would ease migration: handlers returning bare objects would still work if they have validators. But this is optional sugar, not required.
 
 ---
 
-## Summary
+## Open questions
 
-| Approach | Solves `{ foo: Result }`? | Needs annotation? | Engine changes? | Wire format change? |
-|----------|--------------------------|-------------------|-----------------|---------------------|
-| A. `Result.from()` | Yes (explicit) | Yes, every time | None | None |
-| B. `enumKind` in values | Yes (automatic) | No | Yes (new AST nodes + `enumKind` threading) | Yes (`enumKind` field) |
-
-### Open questions
-
-1. Which resolution for the `Result.ok()` dual meaning? Separate functions, overloading, or collapse to runtime-only?
-2. How do user-defined unions register their enum family? A `defineEnum("MyEnum", { Success: ..., Failure: ... })` API?
-3. Should `enumKind` be required on all tagged union values, or only on Result/Option? If required, plain `tag("Foo")` would need an enum context too. If optional, values without `enumKind` can't use postfix methods (which is the current behavior, just explicit).
-4. Is the migration cost acceptable? Every handler returning `{ kind: "Ok", value: ... }` needs to switch to `Result.ok(...)` or add `enumKind` manually.
+1. **User-defined enums.** How does a user register a custom enum family? Something like `defineEnum("TaskStatus", { success: "Done", failure: "Failed" })`? Or is this only for Result/Option?
+2. **`enumKind` required or optional?** If optional, values without it can't use postfix methods (runtime error, same as today). If required, all tagged union values need it. Recommend: optional, with good error messages.
+3. **Naming.** `enumKind` vs `enum` vs `unionKind` vs `family`. `enumKind` parallels `kind` and is explicit.
+4. **Flatten ambiguity.** `.flatten()` currently dispatches for arrays, Option, and Result. With `enumKind`, the engine can distinguish Option/Result flatten from array flatten by checking whether the input has `enumKind`. But this means the engine inspects values to decide behavior — is that acceptable?
+5. **Does the engine need to preserve `enumKind` through all transformations?** E.g., after `MapInner`, the output must still have `enumKind`. The Tag builtin handles this for re-tagging. But does `GetField`, `Identity`, etc. need to do anything? No — they pass values through unchanged, and `enumKind` is just a field on the JSON object.
