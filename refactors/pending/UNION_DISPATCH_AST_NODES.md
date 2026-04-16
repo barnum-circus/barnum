@@ -164,12 +164,12 @@ These dispatch on the prefix first, then on the variant within each family.
 function mapMethod(this: TypedAction, action: Action): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
     Result: branch({
-      Ok: chain(toAction(action), toAction(tag("Ok", "Result"))),
-      Err: tag("Err", "Result"),
+      Ok: chain(toAction(action), toAction(Result.ok)),
+      Err: Result.err,
     }),
     Option: branch({
-      Some: chain(toAction(action), toAction(tag("Some", "Option"))),
-      None: tag("None", "Option"),
+      Some: chain(toAction(action), toAction(Option.some)),
+      None: Option.none,
     }),
   })));
 }
@@ -190,8 +190,8 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
-    Result: branch({ Ok: action, Err: tag("Err", "Result") }),
-    Option: branch({ Some: action, None: tag("None", "Option") }),
+    Result: branch({ Ok: action, Err: Result.err }),
+    Option: branch({ Some: action, None: Option.none }),
   })));
 }
 
@@ -200,18 +200,18 @@ function transposeMethod(this: TypedAction): TypedAction {
     // Option<Result<T,E>> → Result<Option<T>,E>
     Option: branch({
       Some: branch({
-        Ok: chain(toAction(tag("Some", "Option")), toAction(tag("Ok", "Result"))),
-        Err: tag("Err", "Result"),
+        Ok: chain(toAction(Option.some), toAction(Result.ok)),
+        Err: Result.err,
       }),
-      None: chain(toAction(drop.tag("None", "Option")), toAction(tag("Ok", "Result"))),
+      None: chain(toAction(chain(toAction(drop), toAction(Option.none))), toAction(Result.ok)),
     }),
     // Result<Option<T>,E> → Option<Result<T,E>>
     Result: branch({
       Ok: branch({
-        Some: chain(toAction(tag("Ok", "Result")), toAction(tag("Some", "Option"))),
-        None: drop.tag("None", "Option"),
+        Some: chain(toAction(Result.ok), toAction(Option.some)),
+        None: chain(toAction(drop), toAction(Option.none)),
       }),
-      Err: chain(toAction(tag("Err", "Result")), toAction(tag("Some", "Option"))),
+      Err: chain(toAction(Result.err), toAction(Option.some)),
     }),
   })));
 }
@@ -224,14 +224,14 @@ No prefix dispatch needed — only Result cases. If called on Option at runtime,
 ```ts
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: tag("Ok", "Result"),
-    Err: chain(toAction(action), toAction(tag("Err", "Result"))),
+    Ok: Result.ok,
+    Err: chain(toAction(action), toAction(Result.err)),
   })));
 }
 
 function orMethod(this: TypedAction, fallback: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: tag("Ok", "Result"),
+    Ok: Result.ok,
     Err: fallback,
   })));
 }
@@ -239,21 +239,21 @@ function orMethod(this: TypedAction, fallback: Action): TypedAction {
 function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
     Ok: chain(toAction(drop), toAction(other)),
-    Err: tag("Err", "Result"),
+    Err: Result.err,
   })));
 }
 
 function toOptionMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: tag("Some", "Option"),
-    Err: drop.tag("None", "Option"),
+    Ok: Option.some,
+    Err: chain(toAction(drop), toAction(Option.none)),
   })));
 }
 
 function toOptionErrMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: drop.tag("None", "Option"),
-    Err: tag("Some", "Option"),
+    Ok: chain(toAction(drop), toAction(Option.none)),
+    Err: Option.some,
   })));
 }
 
@@ -278,7 +278,7 @@ Same pattern as Result-only: no prefix dispatch, just Option branch cases.
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
     Some: predicate,
-    None: tag("None", "Option"),
+    None: Option.none,
   })));
 }
 
@@ -307,7 +307,7 @@ function isNoneMethod(this: TypedAction): TypedAction {
 // Before
 map(action) {
   return withUnion(
-    branch({ Ok: chain(action, tag("Ok", "Result")), Err: tag("Err", "Result") }),
+    branch({ Ok: chain(action, Result.ok), Err: Result.err }),
     "Result", resultMethods,
   );
 }
@@ -315,8 +315,8 @@ map(action) {
 // After
 map(action) {
   return branch({
-    Ok: chain(action, tag("Ok", "Result")),
-    Err: tag("Err", "Result"),
+    Ok: chain(action, Result.ok),
+    Err: Result.err,
   }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
 }
 ```
