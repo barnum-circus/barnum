@@ -1,107 +1,253 @@
-# Union Dispatch AST Nodes
+# Remove __union Dispatch
 
-Replace `__union` dispatch tables and Branch-based postfix methods with dedicated AST nodes. The engine dispatches by reading the namespaced prefix from `kind`.
+Replace the `__union` dispatch table mechanism with direct polymorphic branches in postfix methods. Zero new Rust AST nodes. Everything desugars to existing primitives.
 
-**Depends on:** NAMESPACED_KIND_PREFIXES.md
+**Depends on:** NAMESPACED_KIND_PREFIXES.md (completed)
 
 ## Problem
 
-Postfix methods (`.unwrapOr()`, `.map()`, `.mapErr()`) need to know the union family (Result vs Option) to dispatch. Currently this is tracked via `__union` on TypedAction pipeline nodes, but most ways of producing a union-typed output don't set it: `createHandler`, `getField`, `branch`, `identity`. There's no general fix — `__union` is a property of the static pipeline graph, and TypeScript compile-time type knowledge doesn't exist at runtime.
+Postfix methods (`.unwrapOr()`, `.map()`, `.mapErr()`) need to know the union family (Result vs Option) to dispatch to the correct branch pattern. Currently tracked via `__union` on TypedAction — a runtime dispatch table that maps method names to implementations. But most paths that produce union-typed output don't set `__union`: `createHandler`, `getField`, `branch`, `identity`. There's no general fix because TypeScript type info (is this Result or Option?) is erased at runtime, and `__union` is a metadata property that must be manually propagated through every combinator.
 
-With namespaced kind prefixes (previous refactor), values self-describe their enum family via `kind: "Result.Ok"`. The engine can read the prefix at runtime, eliminating `__union` entirely.
+This means postfix methods like `.unwrapOr()` throw at runtime when called on handlers returned from `createHandler`, fields extracted with `getField`, etc. — the most common usage patterns.
 
-## Changes
+## Approach
 
-### 1. New AST nodes replace Branch-based dispatch
+With namespaced kind prefixes (completed), values self-describe their family at runtime: `{ kind: "Result.Ok", value: 42 }`. The Rust engine already strips the prefix when matching branch cases (`"Result.Ok"` → `"Ok"`).
 
-Postfix methods stop using `__union` dispatch tables. Instead they emit new AST node types that the engine interprets at runtime by reading the prefix from `kind`:
-
-| TypeScript postfix | Current (Branch-based) | New AST node |
-|-------------------|------------------------|--------------|
-| `.unwrapOr(f)` | `Branch({ Ok: identity, Err: f })` | `UnwrapOr { default_action }` |
-| `.unwrap()` | `Branch({ Ok: identity, Err: Panic })` | `Unwrap {}` |
-| `.map(f)` | `Branch({ Ok: Chain(f, Tag), Err: Tag })` | `MapInner { action }` |
-| `.mapErr(f)` | `Branch({ Ok: Tag, Err: Chain(f, Tag) })` | `MapError { action }` |
-| `.andThen(f)` | `Branch({ Ok: f, Err: Tag })` | `AndThen { action }` |
-| `.or(f)` | `Branch({ Ok: Tag, Err: f })` | `OrElse { fallback }` |
-| `.flatten()` | `Branch({ Some: identity, None: Tag })` | stays as Branch (or new `FlattenUnion`) |
-| `.isOk()` / `.isSome()` | `Branch({ Ok: true, Err: false })` | `IsSuccessVariant {}` |
-| `.isErr()` / `.isNone()` | `Branch({ Ok: false, Err: true })` | `IsFailureVariant {}` |
-| `.toOption()` | `Branch({ Ok: Tag("Some"), Err: Drop+Tag("None") })` | `ToOption {}` |
-| `.toOptionErr()` | `Branch({ Ok: Drop+Tag("None"), Err: Tag("Some") })` | `ToOptionErr {}` |
-| `.transpose()` | nested Branch | `Transpose {}` |
-
-The engine reads the prefix from `kind` (e.g., `"Result"` from `"Result.Ok"`), looks up the enum family's variant mapping, and dispatches. The family registry maps prefix to success/failure variants:
-
-```rust
-// Built-in families
-"Result" → { success: "Ok", failure: "Err" }
-"Option" → { success: "Some", failure: "None" }
-```
-
-When the engine encounters `UnwrapOr { default_action }`:
-1. Read `kind` from the input value → `"Result.Ok"`
-2. Extract prefix → `"Result"`, variant → `"Ok"`
-3. Look up family → `{ success: "Ok", failure: "Err" }`
-4. `"Ok"` matches success → pass through `value`
-5. If it matched failure → run `default_action`
-
-Re-tagging preserves the prefix: `MapInner` on a Result runs the action on the Ok value and re-wraps as `{ kind: "Result.Ok", value: result }`.
-
-### 2. Remove `__union` from the TypeScript SDK
-
-Delete:
-- `UnionMethods`, `UnionDispatch`, `withUnion` from ast.ts
-- `__union` property from `TypedAction` type
-- `requireDispatch` helper
-- `resultMethods` dispatch table from result.ts
-- `optionMethods` dispatch table from option.ts
-- Chain propagation of `__union` in chain.ts
-
-Postfix method implementations simplify from dispatch-table lookup to direct AST node emission:
+Postfix methods emit **polymorphic branches** — branches that include case keys for all applicable families. At runtime, the engine matches the one case that corresponds to the actual value's kind. Unmatched cases are dead branches, never entered.
 
 ```ts
-// Before
+// Before: requires __union, fails on createHandler output
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
   const unwrapOr = requireDispatch(this.__union, "unwrapOr", (m) => m.unwrapOr);
   return chain(toAction(this), toAction(unwrapOr(defaultAction)));
 }
 
-// After
+// After: works on any TypedAction regardless of provenance
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(toAction(this), typedAction({
-    kind: "UnwrapOr",
-    default_action: toAction(defaultAction),
-  }));
+  return chain(toAction(this), toAction(branch({
+    Ok: identity(),        // Result path
+    Err: defaultAction,    // Result path
+    Some: identity(),      // Option path
+    None: defaultAction,   // Option path
+  })));
 }
 ```
 
-### 3. Result/Option namespace simplification
+Family-specific methods (`.mapErr()`, `.isSome()`, etc.) include only their family's case keys. If called on the wrong family at runtime, the branch fails with "no match" — correct behavior.
 
-Standalone combinators (`Result.map()`, `Result.unwrapOr()`, etc.) become thin wrappers that emit the new AST nodes:
+TypeScript overload signatures on `TypedAction` continue to gate method availability at compile time: `.mapErr()` requires `this: TypedAction<TIn, Result<...>>`, so calling it on an Option is a type error. The runtime-level "no match" is a safety net, not the primary enforcement.
+
+## Deletions
+
+From `ast.ts`:
+- `UnionMethods` interface
+- `UnionDispatch` interface
+- `withUnion()` function
+- `requireDispatch()` helper
+- `__union` field from `TypedAction` type
+- `__union` property definition from `typedAction()` function
+
+From `result.ts`:
+- `resultMethods` dispatch table
+- All `withUnion(...)` calls — standalone methods become plain branches
+
+From `option.ts`:
+- `optionMethods` dispatch table
+- All `withUnion(...)` calls — standalone methods become plain branches
+
+From `chain.ts`:
+- `__union` propagation (lines 18–22)
+
+## Postfix method rewrites
+
+### Shared methods (Option + Result) — polymorphic branch
+
+These include case keys for both families. Exactly one pair matches at runtime.
 
 ```ts
-// Before: builds Branch + withUnion
-map<T, U>(action: Pipeable<T, U>): TypedAction<ResultT<T, E>, ResultT<U, E>> {
-  return withUnion(branch({ Ok: chain(action, tag("Ok")), Err: tag("Err") }), ...);
+function mapMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: chain(toAction(action), toAction(tag("Ok", "Result"))),
+    Err: tag("Err", "Result"),
+    Some: chain(toAction(action), toAction(tag("Some", "Option"))),
+    None: tag("None", "Option"),
+  })));
 }
 
-// After: emits MapInner node
-map<T, U>(action: Pipeable<T, U>): TypedAction<ResultT<T, E>, ResultT<U, E>> {
-  return typedAction({ kind: "MapInner", action: toAction(action) });
+function unwrapMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: identity(),
+    Err: panic("called unwrap on Err"),
+    Some: identity(),
+    None: panic("called unwrap on None"),
+  })));
+}
+
+function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: identity(),
+    Err: defaultAction,
+    Some: identity(),
+    None: defaultAction,
+  })));
+}
+
+function andThenMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: action,
+    Err: tag("Err", "Result"),
+    Some: action,
+    None: tag("None", "Option"),
+  })));
+}
+
+function transposeMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    // Option<Result<T,E>> → Result<Option<T>,E>
+    Some: branch({
+      Ok: chain(toAction(tag("Some", "Option")), toAction(tag("Ok", "Result"))),
+      Err: tag("Err", "Result"),
+    }),
+    None: chain(toAction(drop.tag("None", "Option")), toAction(tag("Ok", "Result"))),
+    // Result<Option<T>,E> → Option<Result<T,E>>
+    Ok: branch({
+      Some: chain(toAction(tag("Ok", "Result")), toAction(tag("Some", "Option"))),
+      None: drop.tag("None", "Option"),
+    }),
+    Err: chain(toAction(tag("Err", "Result")), toAction(tag("Some", "Option"))),
+  })));
 }
 ```
 
-The dispatch tables (`resultMethods`, `optionMethods`) go away. The Result and Option namespaces shrink to thin AST wrappers.
+### Result-only methods
 
-### 4. User-defined enum dispatch
+```ts
+function mapErrMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: tag("Ok", "Result"),
+    Err: chain(toAction(action), toAction(tag("Err", "Result"))),
+  })));
+}
 
-The engine doesn't need a pre-registered family for user-defined enums unless they want to use postfix dispatch (`.unwrapOr()`, `.map()`, etc.). For simple `branch`, the prefix is stripped automatically.
+function orMethod(this: TypedAction, fallback: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: tag("Ok", "Result"),
+    Err: fallback,
+  })));
+}
 
-For postfix dispatch on user-defined enums, the engine would need the family registered. This could be part of the pipeline config or derived from the `taggedUnionSchema` call. **Deferred — not needed for initial implementation.**
+function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: chain(toAction(drop), toAction(other)),
+    Err: tag("Err", "Result"),
+  })));
+}
 
----
+function toOptionMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: tag("Some", "Option"),
+    Err: drop.tag("None", "Option"),
+  })));
+}
 
-## Open questions
+function toOptionErrMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: drop.tag("None", "Option"),
+    Err: tag("Some", "Option"),
+  })));
+}
 
-1. **Flatten ambiguity.** `.flatten()` is overloaded across arrays, Option, and Result. Without `__union`, the postfix method can't disambiguate at build time. For now, Option/Result flatten use the existing Branch mechanism (prefix stripping makes this work), array flatten stays as the `Flatten` builtin. Revisit naming (`flattenToArray`, etc.) separately.
+function isOkMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: constant(true), Err: constant(false),
+  })));
+}
+
+function isErrMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: constant(false), Err: constant(true),
+  })));
+}
+```
+
+### Option-only methods
+
+```ts
+function filterMethod(this: TypedAction, predicate: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Some: predicate,
+    None: tag("None", "Option"),
+  })));
+}
+
+function isSomeMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Some: constant(true), None: constant(false),
+  })));
+}
+
+function isNoneMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Some: constant(false), None: constant(true),
+  })));
+}
+```
+
+### Unchanged
+
+- `collectMethod` — already standalone, uses the `CollectSome` builtin directly
+
+## Standalone namespace methods
+
+`Result.map()`, `Option.unwrapOr()`, etc. drop their `withUnion(...)` wrappers. The branch AST they emit is already correct:
+
+```ts
+// Before
+map(action) {
+  return withUnion(
+    branch({ Ok: chain(action, tag("Ok", "Result")), Err: tag("Err", "Result") }),
+    "Result", resultMethods,
+  );
+}
+
+// After
+map(action) {
+  return branch({
+    Ok: chain(action, tag("Ok", "Result")),
+    Err: tag("Err", "Result"),
+  }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
+}
+```
+
+The standalone methods remain useful for explicit `pipeline.then(Result.map(f))` patterns where the family is known.
+
+## Flatten: split array vs union
+
+`.flatten()` is genuinely ambiguous at runtime between array flatten (`T[][] → T[]`) and union flatten (`Option<Option<T>> → Option<T>`). Without `__union`, there's no runtime discriminant.
+
+**Resolution:** `.flatten()` postfix does array flatten only. Union flatten uses the existing standalone methods:
+
+```ts
+// Array flatten — postfix
+pipeline.flatten()                    // T[][] → T[]
+
+// Union flatten — explicit namespace
+pipeline.then(Option.flatten())       // Option<Option<T>> → Option<T>
+pipeline.then(Result.flatten())       // Result<Result<T,E>,E> → Result<T,E>
+```
+
+Remove the Option/Result overloads from `flatten` on `TypedAction`. Keep only the array overload:
+
+```ts
+flatten<TIn, TElement>(
+  this: TypedAction<TIn, TElement[][]>,
+): TypedAction<TIn, TElement[]>;
+```
+
+## No Rust changes
+
+Zero new Rust AST nodes. The engine already handles everything:
+- `Branch` with prefix-stripping dispatch (from NAMESPACED_KIND_PREFIXES)
+- `GetField("value")` auto-unwrap via `unwrapBranchCases`
+- `Chain`, `Tag`, `Constant`, `Identity`, `Panic`, `Drop` composition
