@@ -319,7 +319,7 @@ mod tests {
             ("Err", invoke("./err.ts", "handle")),
         ]));
         let root = engine.workflow_root();
-        super::advance(&mut engine, root, json!({"kind": "Ok", "value": 42}), None).unwrap();
+        super::advance(&mut engine, root, json!({"kind": "Result.Ok", "value": 42}), None).unwrap();
 
         let dispatch = pop_dispatch(&mut engine).unwrap();
         assert!(pop_dispatch(&mut engine).is_none());

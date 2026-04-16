@@ -111,7 +111,7 @@ WorkflowState {
                     ),
                     value: Object {
                         "error": String("something failed"),
-                        "kind": String("Err"),
+                        "kind": String("Result.Err"),
                     },
                 },
             ),

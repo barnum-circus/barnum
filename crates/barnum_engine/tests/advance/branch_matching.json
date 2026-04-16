@@ -14,5 +14,5 @@
       }
     }
   },
-  "input": { "kind": "Err", "error": "something failed" }
+  "input": { "kind": "Result.Err", "error": "something failed" }
 }

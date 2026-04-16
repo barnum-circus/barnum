@@ -313,7 +313,7 @@ mod tests {
                 &mut engine,
                 CompletionEvent {
                     task_id: body_dispatches[0].task_id,
-                    value: json!({"kind": "Continue", "value": "restarted"}),
+                    value: json!({"kind": "LoopResult.Continue", "value": "restarted"}),
                 },
             )
             .await
@@ -338,7 +338,7 @@ mod tests {
             &mut engine,
             CompletionEvent {
                 task_id: body_dispatches[0].task_id,
-                value: json!({"kind": "Break", "value": "gave_up"}),
+                value: json!({"kind": "LoopResult.Break", "value": "gave_up"}),
             },
         )
         .await
@@ -736,10 +736,7 @@ mod tests {
             resume_handle(
                 e0,
                 resume_read_var(0),
-                chain(
-                    invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
-                    invoke("./echo.ts", "echo"),
-                ),
+                chain(get_index(1), invoke("./echo.ts", "echo")),
             ),
         ));
         let root = engine.workflow_root();
@@ -855,7 +852,7 @@ mod tests {
                 e_outer,
                 resume_read_var(0),
                 chain(
-                    invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
+                    get_index(1),
                     chain(
                         parallel(vec![
                             invoke_builtin(BuiltinKind::Constant {
@@ -867,7 +864,7 @@ mod tests {
                             e_inner,
                             resume_read_var(0),
                             chain(
-                                invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
+                                get_index(1),
                                 chain(resume_perform(e_outer), resume_perform(e_inner)),
                             ),
                         ),
@@ -941,10 +938,7 @@ mod tests {
             resume_handle(
                 e0,
                 invoke("./handler.ts", "handler"),
-                chain(
-                    invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
-                    resume_perform(e0),
-                ),
+                chain(get_index(1), resume_perform(e0)),
             ),
         ));
         let root = engine.workflow_root();
@@ -972,7 +966,7 @@ mod tests {
                 e0,
                 resume_read_var(1), // Extract state[1] = "b"
                 chain(
-                    invoke_builtin(BuiltinKind::GetIndex { index: 3 }),
+                    get_index(3),
                     chain(resume_perform(e0), invoke("./echo.ts", "echo")),
                 ),
             ),
