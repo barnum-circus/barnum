@@ -269,9 +269,10 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
   drop(): TypedAction<In, void>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
-  tag<TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
+  tag<TEnumName extends string, TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
     kind: TKind,
-  ): TypedAction<In, TaggedUnion<TDef>>;
+    enumName: TEnumName,
+  ): TypedAction<In, TaggedUnion<TEnumName, TDef>>;
   /** Extract a field from the output object. `a.getField("name")` ≡ `pipe(a, getField("name"))`. */
   getField<TField extends keyof Out & string>(
     field: TField,
@@ -507,9 +508,9 @@ type VoidToNull<T> = 0 extends 1 & T
       ? null
       : T;
 
-export type TaggedUnion<TDef extends Record<string, unknown>> = {
+export type TaggedUnion<TEnumName extends string, TDef extends Record<string, unknown>> = {
   [K in keyof TDef & string]: {
-    kind: K;
+    kind: `${TEnumName}.${K}`;
     value: VoidToNull<TDef[K]>;
     __def?: TDef;
   };
@@ -523,14 +524,14 @@ export type ExtractDef<T> = T extends { __def?: infer D } ? D : never;
 // ---------------------------------------------------------------------------
 
 export type OptionDef<T> = { Some: T; None: void };
-export type Option<T> = TaggedUnion<OptionDef<T>>;
+export type Option<T> = TaggedUnion<"Option", OptionDef<T>>;
 
 // ---------------------------------------------------------------------------
 // Result<TValue, TError> — standard success/error type
 // ---------------------------------------------------------------------------
 
 export type ResultDef<TValue, TError> = { Ok: TValue; Err: TError };
-export type Result<TValue, TError> = TaggedUnion<ResultDef<TValue, TError>>;
+export type Result<TValue, TError> = TaggedUnion<"Result", ResultDef<TValue, TError>>;
 
 /** Extract all `kind` string literals from a discriminated union. */
 type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
@@ -593,8 +594,8 @@ function dropMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(drop));
 }
 
-function tagMethod(this: TypedAction, kind: string): TypedAction {
-  return chain(toAction(this), toAction(tag(kind)));
+function tagMethod(this: TypedAction, kind: string, enumName: string): TypedAction {
+  return chain(toAction(this), toAction(tag(kind, enumName)));
 }
 
 function getFieldMethod(this: TypedAction, field: string): TypedAction {
@@ -887,7 +888,7 @@ type LoopResultDef<TContinue, TBreak> = {
 };
 
 export type LoopResult<TContinue, TBreak> = TaggedUnion<
-  LoopResultDef<TContinue, TBreak>
+  "LoopResult", LoopResultDef<TContinue, TBreak>
 >;
 
 // ---------------------------------------------------------------------------
@@ -948,7 +949,7 @@ export function earlyReturn<TEarlyReturn = void, TIn = any, TOut = any>(
 
   const earlyReturnAction = typedAction<TEarlyReturn, never>(
     toAction(chain(
-      toAction(tag("Break")),
+      toAction(tag("Break", "LoopResult")),
       { kind: "RestartPerform", restart_handler_id: restartHandlerId },
     )),
   );
@@ -979,7 +980,7 @@ export function buildRestartBranchAction(
   breakArm: Action,
 ): Action {
   return toAction(chain(
-    toAction(tag("Continue")),
+    toAction(tag("Continue", "LoopResult")),
     {
       kind: "RestartHandle",
       restart_handler_id: restartHandlerId,
@@ -1012,11 +1013,11 @@ export function loop<TBreak = void, TRecur = void>(
   };
 
   const recurAction = typedAction<TRecur, never>(
-    toAction(chain(toAction(tag("Continue")), toAction(perform))),
+    toAction(chain(toAction(tag("Continue", "LoopResult")), toAction(perform))),
   );
 
   const doneAction = typedAction<VoidToNull<TBreak>, never>(
-    toAction(chain(toAction(tag("Break")), toAction(perform))),
+    toAction(chain(toAction(tag("Break", "LoopResult")), toAction(perform))),
   );
 
   const body = toAction(bodyFn(recurAction, doneAction));

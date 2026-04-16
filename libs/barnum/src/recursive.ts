@@ -69,7 +69,7 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
   // Call tokens: Chain(Tag("CallN"), ResumePerform(resumeHandlerId))
   const fnCount = bodiesFn.length;
   const callTokens = Array.from({ length: fnCount }, (_, i) =>
-    typedAction(toAction(chain(toAction(tag(`Call${i}`)), toAction(resumePerform)))),
+    typedAction(toAction(chain(toAction(tag(`Call${i}`, "RecursiveDispatch")), toAction(resumePerform)))),
   );
 
   // Get function body ASTs

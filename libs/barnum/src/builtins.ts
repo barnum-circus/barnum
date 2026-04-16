@@ -36,29 +36,33 @@ type NullToVoid<TDef> = {
 };
 
 /**
- * Build a Zod schema for a `TaggedUnion<TDef>` — a discriminated union of
- * `{ kind: K; value: V }` objects.
+ * Build a Zod schema for a `TaggedUnion<TEnumName, TDef>` — a discriminated
+ * union of `{ kind: "EnumName.Variant"; value: V }` objects.
  *
- * Each key in `cases` becomes a variant. The value Zod schema validates the
- * `value` field. Use `z.null()` for void variants.
+ * Each key in `cases` becomes a variant with a namespaced kind string.
+ * Use `z.null()` for void variants.
  *
  * ```ts
- * const schema = taggedUnionSchema({
+ * const schema = taggedUnionSchema("ClassifyResult", {
  *   HasErrors: z.array(TypeErrorValidator),
  *   Clean: z.null(),
  * });
  * ```
  */
-export function taggedUnionSchema<TDef extends Record<string, z.ZodTypeAny>>(
+export function taggedUnionSchema<
+  TEnumName extends string,
+  TDef extends Record<string, z.ZodTypeAny>,
+>(
+  enumName: TEnumName,
   cases: TDef,
 ): z.ZodType<
-  TaggedUnion<NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>>
+  TaggedUnion<TEnumName, NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>>
 > {
   type Out = TaggedUnion<
-    NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>
+    TEnumName, NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>
   >;
   const variants = Object.entries(cases).map(([kind, valueSchema]) =>
-    z.object({ kind: z.literal(kind), value: valueSchema }),
+    z.object({ kind: z.literal(`${enumName}.${kind}`), value: valueSchema }),
   );
   if (variants.length === 0) {
     return z.never() as z.ZodType<Out>;
@@ -133,16 +137,18 @@ export function panic(message: string): TypedAction<any, never> {
  *        input: string → output: TaggedUnion<{ Ok: string; Err: number }>
  */
 export function tag<
+  TEnumName extends string,
   TDef extends Record<string, unknown>,
   TKind extends keyof TDef & string,
->(kind: TKind): TypedAction<TDef[TKind], TaggedUnion<TDef>> {
+>(kind: TKind, enumName: TEnumName): TypedAction<TDef[TKind], TaggedUnion<TEnumName, TDef>> {
+  const namespacedKind = `${enumName}.${kind}`;
   return chain(
     toAction(all(
-      chain(toAction(constant(kind)), toAction(wrapInField("kind"))),
+      chain(toAction(constant(namespacedKind)), toAction(wrapInField("kind"))),
       wrapInField("value"),
     )),
     toAction(merge()),
-  ) as TypedAction<TDef[TKind], TaggedUnion<TDef>>;
+  ) as TypedAction<TDef[TKind], TaggedUnion<TEnumName, TDef>>;
 }
 
 // ---------------------------------------------------------------------------

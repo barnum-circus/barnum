@@ -42,8 +42,8 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return withUnion(
       branch({
-        Ok: chain(toAction(action), toAction(tag("Ok"))),
-        Err: tag("Err"),
+        Ok: chain(toAction(action), toAction(tag("Ok", "Result"))),
+        Err: tag("Err", "Result"),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       "Result", resultMethods,
     );
@@ -55,8 +55,8 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return withUnion(
       branch({
-        Ok: tag("Ok"),
-        Err: chain(toAction(action), toAction(tag("Err"))),
+        Ok: tag("Ok", "Result"),
+        Err: chain(toAction(action), toAction(tag("Err", "Result"))),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>,
       "Result", resultMethods,
     );
@@ -72,7 +72,7 @@ export const Result = {
     return withUnion(
       branch({
         Ok: action,
-        Err: tag("Err"),
+        Err: tag("Err", "Result"),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       "Result", resultMethods,
     );
@@ -84,7 +84,7 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return withUnion(
       branch({
-        Ok: tag("Ok"),
+        Ok: tag("Ok", "Result"),
         Err: fallback,
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>,
       "Result", resultMethods,
@@ -98,7 +98,7 @@ export const Result = {
     return withUnion(
       branch({
         Ok: chain(drop, other),
-        Err: tag("Err"),
+        Err: tag("Err", "Result"),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       "Result", resultMethods,
     );
@@ -139,7 +139,7 @@ export const Result = {
     return withUnion(
       branch({
         Ok: identity(),
-        Err: tag("Err"),
+        Err: tag("Err", "Result"),
       }) as TypedAction<
         ResultT<ResultT<TValue, TError>, TError>,
         ResultT<TValue, TError>
@@ -159,8 +159,8 @@ export const Result = {
   > {
     return withUnion(
       branch({
-        Ok: tag("Some"),
-        Err: drop.tag("None"),
+        Ok: tag("Some", "Option"),
+        Err: drop.tag("None", "Option"),
       }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>,
       "Option", optionMethods,
     );
@@ -177,8 +177,8 @@ export const Result = {
   > {
     return withUnion(
       branch({
-        Ok: drop.tag("None"),
-        Err: tag("Some"),
+        Ok: drop.tag("None", "Option"),
+        Err: tag("Some", "Option"),
       }) as TypedAction<ResultT<TValue, TError>, OptionT<TError>>,
       "Option", optionMethods,
     );
@@ -197,10 +197,10 @@ export const Result = {
     return withUnion(
       branch({
         Ok: branch({
-          Some: chain(toAction(tag("Ok")), toAction(tag("Some"))),
-          None: drop.tag("None"),
+          Some: chain(toAction(tag("Ok", "Result")), toAction(tag("Some", "Option"))),
+          None: drop.tag("None", "Option"),
         }),
-        Err: chain(toAction(tag("Err")), toAction(tag("Some"))),
+        Err: chain(toAction(tag("Err", "Result")), toAction(tag("Some", "Option"))),
       }) as TypedAction<
         ResultT<OptionT<TValue>, TError>,
         OptionT<ResultT<TValue, TError>>

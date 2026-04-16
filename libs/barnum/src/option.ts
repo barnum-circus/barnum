@@ -53,8 +53,8 @@ export const Option = {
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
     return withUnion(
       branch({
-        Some: chain(toAction(action), toAction(tag("Some"))),
-        None: tag("None"),
+        Some: chain(toAction(action), toAction(tag("Some", "Option"))),
+        None: tag("None", "Option"),
       }) as TypedAction<OptionT<T>, OptionT<U>>,
       "Option", optionMethods,
     );
@@ -70,7 +70,7 @@ export const Option = {
     return withUnion(
       branch({
         Some: action,
-        None: tag("None"),
+        None: tag("None", "Option"),
       }) as TypedAction<OptionT<T>, OptionT<U>>,
       "Option", optionMethods,
     );
@@ -107,7 +107,7 @@ export const Option = {
     return withUnion(
       branch({
         Some: identity(),
-        None: tag("None"),
+        None: tag("None", "Option"),
       }) as TypedAction<OptionT<OptionT<T>>, OptionT<T>>,
       "Option", optionMethods,
     );
@@ -123,7 +123,7 @@ export const Option = {
     return withUnion(
       branch({
         Some: predicate,
-        None: tag("None"),
+        None: tag("None", "Option"),
       }) as TypedAction<OptionT<T>, OptionT<T>>,
       "Option", optionMethods,
     );
@@ -183,10 +183,10 @@ export const Option = {
     return withUnion(
       branch({
         Some: branch({
-          Ok: chain(toAction(tag("Some")), toAction(tag("Ok"))),
-          Err: tag("Err"),
+          Ok: chain(toAction(tag("Some", "Option")), toAction(tag("Ok", "Result"))),
+          Err: tag("Err", "Result"),
         }),
-        None: chain(toAction(drop.tag("None")), toAction(tag("Ok"))),
+        None: chain(toAction(drop.tag("None", "Option")), toAction(tag("Ok", "Result"))),
       }) as TypedAction<
         OptionT<ResultT<TValue, TError>>,
         ResultT<OptionT<TValue>, TError>

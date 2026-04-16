@@ -21,7 +21,7 @@ import {
  */
 function breakPerform(restartHandlerId: RestartHandlerId): Action {
   return toAction(chain(
-    toAction(tag("Break")),
+    toAction(tag("Break", "LoopResult")),
     { kind: "RestartPerform", restart_handler_id: restartHandlerId },
   ));
 }
@@ -143,13 +143,13 @@ export function withTimeout<TIn, TOut>(
 
   // Branch 1: body → Tag("Ok") → Break → RestartPerform
   const bodyBranch = toAction(chain(
-    toAction(chain(toAction(body), toAction(tag("Ok")))),
+    toAction(chain(toAction(body), toAction(tag("Ok", "Result")))),
     toAction(perform),
   ));
 
   // Branch 2: ms → sleep() → Tag("Err") → Break → RestartPerform
   const sleepBranch = toAction(chain(
-    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(tag("Err")))),
+    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(tag("Err", "Result")))),
     toAction(perform),
   ));
 

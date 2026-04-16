@@ -137,10 +137,14 @@ pub fn advance(
                     .ok_or_else(|| AdvanceError::BranchMissingKind {
                         value: value.clone(),
                     })?;
+            // Strip namespaced enum prefix: "Result.Ok" → "Ok"
+            let match_str = kind_str
+                .rsplit_once('.')
+                .map_or(kind_str, |(_, suffix)| suffix);
             let (_, case_action_id) = workflow_state
                 .flat_config
                 .branch_cases(action_id)
-                .find(|(key, _)| key.lookup() == kind_str)
+                .find(|(key, _)| key.lookup() == match_str)
                 .ok_or_else(|| AdvanceError::BranchNoMatch {
                     kind: kind_str.to_owned(),
                 })?;
