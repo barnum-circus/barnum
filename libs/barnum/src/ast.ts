@@ -873,7 +873,7 @@ function unwrapBranchCases(
  * `{ kind: K; value: any }`, which is the correct escape hatch.
  */
 export type BranchInput<TCases> = {
-  [K in keyof TCases & string]: { kind: K | `${string}.${K}`; value: ExtractInput<TCases[K]> };
+  [K in keyof TCases & string]: { kind: K; value: ExtractInput<TCases[K]> };
 }[keyof TCases & string];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

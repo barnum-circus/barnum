@@ -280,12 +280,12 @@ describe("combinator types", () => {
       Yes: deploy,
       No: deploy,
     });
-    // BranchInput wraps handler input in { kind: K | `${string}.${K}`; value: T }
+    // BranchInput wraps handler input in { kind: K; value: T }
     assertExact<
       IsExact<
         ExtractInput<typeof action>,
-        | { kind: "Yes" | `${string}.Yes`; value: { verified: boolean } }
-        | { kind: "No" | `${string}.No`; value: { verified: boolean } }
+        | { kind: "Yes"; value: { verified: boolean } }
+        | { kind: "No"; value: { verified: boolean } }
       >
     >();
     assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
