@@ -32,6 +32,7 @@ function err(message: string): StepResult {
 
 /** Step A: validate input. Succeeds ~70%. Failures are catastrophic — the workflow exits. */
 export const stepA = createHandler({
+  returns: Result,
   outputValidator: StepResultValidator,
   handle: async (): Promise<StepResult> => {
     const succeed = Math.random() < 0.7;
@@ -46,6 +47,7 @@ export const stepA = createHandler({
 
 /** Step B: process data. Succeeds ~60%, fails ~20%, hangs ~20%. */
 export const stepB = createHandler({
+  returns: Result,
   outputValidator: StepResultValidator,
   handle: async (): Promise<StepResult> => {
     const roll = Math.random();
@@ -66,6 +68,7 @@ export const stepB = createHandler({
 
 /** Step C: finalize. Succeeds ~80%, fails ~20%. Failures are retried. */
 export const stepC = createHandler({
+  returns: Result,
   outputValidator: StepResultValidator,
   handle: async (): Promise<StepResult> => {
     const succeed = Math.random() < 0.8;

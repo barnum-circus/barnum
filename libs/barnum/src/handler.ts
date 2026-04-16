@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { JSONSchema7 } from "json-schema";
 import type { z } from "zod";
-import { type TypedAction, toAction, typedAction } from "./ast.js";
+import { type TypedAction, type UnionDispatch, toAction, typedAction, withUnion } from "./ast.js";
 import { chain } from "./chain.js";
 import { all } from "./all.js";
 import { constant, identity } from "./builtins.js";
@@ -105,6 +105,7 @@ export function createHandler<TValue = void, TOutput = unknown>(
   definition: {
     inputValidator?: z.ZodType<TValue>;
     outputValidator?: z.ZodType<NoInfer<TOutput>>;
+    returns?: { dispatch: UnionDispatch };
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
@@ -112,7 +113,7 @@ export function createHandler<TValue = void, TOutput = unknown>(
 
 // Implementation
 export function createHandler(
-  definition: UntypedHandlerDefinition,
+  definition: UntypedHandlerDefinition & { returns?: { dispatch: UnionDispatch } },
   exportName?: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
@@ -143,6 +144,11 @@ export function createHandler(
     },
   });
 
+  if (definition.returns) {
+    const { name, methods } = definition.returns.dispatch;
+    withUnion(action, name, methods);
+  }
+
   // Non-enumerable: invisible to JSON.stringify, visible to the worker
   Object.defineProperty(action, HANDLER_BRAND, {
     value: true,
@@ -169,6 +175,7 @@ export function createHandlerWithConfig<
     inputValidator?: z.ZodType<TValue>;
     outputValidator?: z.ZodType<NoInfer<TOutput>>;
     stepConfigValidator?: z.ZodType<TStepConfig>;
+    returns?: { dispatch: UnionDispatch };
     handle: (context: {
       value: TValue;
       stepConfig: TStepConfig;
@@ -179,7 +186,7 @@ export function createHandlerWithConfig<
 
 // Implementation
 export function createHandlerWithConfig(
-  definition: UntypedHandlerDefinition,
+  definition: UntypedHandlerDefinition & { returns?: { dispatch: UnionDispatch } },
   exportName?: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
@@ -233,6 +240,11 @@ export function createHandlerWithConfig(
       ...(outputSchema && { output_schema: outputSchema }),
     },
   });
+
+  if (definition.returns) {
+    const { name, methods } = definition.returns.dispatch;
+    withUnion(invokeAction, name, methods);
+  }
 
   // Non-enumerable: invisible to JSON.stringify, visible to the worker
   Object.defineProperty(invokeAction, HANDLER_BRAND, {

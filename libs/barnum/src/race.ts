@@ -5,6 +5,7 @@ import {
   type TypedAction,
   toAction,
   typedAction,
+  withUnion,
   buildRestartBranchAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
@@ -13,6 +14,8 @@ import {
   allocateRestartHandlerId,
   type RestartHandlerId,
 } from "./effect-id.js";
+// Lazy: resultMethods is only accessed inside withTimeout's function body, not at module init.
+import { resultMethods } from "./result.js";
 
 /**
  * `Chain(Tag("Break"), RestartPerform(id))` — shared by race branches.
@@ -155,7 +158,10 @@ export function withTimeout<TIn, TOut>(
 
   const allAction: Action = { kind: "All", actions: [bodyBranch, sleepBranch] };
 
-  return typedAction(
-    buildRestartBranchAction(restartHandlerId, allAction, toAction(identity())),
+  return withUnion(
+    typedAction(
+      buildRestartBranchAction(restartHandlerId, allAction, toAction(identity())),
+    ),
+    "Result", resultMethods,
   );
 }
