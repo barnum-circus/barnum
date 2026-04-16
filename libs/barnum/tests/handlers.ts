@@ -56,8 +56,8 @@ export const healthCheck = createHandler(
       value,
     }): Promise<LoopResult<{ deployed: boolean }, { stable: true }>> =>
       value.deployed
-        ? { kind: "Break", value: { stable: true } }
-        : { kind: "Continue", value: { deployed: false } },
+        ? { kind: "LoopResult.Break", value: { stable: true } }
+        : { kind: "LoopResult.Continue", value: { deployed: false } },
   },
   "healthCheck",
 );
@@ -111,7 +111,7 @@ export type ClassifyResultDef = {
   HasErrors: TypeError[];
   Clean: void;
 };
-export type ClassifyResult = TaggedUnion<ClassifyResultDef>;
+export type ClassifyResult = TaggedUnion<"ClassifyResult", ClassifyResultDef>;
 
 export const classifyErrors = createHandler(
   {
@@ -120,8 +120,8 @@ export const classifyErrors = createHandler(
     ),
     handle: async ({ value }): Promise<ClassifyResult> =>
       value.length > 0
-        ? { kind: "HasErrors", value }
-        : { kind: "Clean", value: null },
+        ? { kind: "ClassifyResult.HasErrors", value }
+        : { kind: "ClassifyResult.Clean", value: null },
   },
   "classifyErrors",
 );

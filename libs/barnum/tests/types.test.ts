@@ -383,12 +383,12 @@ describe("postfix operator types", () => {
 
   it(".tag(): wraps output in tagged union with __def", () => {
     type Def = { Success: { verified: boolean }; Failure: string };
-    const action = verify.tag<Def, "Success">("Success");
+    const action = verify.tag<"VerifyResult", Def, "Success">("Success", "VerifyResult");
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        TaggedUnion<Def>
+        TaggedUnion<"VerifyResult", Def>
       >
     >();
     expect(action.kind).toBe("Chain");
@@ -429,7 +429,7 @@ describe("postfix operator types", () => {
 
 describe("{ kind, value } convention", () => {
   it("ClassifyResult uses { kind, value } form", () => {
-    assertExact<IsExact<Extract<ClassifyResult, { kind: "HasErrors" }>, { kind: "HasErrors"; value: TypeError[] }>>();
+    assertExact<IsExact<Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>, { kind: "ClassifyResult.HasErrors"; value: TypeError[] }>>();
   });
 
   it("branch auto-unwraps: HasErrors handler receives TypeError[] directly", () => {
@@ -447,13 +447,13 @@ describe("{ kind, value } convention", () => {
 describe("phantom __def on tagged unions", () => {
   it("ClassifyResult variants carry __def phantom field", () => {
     type Def = { HasErrors: TypeError[]; Clean: void };
-    assertExact<IsExact<Extract<ClassifyResult, { kind: "HasErrors" }>, { kind: "HasErrors"; value: TypeError[]; __def?: Def }>>();
+    assertExact<IsExact<Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>, { kind: "ClassifyResult.HasErrors"; value: TypeError[]; __def?: Def }>>();
   });
 
   it("LoopResult variants carry __def phantom field", () => {
     type Def = { Continue: { deployed: boolean }; Break: { stable: true } };
     type LR = LoopResult<{ deployed: boolean }, { stable: true }>;
-    assertExact<IsExact<Extract<LR, { kind: "Continue" }>, { kind: "Continue"; value: { deployed: boolean }; __def?: Def }>>();
+    assertExact<IsExact<Extract<LR, { kind: "LoopResult.Continue" }>, { kind: "LoopResult.Continue"; value: { deployed: boolean }; __def?: Def }>>();
   });
 });
 
@@ -511,18 +511,15 @@ describe("pipe type safety", () => {
   });
 
   it("rejects non-exhaustive branch (missing case)", () => {
-    // classifyErrors outputs { kind: "HasErrors"; ... } | { kind: "Clean" }
+    // classifyErrors outputs { kind: "ClassifyResult.HasErrors"; ... } | { kind: "ClassifyResult.Clean" }
     // branch with only HasErrors case produces { kind: "HasErrors" } input
-    // pipe rejects because { kind: "Clean" } is not assignable to { kind: "HasErrors" }
+    // pipe rejects because { kind: "ClassifyResult.Clean" } is not assignable to { kind: "HasErrors" }
     // @ts-expect-error — non-exhaustive: missing "Clean" case
     pipe(classifyErrors, branch({ HasErrors: drop }));
   });
 
   it("accepts exhaustive branch", () => {
-    const action = pipe(
-      classifyErrors,
-      branch({ HasErrors: drop, Clean: drop }),
-    );
+    const action = classifyErrors.branch({ HasErrors: drop, Clean: drop });
     expect(action.kind).toBe("Chain");
   });
 });
@@ -552,7 +549,7 @@ describe("postfix .map() type safety", () => {
   });
 
   it("rejects .map() when Out is a different tagged union", () => {
-    // classifyErrors outputs ClassifyResult = { kind: "HasErrors"; ... } | { kind: "Clean"; ... }
+    // classifyErrors outputs ClassifyResult = { kind: "ClassifyResult.HasErrors"; ... } | { kind: "ClassifyResult.Clean"; ... }
     // Not Option<T> (which has kind "Some" | "None")
     // @ts-expect-error — map requires Option or Result output
     expect(() => classifyErrors.map(deploy)).toThrow(".map() requires a union type (Option or Result)");
@@ -572,7 +569,7 @@ describe("Option namespace types", () => {
 
   it("Option.map composes in pipe", () => {
     const action = pipe(
-      tag<OptionDef<{ artifact: string }>, "Some">("Some"),
+      tag<"Option", OptionDef<{ artifact: string }>, "Some">("Some", "Option"),
       O.map(verify),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
@@ -582,7 +579,7 @@ describe("Option namespace types", () => {
   it("Option.andThen(action): Option<T> → Option<U>", () => {
     // andThen chains into an action that itself returns Option
     const action = O.andThen<{ artifact: string }, { verified: boolean }>(
-      pipe(verify, tag<OptionDef<{ verified: boolean }>, "Some">("Some")),
+      pipe(verify, tag<"Option", OptionDef<{ verified: boolean }>, "Some">("Some", "Option")),
     );
     assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
@@ -590,8 +587,8 @@ describe("Option namespace types", () => {
 
   it("Option.andThen composes in pipe for chaining", () => {
     const action = pipe(
-      tag<OptionDef<{ artifact: string }>, "Some">("Some"),
-      O.andThen(pipe(verify, tag<OptionDef<{ verified: boolean }>, "Some">("Some"))),
+      tag<"Option", OptionDef<{ artifact: string }>, "Some">("Some", "Option"),
+      O.andThen(pipe(verify, tag<"Option", OptionDef<{ verified: boolean }>, "Some">("Some", "Option"))),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
@@ -613,7 +610,7 @@ describe("Option namespace types", () => {
     // Predicate that keeps strings longer than 3 chars (returns Option<string>)
     const predicate = pipe(
       identity(),
-      tag<OptionDef<string>, "Some">("Some"), // trivial: always keep
+      tag<"Option", OptionDef<string>, "Some">("Some", "Option"), // trivial: always keep
     );
     const action = O.filter<string>(predicate);
     assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();
@@ -640,7 +637,7 @@ describe("Option namespace types", () => {
 
   it("full Option pipeline: construct → map → unwrapOr", () => {
     const action = pipe(
-      tag<OptionDef<{ artifact: string }>, "Some">("Some"),
+      tag<"Option", OptionDef<{ artifact: string }>, "Some">("Some", "Option"),
       O.map(verify),
       O.unwrapOr(constant({ verified: false })),
     );
@@ -778,7 +775,7 @@ describe("Result types", () => {
 
   it("Result.andThen input is Result, output is Result with new Ok type", () => {
     const action = R.andThen<string, number, boolean>(
-      constant({ kind: "Ok" as const, value: 42 }) as TypedAction<string, Result<number, boolean>>,
+      constant({ kind: "Result.Ok" as const, value: 42 }) as TypedAction<string, Result<number, boolean>>,
     );
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
@@ -786,7 +783,7 @@ describe("Result types", () => {
 
   it("Result.or input is Result, output has new Err type", () => {
     const action = R.or<string, number, boolean>(
-      constant({ kind: "Ok" as const, value: "x" }) as TypedAction<number, Result<string, boolean>>,
+      constant({ kind: "Result.Ok" as const, value: "x" }) as TypedAction<number, Result<string, boolean>>,
     );
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Result<string, boolean>>>();
@@ -795,7 +792,7 @@ describe("Result types", () => {
   it("Result.and replaces Ok type, preserves Err type", () => {
     const action = R.and<string, number, boolean>(
       // CAST: Result.and takes Pipeable<void, ...>; constant input is any. Removable after output covariance.
-      constant({ kind: "Ok" as const, value: 42 }) as TypedAction<void, Result<number, boolean>>,
+      constant({ kind: "Result.Ok" as const, value: 42 }) as TypedAction<void, Result<number, boolean>>,
     );
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
@@ -847,7 +844,7 @@ describe("Result types", () => {
 
   it("Result branches with Ok/Err cases", () => {
     const action = pipe(
-      tag<ResultDef<string, number>, "Ok">("Ok"),
+      tag<"Result", ResultDef<string, number>, "Ok">("Ok", "Result"),
       R.map<string, number, number>(constant(42) as TypedAction<string, number>),
       R.unwrapOr<number, number>(identity()),
     );

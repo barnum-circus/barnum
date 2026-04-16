@@ -184,7 +184,7 @@ describe("loop", () => {
     expect(workflow.kind).toBe("Chain");
     const chain = workflow as any;
     // First: tag("Continue") — now a composed Chain(All(...), Merge)
-    expect(chain.first).toEqual(expectedTagAst("Continue"));
+    expect(chain.first).toEqual(expectedTagAst("LoopResult.Continue"));
     // Rest: RestartHandle
     expect(chain.rest.kind).toBe("RestartHandle");
     expect(typeof chain.rest.restart_handler_id).toBe("number");
@@ -255,12 +255,12 @@ describe("postfix operators", () => {
   });
 
   it(".tag() produces Chain → tag composition AST", () => {
-    const action = verify.tag<{ Ok: { verified: boolean } }, "Ok">("Ok");
+    const action = verify.tag<"VerifyResult", { Ok: { verified: boolean } }, "Ok">("Ok", "VerifyResult");
     expect(action.kind).toBe("Chain");
     const chain = action as { kind: "Chain"; first: any; rest: any };
     expect(chain.first.kind).toBe("Invoke");
     // rest is the tag("Ok") composition
-    expect(chain.rest).toEqual(expectedTagAst("Ok"));
+    expect(chain.rest).toEqual(expectedTagAst("VerifyResult.Ok"));
   });
 
   it(".getField() produces Chain → GetField AST", () => {
@@ -312,11 +312,11 @@ describe("Option namespace", () => {
     // None case: GetField("value") → tag("None") composition
     const noneCase = branchNode.cases["None"];
     expect(noneCase.kind).toBe("Chain");
-    expect(noneCase.rest).toEqual(expectedTagAst("None"));
+    expect(noneCase.rest).toEqual(expectedTagAst("Option.None"));
   });
 
   it("Option.andThen() produces Branch with action Some and tag None", () => {
-    const action = O.andThen(pipe(verify, tag<OptionDef<{ verified: boolean }>, "Some">("Some")));
+    const action = O.andThen(pipe(verify, tag<"Option", OptionDef<{ verified: boolean }>, "Some">("Some", "Option")));
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
     expect(Object.keys(branchNode.cases).toSorted()).toEqual(["None", "Some"]);
@@ -326,7 +326,7 @@ describe("Option namespace", () => {
     expect(someCase.first.handler.builtin.kind).toBe("GetField");
     // None case: GetField("value") → tag("None") composition
     const noneCase = branchNode.cases["None"];
-    expect(noneCase.rest).toEqual(expectedTagAst("None"));
+    expect(noneCase.rest).toEqual(expectedTagAst("Option.None"));
   });
 
   it("Option.unwrapOr() produces Branch with identity Some and default None", () => {
@@ -347,16 +347,16 @@ describe("Option namespace", () => {
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
     expect(branchNode.cases["Some"].rest.handler.builtin.kind).toBe("Identity");
-    expect(branchNode.cases["None"].rest).toEqual(expectedTagAst("None"));
+    expect(branchNode.cases["None"].rest).toEqual(expectedTagAst("Option.None"));
   });
 
   it("Option.filter() produces Branch with predicate Some and tag None", () => {
-    const predicate = tag<OptionDef<string>, "Some">("Some");
+    const predicate = tag<"Option", OptionDef<string>, "Some">("Some", "Option");
     const action = O.filter(predicate);
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
     // Some case body is the predicate (tag "Some" composition)
-    expect(branchNode.cases["Some"].rest).toEqual(expectedTagAst("Some"));
+    expect(branchNode.cases["Some"].rest).toEqual(expectedTagAst("Option.Some"));
   });
 
   it("Option.collect() produces CollectSome builtin", () => {
@@ -631,12 +631,12 @@ describe("Result combinators", () => {
         Ok: {
           kind: "Chain",
           first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
-          rest: { kind: "Chain", first: setup, rest: expectedTagAst("Ok") },
+          rest: { kind: "Chain", first: setup, rest: expectedTagAst("Result.Ok") },
         },
         Err: {
           kind: "Chain",
           first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
-          rest: expectedTagAst("Err"),
+          rest: expectedTagAst("Result.Err"),
         },
       },
     });
@@ -650,39 +650,39 @@ describe("Result combinators", () => {
         Ok: {
           kind: "Chain",
           first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
-          rest: expectedTagAst("Ok"),
+          rest: expectedTagAst("Result.Ok"),
         },
         Err: {
           kind: "Chain",
           first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
-          rest: { kind: "Chain", first: setup, rest: expectedTagAst("Err") },
+          rest: { kind: "Chain", first: setup, rest: expectedTagAst("Result.Err") },
         },
       },
     });
   });
 
   it("Result.andThen(action) desugars to Branch(Ok: action, Err: tag(Err))", () => {
-    const inner = tag<ResultDef<string, string>, "Ok">("Ok");
+    const inner = tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result");
     const result = R.andThen(inner);
     const branchNode =result as any;
     expect(branchNode.kind).toBe("Branch");
     // Ok case: ExtractValue → action
     expect(branchNode.cases.Ok.rest).toEqual(inner);
     // Err case: ExtractValue → tag(Err) composition
-    expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Err"));
+    expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Result.Err"));
   });
 
   it("Result.or(fallback) desugars to Branch(Ok: tag(Ok), Err: fallback)", () => {
-    const fallback = tag<ResultDef<string, string>, "Ok">("Ok");
+    const fallback = tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result");
     const result = R.or(fallback);
     const branchNode =result as any;
     expect(branchNode.kind).toBe("Branch");
-    expect(branchNode.cases.Ok.rest).toEqual(expectedTagAst("Ok"));
+    expect(branchNode.cases.Ok.rest).toEqual(expectedTagAst("Result.Ok"));
     expect(branchNode.cases.Err.rest).toBe(fallback);
   });
 
   it("Result.and(other) desugars to Branch(Ok: Chain(Drop, other), Err: Tag(Err))", () => {
-    const other = pipe(constant("replacement"), tag<ResultDef<string, string>, "Ok">("Ok"));
+    const other = pipe(constant("replacement"), tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result"));
     const result = R.and(other);
     const branchNode =result as any;
     expect(branchNode.kind).toBe("Branch");
@@ -707,16 +707,16 @@ describe("Result combinators", () => {
     const branchNode =action as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
-    expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Err"));
+    expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Result.Err"));
   });
 
   it("Result.toOption() desugars to Branch(Ok: tag(Some), Err: Chain(Drop, tag(None)))", () => {
     const action = R.toOption();
     const branchNode =action as any;
     expect(branchNode.kind).toBe("Branch");
-    expect(branchNode.cases.Ok.rest).toEqual(expectedTagAst("Some"));
+    expect(branchNode.cases.Ok.rest).toEqual(expectedTagAst("Option.Some"));
     expect(branchNode.cases.Err.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branchNode.cases.Err.rest.rest).toEqual(expectedTagAst("None"));
+    expect(branchNode.cases.Err.rest.rest).toEqual(expectedTagAst("Option.None"));
   });
 
   it("Result.toOptionErr() desugars to Branch(Ok: Chain(Drop, tag(None)), Err: tag(Some))", () => {
@@ -724,8 +724,8 @@ describe("Result combinators", () => {
     const branchNode =action as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branchNode.cases.Ok.rest.rest).toEqual(expectedTagAst("None"));
-    expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Some"));
+    expect(branchNode.cases.Ok.rest.rest).toEqual(expectedTagAst("Option.None"));
+    expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Option.Some"));
   });
 
   it("Result.isOk() desugars to Branch(Ok: Constant(true), Err: Constant(false))", () => {
@@ -756,7 +756,7 @@ describe("Result combinators", () => {
     // Err case: tag(Err) → tag(Some) — now both are compositions
     const errBody = branchNode.cases.Err.rest;
     expect(errBody.kind).toBe("Chain");
-    expect(errBody.first).toEqual(expectedTagAst("Err"));
-    expect(errBody.rest).toEqual(expectedTagAst("Some"));
+    expect(errBody.first).toEqual(expectedTagAst("Result.Err"));
+    expect(errBody.rest).toEqual(expectedTagAst("Option.Some"));
   });
 });
