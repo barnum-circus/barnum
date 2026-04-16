@@ -536,24 +536,28 @@ export type Result<TValue, TError> = TaggedUnion<"Result", ResultDef<TValue, TEr
 /** Extract all `kind` string literals from a discriminated union. */
 type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
 
+/** Strip a `"Prefix."` namespace from a dotted kind string. `"Nat.Zero"` → `"Zero"`. */
+type StripKindPrefix<K extends string> = K extends `${string}.${infer Bare}` ? Bare : K;
+
 /** Extract the `value` field from a `{ kind, value }` variant. Falls back to T if no `value` field. */
 type UnwrapVariant<T> = T extends { value: infer V } ? V : T;
 
 /**
  * Branch case keys: prefer ExtractDef (simple keyof indexing) when the
- * output carries __def. Falls back to KindOf (conditional type) for
- * outputs without __def.
+ * output carries __def. Falls back to KindOf with prefix stripping for
+ * outputs without __def (namespaced kinds like "Nat.Zero" → "Zero").
  */
 type BranchKeys<Out> = [ExtractDef<Out>] extends [never]
-  ? KindOf<Out>
+  ? StripKindPrefix<KindOf<Out>>
   : keyof ExtractDef<Out> & string;
 
 /**
  * Branch case payload: prefer ExtractDef[K] (simple indexing) when available.
- * Falls back to UnwrapVariant<Extract<Out, { kind: K }>> for outputs without __def.
+ * Falls back to UnwrapVariant<Extract<Out, { kind: ... }>> for outputs without __def.
+ * In the fallback, matches namespaced kinds (`"Prefix.K"`) against the bare key K.
  */
 type BranchPayload<Out, K extends string> = [ExtractDef<Out>] extends [never]
-  ? UnwrapVariant<Extract<Out, { kind: K }>>
+  ? UnwrapVariant<Extract<Out, { kind: K } | { kind: `${string}.${K}` }>>
   : K extends keyof ExtractDef<Out>
     ? VoidToNull<ExtractDef<Out>[K]>
     : never;
@@ -869,7 +873,7 @@ function unwrapBranchCases(
  * `{ kind: K; value: any }`, which is the correct escape hatch.
  */
 export type BranchInput<TCases> = {
-  [K in keyof TCases & string]: { kind: K; value: ExtractInput<TCases[K]> };
+  [K in keyof TCases & string]: { kind: K | `${string}.${K}`; value: ExtractInput<TCases[K]> };
 }[keyof TCases & string];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
