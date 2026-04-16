@@ -31,7 +31,6 @@ export const optionMethods: UnionMethods = {
   andThen: (action) => Option.andThen(action),
   unwrap: () => Option.unwrap(),
   unwrapOr: (action) => Option.unwrapOr(action),
-  flatten: () => Option.flatten(),
   filter: (predicate) => Option.filter(predicate),
   collect: () => Option.collect(),
   isSome: () => Option.isSome(),
@@ -105,17 +104,6 @@ export const Option = {
       Some: identity(),
       None: defaultAction,
     }) as TypedAction<OptionT<T>, T>;
-  },
-
-  /** Unwrap a nested Option. `Option<Option<T>> → Option<T>` */
-  flatten<T>(): TypedAction<OptionT<OptionT<T>>, OptionT<T>> {
-    return withUnion(
-      branch({
-        Some: identity(),
-        None: Option.none,
-      }) as TypedAction<OptionT<OptionT<T>>, OptionT<T>>,
-      "Option", optionMethods,
-    );
   },
 
   /**

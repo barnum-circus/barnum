@@ -600,12 +600,6 @@ describe("Option namespace types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
   });
 
-  it("Option.flatten(): Option<Option<T>> → Option<T>", () => {
-    const action = O.flatten<string>();
-    assertExact<IsExact<ExtractInput<typeof action>, Option<Option<string>>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
-  });
-
   it("Option.filter(predicate): Option<T> → Option<T>", () => {
     // Predicate that keeps strings longer than 3 chars (returns Option<string>)
     const predicate = pipe(
@@ -804,12 +798,6 @@ describe("Result types", () => {
     );
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
-  });
-
-  it("Result.flatten unwraps nested Result", () => {
-    const action = R.flatten<string, number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Result<Result<string, number>, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, number>>>();
   });
 
   it("Result.toOption converts to Option<TValue>", () => {

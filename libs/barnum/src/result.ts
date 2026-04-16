@@ -20,7 +20,6 @@ export const resultMethods: UnionMethods = {
   andThen: (action) => Result.andThen(action),
   unwrap: () => Result.unwrap(),
   unwrapOr: (action) => Result.unwrapOr(action),
-  flatten: () => Result.flatten(),
   mapErr: (action) => Result.mapErr(action),
   and: (other) => Result.and(other),
   or: (fallback) => Result.or(fallback),
@@ -134,23 +133,6 @@ export const Result = {
       Ok: identity(),
       Err: defaultAction,
     }) as TypedAction<ResultT<TValue, TError>, TValue>;
-  },
-
-  /** Unwrap nested Result. `Result<Result<TValue, TError>, TError> → Result<TValue, TError>` */
-  flatten<TValue, TError>(): TypedAction<
-    ResultT<ResultT<TValue, TError>, TError>,
-    ResultT<TValue, TError>
-  > {
-    return withUnion(
-      branch({
-        Ok: identity(),
-        Err: Result.err,
-      }) as TypedAction<
-        ResultT<ResultT<TValue, TError>, TError>,
-        ResultT<TValue, TError>
-      >,
-      "Result", resultMethods,
-    );
   },
 
   /**

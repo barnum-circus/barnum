@@ -274,8 +274,8 @@ describe("postfix operators", () => {
   });
 
   it("postfix methods are chainable", () => {
-    // forEach(analyze).flatten().forEach().drop()
-    const action = forEach(verify).flatten().drop();
+    // forEach(forEach(verify)).flatten().drop()
+    const action = forEach(forEach(verify)).flatten().drop();
     expect(action.kind).toBe("Chain");
   });
 
@@ -340,14 +340,6 @@ describe("Option namespace", () => {
     const noneCase = branchNode.cases["None"];
     expect(noneCase.rest.handler.builtin.kind).toBe("Constant");
     expect(noneCase.rest.handler.builtin.value).toBe("fallback");
-  });
-
-  it("Option.flatten() produces Branch with identity Some and tag None", () => {
-    const action = O.flatten<string>();
-    expect(action.kind).toBe("Branch");
-    const branchNode =action as { kind: "Branch"; cases: any };
-    expect(branchNode.cases["Some"].rest.handler.builtin.kind).toBe("Identity");
-    expect(branchNode.cases["None"].rest).toEqual(expectedTagAst("Option.None"));
   });
 
   it("Option.filter() produces Branch with predicate Some and tag None", () => {
@@ -700,14 +692,6 @@ describe("Result combinators", () => {
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
     expect(branchNode.cases.Err.rest).toBe(fallback);
-  });
-
-  it("Result.flatten() desugars to Branch(Ok: Identity, Err: tag(Err))", () => {
-    const action = R.flatten();
-    const branchNode =action as any;
-    expect(branchNode.kind).toBe("Branch");
-    expect(branchNode.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
-    expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Result.Err"));
   });
 
   it("Result.toOption() desugars to Branch(Ok: tag(Some), Err: Chain(Drop, tag(None)))", () => {

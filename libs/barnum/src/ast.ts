@@ -169,7 +169,6 @@ export interface UnionMethods {
   andThen?: (action: Action) => Action;
   unwrap?: () => Action;
   unwrapOr?: (action: Action) => Action;
-  flatten?: () => Action;
   // Option-only
   filter?: (predicate: Action) => Action;
   collect?: () => Action;
@@ -255,17 +254,10 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   >(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>>;
-  /** Flatten one level of nesting. Dispatches: Array, Option, Result. */
+  /** Flatten one level of array nesting. `TElement[][] → TElement[]` */
   flatten<TIn, TElement>(
     this: TypedAction<TIn, TElement[][]>,
   ): TypedAction<TIn, TElement[]>;
-  flatten<TIn, TValue>(
-    this: TypedAction<TIn, Option<Option<TValue>>>,
-  ): TypedAction<TIn, Option<TValue>>;
-  flatten<TIn, TValue, TError>(
-    this: TypedAction<TIn, Result<Result<TValue, TError>, TError>>,
-  ): TypedAction<TIn, Result<TValue, TError>>;
-  flatten(): TypedAction<In, unknown>;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
   drop(): TypedAction<In, void>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
@@ -586,11 +578,6 @@ function branchMethod(
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
-  const dispatch = this.__union;
-  if (dispatch?.methods.flatten) {
-    return chain(toAction(this), toAction(dispatch.methods.flatten()));
-  }
-  // Fall back to array flatten
   return chain(toAction(this), toAction(flattenBuiltin()));
 }
 
