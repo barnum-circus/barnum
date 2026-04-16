@@ -336,6 +336,12 @@ This provides defense-in-depth: even if a type-level `pick` is accidentally omit
 
 **Why deferred**: The type system should be the primary enforcement mechanism. Engine-level filtering is a safety net, not a substitute. It also adds per-dispatch overhead (schema introspection) and requires all handlers to have schemas (currently `inputValidator` is optional). Worth revisiting once the invariant type system is stable and handler schemas are mandatory.
 
+## Generalize ExtractPrefix
+
+`ExtractPrefix` (from UNION_DISPATCH_AST_NODES.md) is a bespoke builtin that splits a `kind` string on `'.'` and restructures the value. It could be replaced by a more general string-processing primitive — e.g., a regex-based builtin that extracts capture groups, or a general "split string field" operation. This would make `ExtractPrefix` a derived combinator built from the general primitive rather than a special-cased builtin.
+
+Not urgent — `ExtractPrefix` handles the concrete need (Option/Result dispatch). Generalize when a second use case for in-engine string processing appears.
+
 ## Boolean-to-Enum Builtin
 
 Branch dispatches on tagged unions (`{ kind, value }`). Booleans can't be branched on directly — you need to convert `true`/`false` to `{ kind: "True", value: void }` / `{ kind: "False", value: void }` first.

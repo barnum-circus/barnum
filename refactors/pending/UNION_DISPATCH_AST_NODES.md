@@ -79,19 +79,80 @@ From `option.ts`:
 From `chain.ts`:
 - `__union` propagation (lines 18–22)
 
-## Rust changes
+## Rust: new `ExtractPrefix` builtin
 
-### New builtin: `ExtractPrefix`
+Goes through the existing Invoke → Builtin path, same as `GetField`, `Identity`, etc.
 
-Add to `BuiltinKind`:
+### `barnum_ast/src/lib.rs` — add variant to `BuiltinKind`
 
 ```rust
-{ kind: "ExtractPrefix" }
+/// Extract the enum prefix from a tagged value's `kind` field.
+///
+/// Input: `{ kind: "Result.Ok", value: 42 }`
+/// Output: `{ kind: "Result", value: { kind: "Result.Ok", value: 42 } }`
+///
+/// If `kind` contains no `'.'`, the entire kind string becomes the prefix.
+ExtractPrefix,
 ```
 
-Implementation: read `kind` string, split on `'.'`, produce `{ kind: prefix, value: original_input }`. If the kind contains no `'.'`, the entire kind string becomes the prefix (handles non-namespaced kinds gracefully).
+### `barnum_builtins/src/lib.rs` — add match arm to `execute_builtin`
 
-No new structural AST nodes. No new engine dispatch logic. ExtractPrefix goes through the existing Invoke → Builtin path like `GetField`, `Identity`, etc.
+```rust
+BuiltinKind::ExtractPrefix => {
+    let Value::Object(obj) = input else {
+        return Err(BuiltinError::TypeMismatch {
+            builtin: "ExtractPrefix",
+            expected: "object",
+            actual: input.clone(),
+        });
+    };
+    let kind_str = obj
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| BuiltinError::TypeMismatch {
+            builtin: "ExtractPrefix",
+            expected: "object with string 'kind' field",
+            actual: input.clone(),
+        })?;
+    let prefix = kind_str
+        .split_once('.')
+        .map_or(kind_str, |(prefix, _)| prefix);
+    Ok(json!({ "kind": prefix, "value": input }))
+}
+```
+
+### `libs/barnum/src/ast.ts` — add to `BuiltinKind` type
+
+```ts
+| { kind: "ExtractPrefix" }
+```
+
+### `libs/barnum/src/builtins.ts` — TS-side constructor
+
+```ts
+export function extractPrefix(): TypedAction {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "ExtractPrefix" } },
+  });
+}
+```
+
+### `libs/barnum/src/ast.ts` — `matchPrefix` combinator
+
+Internal combinator used by postfix methods. Composes `extractPrefix()` with `branch()`:
+
+```ts
+export function matchPrefix(cases: Record<string, Action>): TypedAction {
+  return chain(extractPrefix(), branch(cases));
+}
+```
+
+No new structural AST nodes. No new engine dispatch logic.
+
+### Future generalization
+
+`ExtractPrefix` is a bespoke builtin for splitting on `'.'`. It could later be replaced by a more general primitive (e.g., regex-based string splitting). Tracked in the deferred backlog.
 
 ## Postfix method rewrites
 
