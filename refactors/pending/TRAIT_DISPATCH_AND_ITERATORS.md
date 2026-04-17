@@ -309,15 +309,17 @@ forEach(withResource({ ... })),
 
 Full pipeline becomes:
 ```ts
-pipe(
-  constant({ folder: srcDir }),
-  listTargetFiles,
-  Iter.iterate(),               // T[] → Iterator<T>
-  Iter.andThen(analyze),        // monadic bind: each file → Iterator<Refactor>, concatenated
-  Iter.filter(assessWorthiness),// keep only worthwhile (Option predicate)
-  Iter.map(withResource({ create: createBranchWorktree, action: implementAndReview, dispose: deleteWorktree })),
-  Iter.collect(),               // Iterator<T> → T[]
-)
+constant({ folder: srcDir })
+  .then(listTargetFiles)
+  .iterate()                                    // T[] → Iterator<T>
+  .andThen(analyze)                             // each file → Iterator<Refactor>, concatenated
+  .filter(assessWorthiness)                     // keep only worthwhile (Option predicate)
+  .map(withResource({
+    create: createBranchWorktree,
+    action: implementAndReview,
+    dispose: deleteWorktree,
+  }))
+  .collect()                                    // Iterator<T> → T[]
 ```
 
 ### `convert-folder-to-ts/run.ts`
@@ -347,10 +349,10 @@ listFiles.iterate().map(pipe(implementRefactor, typeCheckFiles, fixTypeErrors, c
 forEach(bindInput<number>((prNumber) => prNumber.then(checkPR).branch({...}))),
 Option.collect<number>(),
 
-// AFTER: filter replaces forEach + Option.collect
-Iter.iterate(),
-Iter.filter(bindInput<number>((prNumber) => prNumber.then(checkPR).branch({...}))),
-Iter.collect(),
+// AFTER: postfix — filter replaces forEach + Option.collect
+  .iterate()
+  .filter(bindInput<number>((prNumber) => prNumber.then(checkPR).branch({...})))
+  .collect(),
 ```
 
 ### `*/handlers/type-check-fix.ts` (both demos)
@@ -359,10 +361,8 @@ Iter.collect(),
 // BEFORE (line 148):
 HasErrors: forEach(fix).drop().then(recur),
 
-// AFTER:
-HasErrors: Iter.iterate().then(Iter.map(fix)).then(Iter.collect()).drop().then(recur),
-// or with postfix:
-HasErrors: pipe(Iter.iterate(), Iter.map(fix), Iter.collect(), drop, recur),
+// AFTER: postfix chain
+HasErrors: Iter.iterate().map(fix).collect().drop().then(recur),
 ```
 
 ---
