@@ -18,7 +18,7 @@ export {
   splitLast,
   wrapInField,
   taggedUnionSchema,
-} from "./builtins.js";
+} from "./builtins/index.js";
 export { Option, first, last } from "./option.js";
 export { Result } from "./result.js";
 export { runPipeline, type RunPipelineOptions, type LogLevel } from "./run.js";

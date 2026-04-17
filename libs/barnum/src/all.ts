@@ -4,7 +4,7 @@ import {
   type TypedAction,
   typedAction,
 } from "./ast.js";
-import { constant } from "./builtins.js";
+import { constant } from "./builtins/index.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function all(): TypedAction<any, []>;

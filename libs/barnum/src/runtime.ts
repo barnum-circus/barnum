@@ -6,7 +6,7 @@ export { createHandler, createHandlerWithConfig, type Handler } from "./handler.
 
 // Schema builders
 export { resultSchema, optionSchema } from "./schemas.js";
-export { taggedUnionSchema } from "./builtins.js";
+export { taggedUnionSchema } from "./builtins/index.js";
 
 // Types only
 export type { Result, Option, TaggedUnion } from "./ast.js";

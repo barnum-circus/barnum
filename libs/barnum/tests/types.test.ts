@@ -41,7 +41,7 @@ import {
   getField,
   range,
   tag,
-} from "../src/builtins.js";
+} from "../src/builtins/index.js";
 import { Option as O } from "../src/option.js";
 import { Result as R } from "../src/result.js";
 import {

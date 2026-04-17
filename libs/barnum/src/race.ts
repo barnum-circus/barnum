@@ -8,7 +8,7 @@ import {
   buildRestartBranchAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
-import { identity, tag } from "./builtins.js";
+import { identity, tag } from "./builtins/index.js";
 import { Result } from "./result.js";
 import {
   allocateRestartHandlerId,

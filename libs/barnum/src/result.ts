@@ -7,7 +7,7 @@ import {
   branch,
 } from "./ast.js";
 import { chain } from "./chain.js";
-import { constant, drop, identity, panic, tag } from "./builtins.js";
+import { constant, drop, identity, panic, tag } from "./builtins/index.js";
 import { Option } from "./option.js";
 
 // ---------------------------------------------------------------------------

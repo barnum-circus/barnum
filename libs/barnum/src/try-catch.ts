@@ -6,7 +6,7 @@ import {
   buildRestartBranchAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
-import { tag } from "./builtins.js";
+import { tag } from "./builtins/index.js";
 import { allocateRestartHandlerId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------

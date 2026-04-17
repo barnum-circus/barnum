@@ -15,7 +15,7 @@ import {
   splitLast,
   tag,
   wrapInField,
-} from "./builtins.js";
+} from "./builtins/index.js";
 import { Option } from "./option.js";
 import { Result } from "./result.js";
 // Lazy import — bind.ts imports from ast.ts, but these are only called inside

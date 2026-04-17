@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, it, expect } from "vitest";
 
 import { pipe } from "../src/ast.js";
-import { constant, identity } from "../src/builtins.js";
+import { constant, identity } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup, build } from "./handlers.js";
 

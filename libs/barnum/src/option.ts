@@ -17,7 +17,7 @@ import {
   splitFirst,
   splitLast,
   tag,
-} from "./builtins.js";
+} from "./builtins/index.js";
 import { Result } from "./result.js";
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import type { z } from "zod";
 import { type TypedAction, toAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 import { all } from "./all.js";
-import { constant, identity } from "./builtins.js";
+import { constant, identity } from "./builtins/index.js";
 import { zodToCheckedJsonSchema } from "./schema.js";
 
 // ---------------------------------------------------------------------------

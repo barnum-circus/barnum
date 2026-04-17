@@ -1,6 +1,6 @@
 import { type Action, type PipeIn, type Pipeable, type TypedAction, toAction } from "./ast.js";
 import { chain } from "./chain.js";
-import { identity } from "./builtins.js";
+import { identity } from "./builtins/index.js";
 
 export function pipe<TStep1, TStep2>(
   a1: Pipeable<TStep1, TStep2>,

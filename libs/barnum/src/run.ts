@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { type Action, type Config, type ExtractOutput, toAction } from "./ast.js";
 import { chain } from "./chain.js";
-import { constant } from "./builtins.js";
+import { constant } from "./builtins/index.js";
 
 /** Log verbosity for the barnum engine runtime. Passed to the CLI's `--log-level`. */
 export type LogLevel = "off" | "error" | "warn" | "info" | "debug" | "trace";
