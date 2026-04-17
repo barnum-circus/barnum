@@ -113,8 +113,8 @@ Not proposed for the current release. Belongs to a future where barnum has first
 |------|-----------|-------|
 | `range(start, end)` | `any → number[]` | Constant integer array, ignores input |
 | `forEach(action)` | `T[] → U[]` | Postfix. Map over elements |
-| `getIndex(n)` | `Tuple → Option<Tuple[N]>` | Currently returns raw value; should return `Option`. Compose `.unwrap()` for known-present. |
-| `flatten()` | `T[][] → T[]` | Postfix `.flatten()` dispatches: Option/Result via `__union`, array via builtin fallback. Single name, no rename needed. |
+| `getIndex(n)` | `Tuple → Option<Tuple[N]>` | Returns `Option`. Compose `.unwrap()` for known-present. |
+| `flatten()` | `T[][] → T[]` | Postfix `.flatten()`. Array-only builtin. |
 | `splitFirst()` | `T[] → Option<[T, T[]]>` | Postfix. Head/tail decomposition |
 | `splitLast()` | `T[] → Option<[T[], T]>` | Postfix. Init/last decomposition |
 | `first()` | `T[] → Option<T>` | Postfix. Safe first element |
@@ -151,7 +151,6 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `Option.andThen(action)` | `Option<T> → Option<U>` | exists, postfix | Monadic bind |
 | `Option.unwrap()` | `Option<T> → T` | exists, postfix | Panics on None (fatal, not caught by tryCatch) |
 | `Option.unwrapOr(action)` | `Option<T> → T` | exists, postfix | |
-| `Option.flatten()` | `Option<Option<T>> → Option<T>` | exists, postfix | Dispatched via `.flatten()` |
 | `Option.filter(pred)` | `Option<T> → Option<T>` | exists, postfix | |
 | `Option.isSome()` | `Option<T> → boolean` | exists, postfix | |
 | `Option.isNone()` | `Option<T> → boolean` | exists, postfix | |
@@ -163,6 +162,7 @@ Not proposed for the current release. Belongs to a future where barnum has first
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
+| `Option.flatten()` | `Option<Option<T>> → Option<T>` | composable | `Option.andThen(identity())` |
 | `Option.okOr(action)` | `Option<T> → Result<T, E>` | composable | Branch → tag |
 | `Option.zip` | `(Option<T>, Option<U>) → Option<[T, U]>` | composable | Low priority |
 
@@ -181,12 +181,17 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `Result.and(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Replace Ok |
 | `Result.unwrap()` | `Result<T, E> → T` | exists, postfix | Panics on Err (fatal, not caught by tryCatch) |
 | `Result.unwrapOr(action)` | `Result<T, E> → T` | exists, postfix | |
-| `Result.flatten()` | `Result<Result<T,E>,E> → Result<T,E>` | exists, postfix | Dispatched via `.flatten()` |
 | `Result.toOption()` | `Result<T, E> → Option<T>` | exists, postfix | |
 | `Result.toOptionErr()` | `Result<T, E> → Option<E>` | exists, postfix | |
 | `Result.transpose()` | `Result<Option<T>, E> → Option<Result<T, E>>` | exists, postfix | |
 | `Result.isOk()` | `Result<T, E> → boolean` | exists, postfix | |
 | `Result.isErr()` | `Result<T, E> → boolean` | exists, postfix | |
+
+### Proposed
+
+| Name | Signature | Status | Notes |
+|------|-----------|--------|-------|
+| `Result.flatten()` | `Result<Result<T,E>,E> → Result<T,E>` | composable | `Result.andThen(identity())` |
 
 ---
 
@@ -194,24 +199,24 @@ Not proposed for the current release. Belongs to a future where barnum has first
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `tag(kind)` | `T → TaggedUnion<{K: T}>` | exists | Constructor — wrap value as variant |
-| `branch(cases)` | `TaggedUnion<T> → Out` | exists, postfix | Dispatch on discriminant |
+| `tag(kind, enumName)` | `T → TaggedUnion<TEnumName, {K: T}>` | exists | Constructor — wrap value as namespaced variant |
+| `branch(cases)` | `TaggedUnion<T> → Out` | exists, postfix | Dispatch on discriminant. Auto-unwraps `value`. |
+| `matchPrefix(cases)` | `TaggedUnion<T> → Out` | exists | Two-level dispatch: extract enum prefix, then branch. Used by postfix methods (`.map()`, `.unwrapOr()`, etc.) to dispatch across Option/Result. |
+| `extractPrefix()` | `{kind: "Prefix.Variant", ...} → {kind: "Prefix", value: original}` | exists | Rust builtin. Splits kind on `'.'`. Internal — used by `matchPrefix`. |
 
 ---
 
 ---
 
-## `flatten` — unified name, dispatched
+## `flatten` — array-only
 
-`flatten` is a single name for all types. The postfix `.flatten()` dispatches:
+`flatten` is the array builtin `T[][] → T[]`. The postfix `.flatten()` calls the array Flatten builtin directly.
 
-| Self type | Dispatch | Implementation |
-|-----------|----------|----------------|
-| `T[][]` | Fallback (no `__union`) | Array builtin |
-| `Option<Option<T>>` | `optionMethods.flatten` | Branch: Some → identity, None → tag None |
-| `Result<Result<T,E>,E>` | `resultMethods.flatten` | Branch: Ok → identity, Err → tag Err |
+For Option/Result flattening, use `andThen(identity())`:
+- `Option<Option<T>> → Option<T>`: `Option.andThen(identity())`
+- `Result<Result<T,E>,E> → Result<T,E>`: `Result.andThen(identity())`
 
-No `flattenArray`/`flattenOption`/`flattenResult` standalone names needed. The standalone `flatten()` export from builtins is the array version (used as the fallback).
+These are composable from existing primitives — no dedicated flatten combinator needed.
 
 ---
 
@@ -220,11 +225,12 @@ No `flattenArray`/`flattenOption`/`flattenResult` standalone names needed. The s
 | Name | Reason | Status |
 |------|--------|--------|
 | `tap` | Subsumed by `bind`/`bindInput` | **done** — removed from exports and postfix |
+| `__union` runtime dispatch | Replaced by `matchPrefix` + `ExtractPrefix` AST nodes | **done** |
 | `merge` | See below | pending |
 
 ### `merge` → `allObject`
 
-`merge` is internal plumbing used by `tag`, `pick`, `withResource`, `tap` — all follow `all(...) → merge()`. `allObject` is the canonical abstraction for this pattern. Internal uses of `merge` become implementation details of `allObject`, `tag`, `pick`, `withResource`.
+`merge` is internal plumbing used by `tag`, `pick`, `withResource` — all follow `all(...) → merge()`. `allObject` is the canonical abstraction for this pattern. Internal uses of `merge` become implementation details of `allObject`, `tag`, `pick`, `withResource`.
 
 ---
 
@@ -258,13 +264,11 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [x] `mapErr` → converted to dispatch
 - [x] `unwrapOr` — widened to Option + Result, converted to dispatch
 - [x] `Option.transpose` — implemented, dispatched
-- [x] `.flatten()` — three-way dispatch: Option/Result via `__union`, array via builtin fallback. No rename.
+- [x] `.flatten()` — array-only builtin
 - [x] `unwrap` — panicking unwrap for Option and Result
 - [x] `panic(msg)` — Panic builtin (TS + Rust)
-- [x] `__union` → `{ name, methods }` shape with type name in error messages
-
-### Breaking changes
-- [ ] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
+- [x] `__union` dispatch replaced by `matchPrefix` + `ExtractPrefix` (see UNION_DISPATCH_AST_NODES in past/)
+- [x] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
 
 ### Pending
 - [ ] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
