@@ -238,10 +238,7 @@ files                                        // File[]
 
 1. ~~**Naming**~~ **Decided:** `.iterate()`.
 
-2. **Array → Iterator**: How does `.iterate()` work on `T[]`? Arrays have no prefix to dispatch on. Options:
-   - Postfix `.iterate()` on any TypedAction with `T[]` output (hardcoded, not dispatched — wraps and tags)
-   - Standalone `Iter.fromArray()` combinator
-   - Both?
+2. ~~**Array → Iterator**~~ **Decided:** Postfix `.iterate()` on any TypedAction with `T[]` output. Hardcoded, not dispatched — just wraps and tags via `Iter.wrap`. No `matchPrefix` needed for arrays since they have no prefix.
 
 3. **`filter` predicate type**: Rust's `Iterator::filter` takes `&T → bool`. Barnum has no boolean-to-conditional. Two options:
    - `T → Option<T>` (consistent with `Option.filter`, composable as `forEach(pred).collectSome()`)
