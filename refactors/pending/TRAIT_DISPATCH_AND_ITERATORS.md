@@ -6,15 +6,16 @@ Dynamic dispatch in barnum uses **prefix-based dispatch** via the `ExtractPrefix
 
 Currently, transformation methods like `.map()` and `.andThen()` are postfix methods on TypedAction that use `matchPrefix` to dispatch across Option and Result.
 
-**This doc extends that pattern to Iterator.** Iterator joins Option and Result as a third family in `matchPrefix` dispatch. Shared methods (map, andThen, flatten) gain an Iterator case. Iterator also introduces new methods (filter, find, collect, first, last, etc.) that are Iterator-only. `.iterate()` converts Option/Result/Array into Iterator.
+**This doc introduces Iterator as the sole transformation interface.** Transformation methods (map, filter, find, etc.) live only on Iterator. Option and Result gain `.iterate()` to enter Iterator, and methods like `.first()`, `.collect()`, `.collectResult()` to exit. `.map()` and `.andThen()` are removed from Option/Result — to transform, enter Iterator first.
 
 ---
 
-## Current state: prefix-based dispatch on shared methods
+## Design: Iterator as the sole transformation interface
 
-Postfix `.map()` currently dispatches across families:
+Currently, `.map()` and `.andThen()` are shared postfix methods that dispatch via `matchPrefix` across Option and Result:
 
 ```ts
+// CURRENT — shared dispatch across families
 function mapMethod(this: TypedAction, action: Action): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
     Result: branch({
@@ -29,30 +30,23 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
 }
 ```
 
-Shared methods (map, andThen, flatten) gain an Iterator case in their `matchPrefix` dispatch. Consistent with Rust, where Option, Result, and Iterator all have their own `.map()`:
+**This refactor removes `.map()`, `.andThen()`, and `.forEach()` from Option/Result/arrays.** Iterator becomes the only interface for element-wise transformation. To transform, enter Iterator first:
 
 ```ts
-function mapMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
-    Result: branch({
-      Ok: chain(toAction(action), toAction(Result.ok)),
-      Err: Result.err,
-    }),
-    Option: branch({
-      Some: chain(toAction(action), toAction(Option.some)),
-      None: Option.none,
-    }),
-    // Single variant — no inner branch needed. matchPrefix outer branch
-    // auto-unwraps to { kind: "Iterator.Iterator", value: T[] }.
-    // getField("value") extracts the T[] for the array operation.
-    Iterator: chain(
-      toAction(getField("value")),
-      toAction(forEach(action)),
-      toAction(Iter.wrap),
-    ),
-  })));
-}
+// BEFORE: option.map(validate)
+// AFTER:
+option.iterate().map(validate).first()
+
+// BEFORE: result.map(transform)
+// AFTER:
+result.iterate().map(transform).first().unwrapOr(defaultValue)
+
+// BEFORE: array.forEach(process)
+// AFTER:
+array.iterate().map(process).collect()
 ```
+
+**Why:** One place for transformations eliminates multi-family dispatch complexity. `matchPrefix` is still used for `.unwrapOr()`, `.unwrap()`, `.transpose()`, and `.iterate()` itself — methods that need to know which family they're operating on. But map/andThen don't need family dispatch — they only operate on Iterator.
 
 ### Postfix methods by family
 
@@ -77,7 +71,9 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
 
 **Shared postfix methods (using `matchPrefix`):**
 - `.unwrapOr(default)`, `.unwrap()`, `.transpose()`, `.iterate()`
-- `.map()`, `.andThen()`, `.flatten()`
+
+**Removed from Option/Result** (now Iterator-only):
+- `.map()`, `.andThen()`, `.forEach()`
 
 ---
 
@@ -147,21 +143,25 @@ const arrayIntoIter = wrapAsIterator;
 
 ## Iterator methods
 
-Shared transformation methods (map, andThen, flatten) work on Iterator via `matchPrefix` alongside Option and Result. Iterator also has its own methods that don't exist on other families. All Iterator-specific methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap. The pattern is: `getField("value")` → array operation → `Iter.wrap`.
+All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap (for methods that stay in Iterator) or exit (for methods that produce Option, Result, or plain values). The pattern is: `getField("value")` → array operation → `Iter.wrap`.
 
-### Core (compose from existing AST nodes)
+### Phase 1 — implement now (used in demos)
 
 | Method | Rust equivalent | Signature | Implementation | Notes |
 |--------|----------------|-----------|----------------|-------|
 | `.map(f)` | `Iterator::map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
+| `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → flatten → rewrap | Rust calls this `flat_map`; we use `andThen` for consistency |
+| `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
+| `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → Option wrap | Exit Iterator, enter Option |
+
+### Future — add when needed
+
+| Method | Rust equivalent | Signature | Implementation | Notes |
+|--------|----------------|-----------|----------------|-------|
 | `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` (see open questions) |
 | `.find(pred)` | `Iterator::find` | `Iterator<T> → Option<T>` | Unwrap → `forEach(pred)` → collectSome → first | Exits Iterator, enters Option. Not short-circuiting |
-| `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → flatten → rewrap | Rust calls this `flat_map`; we use `andThen` for consistency |
-| `.flatten()` | `Iterator::flatten` | `Iterator<Iterator<T>> → Iterator<T>` | Unwrap outer → forEach(unwrap inner) → flatten → rewrap | |
-| `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
 | `.collectResult()` | `collect::<Result<Vec,E>>` | `Iterator<Result<T,E>> → Result<T[],E>` | Unwrap → fold with short-circuit on Err | Exit Iterator, enter Result |
 | `.collectOption()` | `collect::<Option<Vec>>` | `Iterator<Option<T>> → Option<T[]>` | Unwrap → fold with short-circuit on None | Exit Iterator, enter Option |
-| `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → Option wrap | Exit Iterator, enter Option |
 | `.last()` | `Iterator::last` | `Iterator<T> → Option<T>` | Unwrap → splitLast → Option wrap | Exit Iterator, enter Option |
 | `.count()` | `Iterator::count` | `Iterator<T> → number` | Unwrap → Arr.length | Needs builtin |
 | `.any(pred)` | `Iterator::any` | `Iterator<T> → boolean` | `find(pred).isSome()` | Not short-circuiting |
@@ -185,9 +185,8 @@ Shared transformation methods (map, andThen, flatten) work on Iterator via `matc
 | Method | Returns | Next family |
 |--------|---------|-------------|
 | `.map(f)` | `Iterator<U>` | Iterator (stay) |
-| `.filter(pred)` | `Iterator<T>` | Iterator (stay) |
-| `.flatten()` | `Iterator<T>` | Iterator (stay) |
 | `.andThen(f)` | `Iterator<U>` | Iterator (stay) |
+| `.filter(pred)` | `Iterator<T>` | Iterator (stay) |
 | `.collect()` | `T[]` | none (exit) |
 | `.collectResult()` | `Result<T[],E>` | Result |
 | `.collectOption()` | `Option<T[]>` | Option |
@@ -204,49 +203,40 @@ Shared transformation methods (map, andThen, flatten) work on Iterator via `matc
 ## Example chains
 
 ```ts
-// Direct map on Option — works as before
-option.map(validate)                         // Option<Valid>
-
-// Iterator enables operations Option doesn't have
+// Option → Iterator → transform → exit to Option
 option.iterate()                             // Iterator<string>
-  .filter(isNonEmpty)                        // Iterator<string>
   .map(validate)                             // Iterator<ValidResult>
   .first()                                   // Option<ValidResult>
 
-// Result → Iterator → find → unwrap
+// Result → unwrap → Iterator → transform
 result                                       // Result<User[], Error>
-  .iterate()                                 // Iterator<User[]>
-  .andThen(identity())                       // Iterator<User>  (flatMap)
-  .find(isAdmin)                             // Option<User>
-  .unwrapOr(defaultAdmin)                    // User
-
-// Array → Iterator → filter → collect
-users                                        // User[]
+  .unwrapOr(constant([]))                    // User[]
   .iterate()                                 // Iterator<User>
-  .filter(isActive)                          // Iterator<User>
   .map(getName)                              // Iterator<string>
   .collect()                                 // string[]
 
-// collectResult: Iterator<Result<T,E>> → Result<T[], E>
-results                                      // Result<ParsedRow, Error>[]
-  .iterate()                                 // Iterator<Result<ParsedRow, Error>>
-  .collectResult()                           // Result<ParsedRow[], Error>
+// Array → Iterator → map → collect
+users                                        // User[]
+  .iterate()                                 // Iterator<User>
+  .map(getName)                              // Iterator<string>
+  .collect()                                 // string[]
 
-// collectOption: Iterator<Option<T>> → Option<T[]>
-maybeValues                                  // Option<number>[]
-  .iterate()                                 // Iterator<Option<number>>
-  .collectOption()                           // Option<number[]>
+// andThen (flat_map): Iterator<T[]> → Iterator<T>
+nestedArrays                                 // T[][]
+  .iterate()                                 // Iterator<T[]>
+  .andThen(iterateArray)                     // Iterator<T>
+  .collect()                                 // T[]
 ```
 
 ---
 
 ## What Iterator adds
 
-1. **Sequence operations on any type.** Option, Result, and arrays all get `.iterate()` as the entry point into the full suite of sequence operations (map, filter, find, collect, etc.).
+1. **Single transformation interface.** `.map()`, `.andThen()`, `.filter()`, `.find()` — all transformation methods live on Iterator. Option/Result have `.iterate()` to enter, and `.first()`, `.collect()`, etc. to exit.
 
 2. **Typed collect.** `.collectResult()` and `.collectOption()` provide type-directed collection — the Rust `collect::<Result<Vec<T>,E>>()` pattern.
 
-3. **New family in `matchPrefix`.** Shared postfix methods gain an Iterator case. `.iterate()` itself dispatches via `matchPrefix` to convert Option/Result into Iterator.
+3. **Simpler dispatch.** `.iterate()` dispatches via `matchPrefix` to convert Option/Result into Iterator. But transformation methods (map, filter, etc.) only operate on Iterator — no multi-family dispatch needed.
 
 4. **Iterator-only methods.** find, first, last, count, enumerate, take, skip, etc. — these only make sense on sequences and don't exist on Option/Result.
 
@@ -273,12 +263,29 @@ maybeValues                                  // Option<number>[]
    - `.collectResult()`: `Iterator<Result<T, E>> → Result<T[], E>` — if all Ok, returns `Result.Ok(values[])`; on first Err, returns that `Result.Err`. This works because TypedAction carries the type info: the TypeScript types constrain `.collectResult()` to only be callable when the inner type is `Result<T, E>`. At runtime, it unwraps the Iterator, iterates the array branching each element on Ok/Err, and short-circuits on first Err. This is the Rust `Iterator<Result<T,E>>::collect::<Result<Vec<T>,E>>()` equivalent.
    - `.collectOption()`: `Iterator<Option<T>> → Option<T[]>` — if all Some, returns `Option.Some(values[])`; on first None, returns `Option.None`. Same pattern.
 
-6. **`.forEach()` vs `.map()` naming**: Current `.forEach(f)` on arrays returns `U[]`. Rust's `Iterator::map` is the equivalent. Resolution:
-   - `.forEach()` stays on plain arrays (no dispatch needed)
-   - `.map()` dispatches via `matchPrefix` for Option/Result/Iterator
-   - No ambiguity since arrays have no prefix
+6. **`.forEach()` removal**: `.forEach()` is removed as a postfix method on arrays. Arrays use `.iterate().map(f).collect()` for element-wise transforms. The `ForEach` AST node remains — it's the internal mechanism that Iterator's `.map()` compiles to. See "ForEach AST node" section below.
 
 7. **`chain` naming collision**: Use `.concat()` for iterator concatenation to avoid collision with barnum's `chain()`.
+
+---
+
+## ForEach AST node
+
+`ForEach` is a fundamental AST node — `{ kind: "ForEach", action: Action }` applies an action to every element of an array. It's how the Rust engine does element-wise operations. Currently it's exposed as:
+
+1. **Standalone combinator:** `forEach(action)` — `TypedAction<T[], U[]>`. Used internally by Iterator's `.map()`.
+2. **Postfix method:** `array.forEach(f)` — sugar for `chain(array, forEach(f))`.
+
+With Iterator as the sole transformation interface, the **postfix method is removed**. Users write `array.iterate().map(f).collect()` instead of `array.forEach(f)`.
+
+The **standalone combinator stays** — it's the implementation mechanism for Iterator's `.map()`:
+
+```ts
+// Iterator.map internally:
+chain(getField("value"), forEach(action), Iter.wrap)
+```
+
+The `ForEach` AST node itself is unchanged. It's an implementation detail, not user-facing API.
 
 ---
 
@@ -286,17 +293,22 @@ maybeValues                                  // Option<number>[]
 
 **Phase 0** (done): `matchPrefix` + `ExtractPrefix` prefix-based dispatch, `unwrapOr`, `unwrap`, `mapErr`, `transpose`, `Panic` builtin
 
-**Phase 1** (Iterator foundation):
+**Phase 1** (Iterator foundation — implement now):
 - `Iterator<T>` tagged wrapper type + `IteratorDef`
 - `Iter` namespace with standalone methods
 - `.iterate()` postfix method (uses `matchPrefix` for Option/Result, direct wrap for arrays)
-- Iterator postfix methods: `.map()`, `.filter()`, `.collect()`, `.find()`, `.first()`, `.last()`
-- Add Iterator case to shared `matchPrefix` postfix methods (map, andThen, flatten)
-- `.collectResult()`, `.collectOption()` typed collect destinations
+- Iterator postfix methods: `.map()`, `.andThen()`, `.collect()`, `.first()`
 
-**Phase 2** (Iterator expansion):
-- `.andThen()` (flat_map), `.flatten()`, `.enumerate()`, `.take()`, `.skip()`
+**Phase 2** (migration — remove shared postfix methods):
+- Remove `.map()`, `.andThen()`, `.forEach()` postfix methods from Option/Result/arrays
+- Update all demos to use `.iterate()` → Iterator methods → exit pattern
+- Remove multi-family `matchPrefix` dispatch from `mapMethod`, `andThenMethod`
+
+**Phase 3** (Iterator expansion — add when needed):
+- `.filter()`, `.find()`, `.last()`
+- `.collectResult()`, `.collectOption()`
 - `.any()`, `.all()`, `.count()`, `.nth()`
+- `.enumerate()`, `.take()`, `.skip()`
 
-**Phase 3** (builtins):
+**Phase 4** (builtins):
 - `Arr.length`, `Arr.reverse`, `Arr.join`, etc.
