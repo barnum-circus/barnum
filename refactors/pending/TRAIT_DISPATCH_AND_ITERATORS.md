@@ -143,7 +143,6 @@ All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → oper
 | `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → unwrap each inner Iterator → concat → rewrap | `f: T → Iterator<U>`. Monadic bind for Iterator. |
 | `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` (see open questions). Needed for demos. |
 | `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
-| `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → Option wrap | Exit Iterator, enter Option |
 
 All Phase 1 methods exist in both forms: postfix (`.map(f)`) and standalone (`Iter.map(f)`). Standalone forms are `TypedAction` values composable into pipelines.
 
@@ -151,6 +150,7 @@ All Phase 1 methods exist in both forms: postfix (`.map(f)`) and standalone (`It
 
 | Method | Rust equivalent | Signature | Implementation | Notes |
 |--------|----------------|-----------|----------------|-------|
+| `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Independent impl, not built on splitFirst | Exit Iterator, enter Option |
 | `.find(pred)` | `Iterator::find` | `Iterator<T> → Option<T>` | Unwrap → `forEach(pred)` → collectSome → first | Exits Iterator, enters Option. Not short-circuiting |
 | `.collectResult()` | `collect::<Result<Vec,E>>` | `Iterator<Result<T,E>> → Result<T[],E>` | Unwrap → fold with short-circuit on Err | Exit Iterator, enter Result |
 | `.collectOption()` | `collect::<Option<Vec>>` | `Iterator<Option<T>> → Option<T[]>` | Unwrap → fold with short-circuit on None | Exit Iterator, enter Option |
@@ -381,7 +381,6 @@ Tests should cover:
 - `Iter.andThen(f)` flat-maps and re-wraps
 - `Iter.filter(pred)` keeps Somes, discards Nones, re-wraps
 - `Iter.collect()` unwraps to plain array
-- `Iter.first()` returns `Option<T>` (Some for non-empty, None for empty)
 - `.iterate()` on Option (Some → `[value]`, None → `[]`)
 - `.iterate()` on Result (Ok → `[value]`, Err → `[]`)
 - `.iterate()` on arrays (direct wrap)
@@ -395,9 +394,9 @@ Tests should cover:
 
 **Phase 1** (Iterator foundation — implement now):
 - `Iterator<T>` tagged wrapper type + `IteratorDef`
-- `Iter` namespace with standalone methods (`Iter.wrap`, `Iter.map`, `Iter.andThen`, `Iter.filter`, `Iter.collect`, `Iter.first`, `Iter.iterate`)
+- `Iter` namespace with standalone methods (`Iter.wrap`, `Iter.map`, `Iter.andThen`, `Iter.filter`, `Iter.collect`, `Iter.iterate`)
 - `.iterate()` postfix method (uses `matchPrefix` for Option/Result, direct wrap for arrays)
-- Iterator postfix methods: `.map()`, `.andThen()`, `.filter()`, `.collect()`, `.first()`
+- Iterator postfix methods: `.map()`, `.andThen()`, `.filter()`, `.collect()`
 - Tests for all of the above
 
 **Phase 2** (migration — remove shared postfix methods):
