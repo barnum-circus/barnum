@@ -46,12 +46,13 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
       Some: chain(toAction(action), toAction(Option.some)),
       None: Option.none,
     }),
-    Iterator: branch({
-      Iterator: chain(
-        toAction(forEach(action)),
-        toAction(tag("Iterator", "Iterator")),
-      ),
-    }),
+    // Single-variant: no inner branch needed. matchPrefix unwraps to
+    // { kind: "Iterator.Iterator", value: T[] }, so getField("value") extracts T[].
+    Iterator: chain(
+      toAction(getField("value")),
+      toAction(forEach(action)),
+      toAction(tag("Iterator", "Iterator")),
+    ),
   })));
 }
 ```
@@ -115,6 +116,8 @@ This means:
 - `.iterate()` wraps the array: `[1, 2, 3]` → `{ kind: "Iterator.Iterator", value: [1, 2, 3] }`
 - Iterator methods operate on `.value` (the inner array), then re-wrap
 - `.collect()` unwraps: `{ kind: "Iterator.Iterator", value: [1, 2, 3] }` → `[1, 2, 3]`
+
+**Note on single-variant representation:** `"Iterator.Iterator"` is redundant — the prefix is the only thing that matters for dispatch, and there's no second variant to distinguish. The `.Iterator` suffix exists solely to fit the `TaggedUnion<Name, Def>` pattern. An alternative is a simpler wrapper (e.g., just `{ kind: "Iterator", value: T[] }`) that doesn't go through the tagged union machinery. But consistency with Option/Result has value — it means `branch()` works on it, and the Rust engine treats it uniformly.
 
 Why tagged wrapper over phantom brand:
 - Consistent with every other barnum type (Option, Result, all TaggedUnion)
