@@ -233,7 +233,7 @@ files                                        // File[]
 
 3. **Simpler dispatch.** `.iterate()` dispatches via `matchPrefix` to convert Option/Result into Iterator. But transformation methods (map, filter, etc.) only operate on Iterator — no multi-family dispatch needed.
 
-4. **Iterator-only methods.** find, first, last, count, enumerate, take, skip, etc. — these only make sense on sequences and don't exist on Option/Result.
+4. **Iterator-only methods.** find, first, last, count, take, skip, etc. — these only make sense on sequences and don't exist on Option/Result.
 
 ---
 
