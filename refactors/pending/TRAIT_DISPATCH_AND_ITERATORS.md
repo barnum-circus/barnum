@@ -177,7 +177,7 @@ All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → oper
 | `.reverse()` | `Iterator::rev` | `Iterator<T> → Iterator<T>` | Always available on our eager arrays |
 | `.join(sep)` | `slice::join` | `Iterator<string> → string` | Not on Iterator trait in Rust. Include for ergonomics |
 | `.zip(other)` | `Iterator::zip` | Needs design | |
-| `.concat(other)` | `Iterator::chain` | `Iterator<T> → Iterator<T>` | Renamed to `.concat()` to avoid collision with barnum's `chain()` |
+| `.chain(other)` | `Iterator::chain` | `Iterator<T> → Iterator<T>` | No naming collision — barnum's `chain()` is internal, users see `.then()` |
 | `.nth(n)` | `Iterator::nth` | `Iterator<T> → Option<T>` | Trivial: unwrap → getIndex → Option wrap |
 
 ### Family transitions
@@ -265,7 +265,7 @@ nestedArrays                                 // T[][]
 
 6. **`.forEach()` removal**: `.forEach()` is removed as a postfix method on arrays. Arrays use `.iterate().map(f).collect()` for element-wise transforms. The `ForEach` AST node remains — it's the internal mechanism that Iterator's `.map()` compiles to. See "ForEach AST node" section below.
 
-7. **`chain` naming collision**: Use `.concat()` for iterator concatenation to avoid collision with barnum's `chain()`.
+7. ~~**`chain` naming collision**~~ **Not an issue:** barnum's `chain()` is an internal combinator; users see `.then()`. Iterator can use `.chain()` for concatenation without ambiguity.
 
 ---
 
