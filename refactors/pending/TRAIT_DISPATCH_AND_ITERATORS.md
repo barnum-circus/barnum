@@ -54,7 +54,7 @@ array.iterate().map(process).collect()
 - `.unwrapOr(default)` — exit Option
 - `.unwrap()` — exit Option (panic on None)
 - `.isSome()` / `.isNone()` — query
-- `.filter(pred)` — `Option<T> → Option<T>` (inherent to Option)
+- `.filter(pred)` — `Option<T> → Option<T>` (inherent to Option, pred: `T → bool`)
 - `.transpose()` — `Option<Result<T,E>> → Result<Option<T>,E>`
 - `.iterate()` — enter Iterator
 
@@ -74,6 +74,9 @@ array.iterate().map(process).collect()
 
 **Removed from Option/Result** (now Iterator-only):
 - `.map()`, `.andThen()`, `.forEach()`
+
+**Removed entirely:**
+- `Option.collect()` — the `forEach(pred).then(Option.collect())` pattern is replaced by `Iterator.filter(pred)`. The `CollectSome` builtin is no longer needed.
 
 ---
 
@@ -141,7 +144,7 @@ All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → oper
 |--------|----------------|-----------|----------------|-------|
 | `.map(f)` | `Iterator::map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
 | `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → unwrap each inner Iterator → concat → rewrap | `f: T → Iterator<U>`. Monadic bind for Iterator. |
-| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` (see open questions). Needed for demos. |
+| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | New `Filter` builtin | pred: `T → bool`. New Rust builtin. Needed for demos. |
 | `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
 
 All Phase 1 methods exist in both forms: postfix (`.map(f)`) and standalone (`Iter.map(f)`). Standalone forms are `TypedAction` values composable into pipelines.
@@ -151,7 +154,7 @@ All Phase 1 methods exist in both forms: postfix (`.map(f)`) and standalone (`It
 | Method | Rust equivalent | Signature | Implementation | Notes |
 |--------|----------------|-----------|----------------|-------|
 | `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Independent impl, not built on splitFirst | Exit Iterator, enter Option |
-| `.find(pred)` | `Iterator::find` | `Iterator<T> → Option<T>` | Unwrap → `forEach(pred)` → collectSome → first | Exits Iterator, enters Option. Not short-circuiting |
+| `.find(pred)` | `Iterator::find` | `Iterator<T> → Option<T>` | `filter(pred).first()` or dedicated builtin | Exits Iterator, enters Option. Not short-circuiting |
 | `.collectResult()` | `collect::<Result<Vec,E>>` | `Iterator<Result<T,E>> → Result<T[],E>` | Unwrap → fold with short-circuit on Err | Exit Iterator, enter Result |
 | `.collectOption()` | `collect::<Option<Vec>>` | `Iterator<Option<T>> → Option<T[]>` | Unwrap → fold with short-circuit on None | Exit Iterator, enter Option |
 | `.last()` | `Iterator::last` | `Iterator<T> → Option<T>` | Unwrap → splitLast → Option wrap | Exit Iterator, enter Option |
@@ -163,7 +166,7 @@ All Phase 1 methods exist in both forms: postfix (`.map(f)`) and standalone (`It
 
 | Method | Rust equivalent | Signature | Notes |
 |--------|----------------|-----------|-------|
-| `.enumerate()` | `Iterator::enumerate` | `Iterator<T> → Iterator<{index: number, value: T}>` | New Rust builtin |
+| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | `Filter` builtin. pred: `T → bool`. Phase 1. |
 | `.take(n)` | `Iterator::take` | `Iterator<T> → Iterator<T>` | New Rust builtin |
 | `.skip(n)` | `Iterator::skip` | `Iterator<T> → Iterator<T>` | New Rust builtin |
 | `.reverse()` | `Iterator::rev` | `Iterator<T> → Iterator<T>` | Always available on our eager arrays |
@@ -240,10 +243,7 @@ files                                        // File[]
 
 2. ~~**Array → Iterator**~~ **Decided:** Postfix `.iterate()` on any TypedAction with `T[]` output. Hardcoded, not dispatched — just wraps and tags via `Iter.wrap`. No `matchPrefix` needed for arrays since they have no prefix.
 
-3. **`filter` predicate type**: Rust's `Iterator::filter` takes `&T → bool`. Barnum has no boolean-to-conditional. Two options:
-   - `T → Option<T>` (consistent with `Option.filter`, composable as `forEach(pred).collectSome()`)
-   - `T → bool` (requires a new `FilterByBool` builtin in Rust)
-   - Recommendation: `T → Option<T>`. Different from Rust but internally consistent.
+3. ~~**`filter` predicate type**~~ **Decided:** `T → bool`. New `Filter` Rust builtin. Consistent with Rust's `Iterator::filter`.
 
 4. ~~**Short-circuit semantics**~~ **Not an issue now:** All Phase 1 methods (map, andThen, filter, collect) are inherently non-short-circuiting. Short-circuit matters for find/any/all — those are future phases.
 
@@ -296,7 +296,7 @@ constant({ folder: srcDir }).then(listTargetFiles)
 // BEFORE (line 57): filter — assess each, collect Somes
 forEach(assessWorthiness).then(Option.collect()),
 
-// AFTER: filter with Option predicate
+// AFTER: filter with bool predicate
   .filter(assessWorthiness)
 
 // BEFORE (line 60-66): map with resource
@@ -313,7 +313,7 @@ constant({ folder: srcDir })
   .then(listTargetFiles)
   .iterate()                                    // T[] → Iterator<T>
   .andThen(analyze)                             // each file → Iterator<Refactor>, concatenated
-  .filter(assessWorthiness)                     // keep only worthwhile (Option predicate)
+  .filter(assessWorthiness)                     // keep only worthwhile (bool predicate)
   .map(withResource({
     create: createBranchWorktree,
     action: implementAndReview,
@@ -329,7 +329,7 @@ constant({ folder: srcDir })
 listFiles.forEach(migrate({ to: "Typescript" })).drop(),
 
 // AFTER:
-listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
+listFiles.iterate().map(migrate({ to: "Typescript" })).drop(),
 ```
 
 ### `simple-workflow/run.ts`
@@ -339,7 +339,9 @@ listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
 listFiles.forEach(pipe(implementRefactor, typeCheckFiles, fixTypeErrors, commitChanges, createPullRequest)),
 
 // AFTER:
-listFiles.iterate().map(pipe(implementRefactor, typeCheckFiles, fixTypeErrors, commitChanges, createPullRequest)).collect(),
+listFiles.iterate().map(
+  implementRefactor.then(typeCheckFiles).then(fixTypeErrors).then(commitChanges).then(createPullRequest)
+).collect(),
 ```
 
 ### `babysit-prs/run.ts`
@@ -379,7 +381,7 @@ Tests should cover:
 - `Iter.wrap` produces `{ kind: "Iterator.Iterator", value: [...] }`
 - `Iter.map(f)` transforms each element and re-wraps
 - `Iter.andThen(f)` flat-maps and re-wraps
-- `Iter.filter(pred)` keeps Somes, discards Nones, re-wraps
+- `Iter.filter(pred)` keeps elements where `pred` returns true, re-wraps
 - `Iter.collect()` unwraps to plain array
 - `.iterate()` on Option (Some → `[value]`, None → `[]`)
 - `.iterate()` on Result (Ok → `[value]`, Err → `[]`)
@@ -404,11 +406,10 @@ Tests should cover:
 - Update all demos to use `.iterate()` → Iterator methods → exit pattern
 - Remove multi-family `matchPrefix` dispatch from `mapMethod`, `andThenMethod`
 
-**Phase 3** (Iterator expansion — add when needed):
-- `.find()`, `.last()`
+**Phase 3** (Iterator expansion — builtins as needed):
+- `.find(pred)`, `.last()`, `.first()`
+- `.splitFirst()`, `.splitLast()` (independent of `first`/`last`)
 - `.collectResult()`, `.collectOption()`
-- `.any()`, `.all()`, `.count()`, `.nth()`
-- `.enumerate()`, `.take()`, `.skip()`
-
-**Phase 4** (builtins):
-- `Arr.length`, `Arr.reverse`, `Arr.join`, etc.
+- `.any(pred)`, `.all(pred)`, `.count()`, `.nth(n)` (returns `Option<T>`)
+- `.take(n)`, `.skip(n)`
+- No `.enumerate()` — not planned
