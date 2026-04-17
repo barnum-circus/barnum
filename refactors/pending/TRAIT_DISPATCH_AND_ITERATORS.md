@@ -369,47 +369,1146 @@ HasErrors: Iter.iterate().map(fix).drop().then(recur),
 
 ---
 
-## Testing
+## Implementation tasks
 
-Per `refactors/PROCESS.md`, every implementation task follows test-first:
+Per `refactors/PROCESS.md`, every task follows test-first: failing test → implement → remove failure marker (3 commits).
 
-1. **Commit 1:** Add failing tests for Iterator type, `Iter` namespace methods, `.iterate()` postfix, and each Iterator postfix method (map, andThen, filter, collect, first). Tests assert correct behavior but fail because the implementation doesn't exist yet.
-2. **Commit 2:** Implement the feature, making tests pass.
-3. **Commit 3:** Remove failure markers.
+### What needs new builtins vs what composes from existing primitives
 
-Tests should cover:
-- `Iter.wrap` produces `{ kind: "Iterator.Iterator", value: [...] }`
-- `Iter.map(f)` transforms each element and re-wraps
-- `Iter.andThen(f)` flat-maps and re-wraps
-- `Iter.filter(pred)` keeps elements where `pred` returns true, re-wraps
-- `Iter.collect()` unwraps to plain array
-- `.iterate()` on Option (Some → `[value]`, None → `[]`)
-- `.iterate()` on Result (Ok → `[value]`, Err → `[]`)
-- `.iterate()` on arrays (direct wrap)
-- Phase 2 migration: existing tests that use `.map()`, `.forEach()`, `.andThen()` on Option/Result are updated to use Iterator equivalents
+**No new builtins needed for Phase 1 methods except `filter`.**
+
+| Method | Needs builtin? | Implementation |
+|--------|---------------|----------------|
+| `Iter.wrap` | No | `tag("Iterator", "Iterator")` — reuses existing `tag` |
+| `Iter.collect()` | No | `getField("value")` — reuses existing `getField` |
+| `Iter.map(f)` | No | `getField("value")` → `forEach(f)` → `tag("Iterator", "Iterator")` |
+| `Iter.andThen(f)` | No | `getField("value")` → `forEach(chain(f, getField("value")))` → `flatten()` → `tag("Iterator", "Iterator")` |
+| `Iter.filter(pred)` | **Yes** | `getField("value")` → `forEach(all(identity(), pred))` → **`CollectWhere`** → `tag("Iterator", "Iterator")` |
+| `.iterate()` on Option/Result | No | `matchPrefix` → `branch` → wrap in array → `tag("Iterator", "Iterator")` |
+| `.iterate()` on arrays | No | `tag("Iterator", "Iterator")` — direct wrap |
+
+**`filter` requires one new builtin: `CollectWhere`.** It can't be composed from existing primitives because there's no way to branch on a boolean (only on tagged union `kind` fields). The compositional approach avoids a new AST node by splitting filter into two steps:
+1. `forEach(all(identity(), pred))` — produces `[T, boolean][]` using existing nodes
+2. `CollectWhere` builtin — keeps elements where the boolean (index 1) is `true`, returning values (index 0)
+
+This keeps the scheduler unchanged. `CollectWhere` is a pure data transformation like `CollectSome`.
 
 ---
 
-## Priority
+### Phase 1: Iterator foundation
 
-**Phase 0** (done): `matchPrefix` + `ExtractPrefix` prefix-based dispatch, `unwrapOr`, `unwrap`, `mapErr`, `transpose`, `Panic` builtin
+#### Task 1: Add `CollectWhere` builtin (Rust)
 
-**Phase 1** (Iterator foundation — implement now):
-- `Iterator<T>` tagged wrapper type + `IteratorDef`
-- `Iter` namespace with standalone methods (`Iter.wrap`, `Iter.map`, `Iter.andThen`, `Iter.filter`, `Iter.collect`, `Iter.iterate`)
-- `.iterate()` postfix method (uses `matchPrefix` for Option/Result, direct wrap for arrays)
-- Iterator postfix methods: `.map()`, `.andThen()`, `.filter()`, `.collect()`
-- Tests for all of the above
+**Goal:** New Rust builtin for filter's second step. Input: `[[value, bool], ...]`. Output: `[value, ...]` for `true` elements.
 
-**Phase 2** (migration — remove shared postfix methods):
-- Remove `.map()`, `.andThen()`, `.forEach()` postfix methods from Option/Result/arrays
-- Update all demos to use `.iterate()` → Iterator methods → exit pattern
-- Remove multi-family `matchPrefix` dispatch from `mapMethod`, `andThenMethod`
+##### 1.1: Add variant to `BuiltinKind`
 
-**Phase 3** (Iterator expansion — builtins as needed):
-- `.find(pred)`, `.last()`, `.first()`
-- `.splitFirst()`, `.splitLast()` (independent of `first`/`last`)
-- `.collectResult()`, `.collectOption()`
-- `.any(pred)`, `.all(pred)`, `.count()`, `.nth(n)` (returns `Option<T>`)
-- `.take(n)`, `.skip(n)`
-- No `.enumerate()` — not planned
+**File:** `crates/barnum_ast/src/lib.rs` (after `CollectSome`, line ~266)
+
+```rust
+// Before:
+CollectSome,
+
+// After:
+CollectSome,
+/// Filter an array of `[value, bool]` pairs, keeping values where bool is `true`.
+///
+/// Input: array of two-element arrays `[value, predicate_result]`.
+/// Output: array of `value` entries where `predicate_result` was `true`.
+CollectWhere,
+```
+
+##### 1.2: Add execution match arm
+
+**File:** `crates/barnum_builtins/src/lib.rs` (after `CollectSome` arm, line ~198)
+
+```rust
+BuiltinKind::CollectWhere => {
+    let Value::Array(pairs) = input else {
+        return Err(BuiltinError::TypeMismatch {
+            builtin: "CollectWhere",
+            expected: "array",
+            actual: input.clone(),
+        });
+    };
+    let mut collected = Vec::new();
+    for pair in pairs {
+        let Value::Array(items) = pair else {
+            return Err(BuiltinError::TypeMismatch {
+                builtin: "CollectWhere",
+                expected: "[value, bool] pair",
+                actual: pair.clone(),
+            });
+        };
+        if items.len() >= 2 && items[1] == Value::Bool(true) {
+            collected.push(items[0].clone());
+        }
+    }
+    Ok(Value::Array(collected))
+}
+```
+
+##### 1.3: Add Rust tests
+
+**File:** `crates/barnum_builtins/src/lib.rs` (in `mod tests`)
+
+```rust
+#[tokio::test]
+async fn collect_where_keeps_true_elements() {
+    let input = json!([[1, true], [2, false], [3, true]]);
+    let result = execute_builtin(&BuiltinKind::CollectWhere, &input).await;
+    assert_eq!(result.unwrap(), json!([1, 3]));
+}
+
+#[tokio::test]
+async fn collect_where_all_false() {
+    let input = json!([[1, false], [2, false]]);
+    let result = execute_builtin(&BuiltinKind::CollectWhere, &input).await;
+    assert_eq!(result.unwrap(), json!([]));
+}
+
+#[tokio::test]
+async fn collect_where_empty() {
+    let result = execute_builtin(&BuiltinKind::CollectWhere, &json!([])).await;
+    assert_eq!(result.unwrap(), json!([]));
+}
+
+#[tokio::test]
+async fn collect_where_rejects_non_array() {
+    let result = execute_builtin(&BuiltinKind::CollectWhere, &json!("bad")).await;
+    assert!(result.is_err());
+}
+```
+
+##### 1.4: Add to TypeScript `BuiltinKind` type
+
+**File:** `libs/barnum/src/ast.ts` (line ~128, after `ExtractPrefix`)
+
+```ts
+// Before:
+| { kind: "ExtractPrefix" };
+
+// After:
+| { kind: "ExtractPrefix" }
+| { kind: "CollectWhere" };
+```
+
+##### 1.5: Add TypeScript standalone function
+
+**File:** `libs/barnum/src/builtins/array.ts` (after `range`)
+
+```ts
+/**
+ * Filter an array of [value, bool] pairs, keeping values where bool is true.
+ * Used internally by Iter.filter — not user-facing.
+ */
+export function collectWhere<TElement>(): TypedAction<[TElement, boolean][], TElement[]> {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "CollectWhere" } },
+  });
+}
+```
+
+**File:** `libs/barnum/src/builtins/index.ts` — add export:
+
+```ts
+export { getIndex, flatten, splitFirst, splitLast, range, collectWhere } from "./array.js";
+```
+
+---
+
+#### Task 2: Add `Iterator` types and `Iter` namespace (TypeScript)
+
+**Goal:** Define `IteratorDef<T>`, `Iterator<T>` type aliases and the `Iter` namespace with standalone combinators.
+
+##### 2.1: Add types to `ast.ts`
+
+**File:** `libs/barnum/src/ast.ts` (after `ResultDef`/`Result`, line ~466)
+
+```ts
+// After existing Result types:
+export type IteratorDef<TElement> = { Iterator: TElement[] };
+export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
+```
+
+**Complication:** `Iterator` shadows the global `Iterator` interface. This is fine — barnum's `Iterator` is a type alias only used in type annotations.
+
+##### 2.2: Create `iterator.ts`
+
+**File:** `libs/barnum/src/iterator.ts` (new file)
+
+This follows the same pattern as `option.ts` / `result.ts` — a namespace object with standalone combinators.
+
+```ts
+import {
+  type Iterator as IteratorT,
+  type IteratorDef,
+  type Option as OptionT,
+  type Pipeable,
+  type TypedAction,
+  toAction,
+  typedAction,
+  forEach,
+  matchPrefix,
+  branch,
+} from "./ast.js";
+import { chain } from "./chain.js";
+import { all } from "./all.js";
+import {
+  constant,
+  drop,
+  getField,
+  identity,
+  tag,
+  flatten,
+  collectWhere,
+  wrapInField,
+} from "./builtins/index.js";
+import { Option } from "./option.js";
+
+// ---------------------------------------------------------------------------
+// Iter namespace — combinators for Iterator<T>
+// ---------------------------------------------------------------------------
+
+/**
+ * Iter namespace. All combinators produce TypedAction AST nodes that
+ * compose from existing builtins — no Iterator-specific AST nodes.
+ * The only new builtin is CollectWhere (used by filter).
+ */
+export const Iter = {
+  /** Wrap an array as Iterator. `T[] → Iterator<T>` */
+  wrap: tag("Iterator", "Iterator") as TypedAction<unknown[], IteratorT<unknown>>,
+
+  /**
+   * Unwrap Iterator to array. `Iterator<T> → T[]`
+   *
+   * Standalone form of the `.collect()` postfix method.
+   */
+  collect<TElement>(): TypedAction<IteratorT<TElement>, TElement[]> {
+    return getField("value") as TypedAction<IteratorT<TElement>, TElement[]>;
+  },
+
+  /**
+   * Transform each element. `Iterator<T> → Iterator<U>`
+   *
+   * Implementation: unwrap → forEach(f) → rewrap
+   */
+  map<TIn, TOut>(
+    action: Pipeable<TIn, TOut>,
+  ): TypedAction<IteratorT<TIn>, IteratorT<TOut>> {
+    return chain(
+      toAction(getField("value")),
+      chain(
+        toAction(forEach(action)),
+        toAction(tag("Iterator", "Iterator")),
+      ),
+    ) as TypedAction<IteratorT<TIn>, IteratorT<TOut>>;
+  },
+
+  /**
+   * Flat-map. `f: T → Iterator<U>`, results concatenated. `Iterator<T> → Iterator<U>`
+   *
+   * Implementation: unwrap → forEach(chain(f, getField("value"))) → flatten → rewrap
+   */
+  andThen<TIn, TOut>(
+    action: Pipeable<TIn, IteratorT<TOut>>,
+  ): TypedAction<IteratorT<TIn>, IteratorT<TOut>> {
+    return chain(
+      toAction(getField("value")),
+      chain(
+        toAction(forEach(chain(toAction(action), toAction(getField("value"))))),
+        chain(
+          toAction(flatten()),
+          toAction(tag("Iterator", "Iterator")),
+        ),
+      ),
+    ) as TypedAction<IteratorT<TIn>, IteratorT<TOut>>;
+  },
+
+  /**
+   * Filter elements by bool predicate. `Iterator<T> → Iterator<T>`
+   *
+   * Implementation: unwrap → forEach(all(identity, pred)) → collectWhere → rewrap
+   *
+   * `forEach(all(identity(), pred))` produces `[T, boolean][]`.
+   * `collectWhere()` keeps elements where the boolean is `true`.
+   */
+  filter<TElement>(
+    predicate: Pipeable<TElement, boolean>,
+  ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
+    return chain(
+      toAction(getField("value")),
+      chain(
+        toAction(forEach(all(identity(), predicate))),
+        chain(
+          toAction(collectWhere()),
+          toAction(tag("Iterator", "Iterator")),
+        ),
+      ),
+    ) as TypedAction<IteratorT<TElement>, IteratorT<TElement>>;
+  },
+
+  /**
+   * Convert Option/Result/Array to Iterator.
+   *
+   * Uses matchPrefix for Option/Result (need to know the variant).
+   * Not callable on arrays — use Iter.wrap directly (arrays have no prefix).
+   *
+   * This is the standalone form. The postfix `.iterate()` method handles
+   * the array case via separate type overloads.
+   */
+  iterate<TElement>(): TypedAction<OptionT<TElement>, IteratorT<TElement>> {
+    return matchPrefix({
+      Option: branch({
+        Some: chain(
+          toAction(all(identity())),
+          toAction(tag("Iterator", "Iterator")),
+        ),
+        None: chain(
+          toAction(constant([])),
+          toAction(tag("Iterator", "Iterator")),
+        ),
+      }),
+      Result: branch({
+        Ok: chain(
+          toAction(all(identity())),
+          toAction(tag("Iterator", "Iterator")),
+        ),
+        Err: chain(
+          toAction(constant([])),
+          toAction(tag("Iterator", "Iterator")),
+        ),
+      }),
+    }) as TypedAction<OptionT<TElement>, IteratorT<TElement>>;
+  },
+} as const;
+```
+
+**Note:** `all(identity())` wraps a single value into `[value]` — a one-element tuple. This is how `Some(x)` / `Ok(x)` becomes `[x]` before being wrapped as an Iterator.
+
+##### 2.3: Export from `index.ts`
+
+**File:** `libs/barnum/src/index.ts`
+
+```ts
+// Before:
+export { Option, first, last } from "./option.js";
+export { Result } from "./result.js";
+
+// After:
+export { Option, first, last } from "./option.js";
+export { Result } from "./result.js";
+export { Iter } from "./iterator.js";
+
+// Add to existing type re-exports:
+export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
+```
+
+Also add `IteratorDef` to the type-only import at the top of `index.ts`:
+
+```ts
+// Before:
+import type { TaggedUnion, OptionDef, ResultDef } from "./ast.js";
+
+// After:
+import type { TaggedUnion, OptionDef, ResultDef, IteratorDef } from "./ast.js";
+```
+
+---
+
+#### Task 3: Add `.iterate()` postfix method (TypeScript)
+
+**Goal:** Postfix `.iterate()` that converts Option/Result/arrays into Iterator.
+
+##### 3.1: Add type signature to `TypedAction`
+
+**File:** `libs/barnum/src/ast.ts` (in the `TypedAction` type, after `.collect`)
+
+Three overloads — one for Option, one for Result, one for arrays:
+
+```ts
+/** Convert to Iterator. Option<T>/Result<T,E> → Iterator<T>. T[] → Iterator<T>. */
+iterate<TIn, TElement>(
+  this: TypedAction<TIn, Option<TElement>>,
+): TypedAction<TIn, Iterator<TElement>>;
+iterate<TIn, TElement, TError>(
+  this: TypedAction<TIn, Result<TElement, TError>>,
+): TypedAction<TIn, Iterator<TElement>>;
+iterate<TIn, TElement>(
+  this: TypedAction<TIn, TElement[]>,
+): TypedAction<TIn, Iterator<TElement>>;
+```
+
+**Complication:** The `Iterator` and `Option`/`Result` types need to be imported. `ast.ts` already defines `Option` and `Result` as type aliases, and `Iterator` will be added in Task 2.1.
+
+##### 3.2: Add method implementation
+
+**File:** `libs/barnum/src/ast.ts` (after `collectMethod`, line ~687)
+
+Import `Iter` at the top of `ast.ts` (lazy, same pattern as bind):
+
+```ts
+// Add alongside the lazy bind import:
+import { Iter } from "./iterator.js";
+```
+
+Method implementation:
+
+```ts
+function iterateMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(Iter.iterate()));
+}
+```
+
+**Complication:** This only dispatches via `matchPrefix` (Option/Result). For arrays, there's no prefix — `matchPrefix` would fail. The postfix `.iterate()` on arrays needs to use `Iter.wrap` (direct `tag`) instead. But at runtime, the method implementation doesn't know which type it's called on.
+
+**Solution:** The `iterate` method implementation should try `matchPrefix` first, which handles Option/Result. For arrays, the TypeScript overloads constrain the type, and the runtime implementation wraps directly. Two approaches:
+
+1. **Single implementation using matchPrefix with Iterator case:** Add an `Iterator` case... no, arrays don't have a prefix.
+
+2. **Use `Iter.wrap` for all cases:** If the input is already an array (not wrapped in Option/Result), `tag("Iterator", "Iterator")` wraps it directly. But if it's Option/Result, we need to extract the value first.
+
+**Actual solution:** The postfix method always runs `matchPrefix` + `branch` for Option/Result, but for arrays we need a different AST. Since TypeScript has three overloads, the runtime method can't distinguish. Instead, we make the postfix for arrays *also* use `Iter.wrap` — but at the method level it's all the same call.
+
+The real answer: **split into two method implementations.** Add an `iterateArrayMethod` for the array overload and `iterateMethod` for Option/Result. But `Object.defineProperties` only attaches one function per name...
+
+**Simplest approach:** Use `matchPrefix` with an `Iterator` prefix case as a fallback. Wait — arrays don't have a `kind` field, so `extractPrefix` would fail.
+
+**Revised approach:** The `.iterate()` postfix method on arrays compiles to `chain(this, tag("Iterator", "Iterator"))` — just wrap. The `.iterate()` on Option/Result compiles to `chain(this, Iter.iterate())` — prefix dispatch. At runtime, a single implementation must handle both.
+
+**Final approach:** The single method implementation is:
+
+```ts
+function iterateMethod(this: TypedAction): TypedAction {
+  // This implementation covers both Option/Result (via matchPrefix)
+  // and arrays (via direct tag). The trick: we wrap the matchPrefix
+  // dispatch with a fallback that handles bare arrays.
+  //
+  // Since matchPrefix calls extractPrefix which requires a { kind } field,
+  // and arrays don't have one, we need a separate path.
+  //
+  // The type overloads ensure this is only called on Option/Result/arrays.
+  // At the AST level, we can't dynamically dispatch, so we need the caller
+  // to know which form to use.
+  //
+  // SOLUTION: The postfix method always uses matchPrefix. For the array
+  // overload, we instead override the method at the type level to use
+  // tag directly. But that's not how defineProperties works...
+  //
+  // REAL SOLUTION: Just use Iter.wrap for arrays. The postfix method
+  // dispatches via matchPrefix and doesn't work for arrays — array users
+  // call .iterate() which is a postfix on TypedAction<TIn, TElement[]>.
+  // That overload's runtime implementation must be different.
+  //
+  // We can't have two runtime implementations for one property name.
+  // So: make the single implementation handle both by checking if the
+  // previous action's output would have a kind field. We can't — AST is
+  // static.
+  //
+  // ACTUAL SIMPLEST SOLUTION: Don't use matchPrefix. Build a single AST
+  // that handles all three:
+  //   Option.Some(x) → [x], Option.None → [], Result.Ok(x) → [x],
+  //   Result.Err(_) → [], array → array
+  // Then wrap the result.
+  //
+  // For arrays, there's no kind field, so extractPrefix fails.
+  // We need to handle this differently.
+
+  return chain(toAction(this), toAction(Iter.iterate()));
+}
+```
+
+**OK, this is a real complication.** Let me think clearly.
+
+The postfix `.iterate()` method is attached once via `defineProperties`. It's one function for all three overloads. At the AST level, it builds a static AST — it can't inspect the runtime value.
+
+For Option/Result, `Iter.iterate()` uses `matchPrefix` which calls `extractPrefix`. If the input is a bare array `[1,2,3]`, `extractPrefix` will fail because the array has no `kind` field.
+
+**Resolution options:**
+
+**A. Two separate methods:** `.iterate()` for Option/Result (uses `matchPrefix`), `.iterateArray()` for arrays (uses `Iter.wrap`). Ugly — breaks the unified API.
+
+**B. Don't make `.iterate()` a postfix on arrays.** Arrays call `Iter.wrap` standalone: `Iter.wrap` is already `tag("Iterator", "Iterator")` and can be used as a standalone action or via `.then(Iter.wrap)`. Users write `array.then(Iter.wrap)` or more naturally, the doc already says "direct wrap for arrays" — so the postfix `.iterate()` only handles Option/Result, and arrays use `.then(Iter.wrap)`.
+
+Wait, but the design doc says `.iterate()` works on arrays too. Let me re-read...
+
+The doc says: "Postfix `.iterate()` on any TypedAction with `T[]` output. Hardcoded, not dispatched — just wraps and tags via `Iter.wrap`."
+
+**C. Make the runtime implementation use `tag("Iterator", "Iterator")` for everything, and handle Option/Result with a pre-chain.** The postfix `.iterate()` implementation could be:
+
+```ts
+function iterateMethod(this: TypedAction): TypedAction {
+  // For the array overload, this chains: array → tag("Iterator", "Iterator")
+  // For Option/Result overloads, this chains: option → matchPrefix dispatch → tag
+  // Since we can't distinguish at AST build time, callers must use the right form.
+  //
+  // In practice: TypeScript's overloads ensure type safety. The *runtime AST*
+  // differs depending on which type the user calls it on. But we only build
+  // one AST in defineProperties.
+  //
+  // The resolution: Build the matchPrefix AST. If called on an array at
+  // runtime, extractPrefix will fail. This is a bug.
+  //
+  // FINAL ANSWER: Don't attach iterate as a postfix on arrays.
+  // Array users write: myArray.then(Iter.wrap) instead of myArray.iterate().
+  // The iterate() postfix only covers Option and Result.
+
+  return chain(toAction(this), toAction(Iter.iterate()));
+}
+```
+
+**Decision needed:** Should `.iterate()` work as a postfix on arrays? The design doc says yes, but the single-implementation constraint of `defineProperties` means the AST would have to handle both. Options:
+
+1. `.iterate()` postfix only for Option/Result. Arrays use `myArray.then(Iter.wrap)` — minor ergonomic cost but architecturally clean.
+2. Build a wrapper around `extractPrefix` that handles missing `kind` fields by returning an "Array" pseudo-prefix, then `branch` on that. Requires changes to `ExtractPrefix` builtin.
+
+**Recommendation: Option 1.** Arrays using `.then(Iter.wrap)` is a one-method-call difference and avoids complicating `ExtractPrefix`. The postfix `.iterate()` handles Option and Result via `matchPrefix`.
+
+##### 3.3: Register in `typedAction()`
+
+**File:** `libs/barnum/src/ast.ts` (in `Object.defineProperties`, line ~744)
+
+```ts
+// After existing properties:
+iterate: { value: iterateMethod, configurable: true },
+```
+
+---
+
+#### Task 4: Add Iterator postfix methods (TypeScript)
+
+**Goal:** `.map()`, `.andThen()`, `.filter()`, `.collect()` as postfix methods on `TypedAction` when the output is `Iterator<T>`.
+
+##### 4.1: Add type signatures to `TypedAction`
+
+**File:** `libs/barnum/src/ast.ts` (in the `TypedAction` type)
+
+Add new overloads to existing `.map()` and `.andThen()` — they already have Option and Result overloads:
+
+```ts
+// Existing map overloads:
+map<TIn, T, U>(
+  this: TypedAction<TIn, Option<T>>,
+  action: Pipeable<T, U>,
+): TypedAction<TIn, Option<U>>;
+map<TIn, TValue, TOut, TError>(
+  this: TypedAction<TIn, Result<TValue, TError>>,
+  action: Pipeable<TValue, TOut>,
+): TypedAction<TIn, Result<TOut, TError>>;
+
+// NEW — Iterator overload:
+map<TIn, TElement, TOut>(
+  this: TypedAction<TIn, Iterator<TElement>>,
+  action: Pipeable<TElement, TOut>,
+): TypedAction<TIn, Iterator<TOut>>;
+```
+
+```ts
+// Existing andThen overloads (Option, Result)... then:
+
+// NEW — Iterator overload:
+andThen<TIn, TElement, TOut>(
+  this: TypedAction<TIn, Iterator<TElement>>,
+  action: Pipeable<TElement, Iterator<TOut>>,
+): TypedAction<TIn, Iterator<TOut>>;
+```
+
+New methods (Iterator-only, no existing overloads):
+
+```ts
+/** Filter elements by bool predicate. Iterator only. */
+filter<TIn, TElement>(
+  this: TypedAction<TIn, Iterator<TElement>>,
+  predicate: Pipeable<TElement, boolean>,
+): TypedAction<TIn, Iterator<TElement>>;
+
+/** Unwrap Iterator to array. `Iterator<T> → T[]` */
+collect<TIn, TElement>(
+  this: TypedAction<TIn, Iterator<TElement>>,
+): TypedAction<TIn, TElement[]>;
+```
+
+**Complication:** The existing `.filter()` overload is for Option (`Option<T> → Option<T>`). The new Iterator `.filter()` overload has a different predicate type (`T → boolean` vs `T → Option<T>`). TypeScript should disambiguate by the `this` type. The existing `.collect()` is also for Option (`Option<T>[] → T[]`). Again, the `this` type disambiguates — Option's collect takes `Option<T>[]`, Iterator's collect takes `Iterator<T>`.
+
+##### 4.2: Add method implementations
+
+**File:** `libs/barnum/src/ast.ts`
+
+The existing `mapMethod`, `andThenMethod`, and `filterMethod` dispatch via `matchPrefix` for Option/Result. For Iterator, the dispatch must also handle the `Iterator` prefix. Extend the `matchPrefix` calls:
+
+```ts
+// Before (mapMethod, line ~562):
+function mapMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({
+      Ok: chain(toAction(action), toAction(Result.ok)),
+      Err: Result.err,
+    }),
+    Option: branch({
+      Some: chain(toAction(action), toAction(Option.some)),
+      None: Option.none,
+    }),
+  })));
+}
+
+// After:
+function mapMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({
+      Ok: chain(toAction(action), toAction(Result.ok)),
+      Err: Result.err,
+    }),
+    Option: branch({
+      Some: chain(toAction(action), toAction(Option.some)),
+      None: Option.none,
+    }),
+    Iterator: branch({
+      Iterator: chain(
+        toAction(forEach(action)),
+        toAction(tag("Iterator", "Iterator")),
+      ),
+    }),
+  })));
+}
+```
+
+Same pattern for `andThenMethod`:
+
+```ts
+// Before (andThenMethod, line ~589):
+function andThenMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: action, Err: Result.err }),
+    Option: branch({ Some: action, None: Option.none }),
+  })));
+}
+
+// After:
+function andThenMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: action, Err: Result.err }),
+    Option: branch({ Some: action, None: Option.none }),
+    Iterator: branch({
+      Iterator: chain(
+        toAction(forEach(chain(toAction(action), toAction(getField("value"))))),
+        chain(toAction(flatten()), toAction(tag("Iterator", "Iterator"))),
+      ),
+    }),
+  })));
+}
+```
+
+**Note:** The `branch({ Iterator: ... })` unwraps `value` (the inner array) via auto-unwrap, so the branch handler receives `T[]` directly. Then `forEach(chain(action, getField("value")))` maps each element through the action (which returns `Iterator<U>`), extracts its inner array, and `flatten()` concatenates the results.
+
+For `filterMethod` — this is currently Option-only. Add Iterator case:
+
+```ts
+// Before (filterMethod, line ~666):
+function filterMethod(this: TypedAction, predicate: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Some: predicate,
+    None: Option.none,
+  })));
+}
+
+// After — dispatch via matchPrefix to handle both Option and Iterator:
+function filterMethod(this: TypedAction, predicate: Action): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Option: branch({
+      Some: predicate,
+      None: Option.none,
+    }),
+    Iterator: branch({
+      Iterator: chain(
+        toAction(forEach(all(identity(), predicate))),
+        chain(
+          toAction(collectWhere()),
+          toAction(tag("Iterator", "Iterator")),
+        ),
+      ),
+    }),
+  })));
+}
+```
+
+**Complication:** The existing `filterMethod` used direct `branch` (no `matchPrefix`) because it was Option-only. Adding Iterator requires wrapping in `matchPrefix`. This changes the AST shape for existing Option.filter calls — they'll now go through `extractPrefix` first. Functionally equivalent but different AST. Existing Option.filter tests should still pass.
+
+Add `collectMethod` Iterator case:
+
+```ts
+// Before (collectMethod, line ~685):
+function collectMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(Option.collect()));
+}
+
+// After — dispatch via matchPrefix:
+function collectMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Option: Option.collect(),
+    Iterator: branch({
+      Iterator: identity(),
+    }),
+  })));
+}
+```
+
+**Note:** Iterator's `.collect()` in the branch receives the unwrapped `value` (the inner `T[]`) via branch auto-unwrap, then passes it through with `identity()`.
+
+##### 4.3: Import `collectWhere` in `ast.ts`
+
+**File:** `libs/barnum/src/ast.ts` (line ~16, in the builtins import)
+
+```ts
+// Before:
+import {
+  constant,
+  drop,
+  extractPrefix,
+  flatten as flattenBuiltin,
+  getField,
+  getIndex,
+  identity,
+  merge,
+  panic,
+  pick,
+  splitFirst,
+  splitLast,
+  tag,
+  wrapInField,
+} from "./builtins/index.js";
+
+// After — add collectWhere:
+import {
+  collectWhere,
+  constant,
+  drop,
+  extractPrefix,
+  flatten as flattenBuiltin,
+  getField,
+  getIndex,
+  identity,
+  merge,
+  panic,
+  pick,
+  splitFirst,
+  splitLast,
+  tag,
+  wrapInField,
+} from "./builtins/index.js";
+```
+
+Also import `flatten` and `forEach` for use in method implementations (forEach is already used in `forEachMethod`; `flatten` is imported as `flattenBuiltin`):
+
+The `flatten` import is already `flattenBuiltin`. Use that name in the method implementations, or add a second reference. The `all` import is needed too:
+
+```ts
+// Add at top of ast.ts:
+import { all as allStandalone } from "./all.js";
+```
+
+Then use `allStandalone` in `filterMethod`.
+
+---
+
+#### Task 5: Tests
+
+**File:** `libs/barnum/tests/iterator.test.ts` (new file)
+
+Following the pattern in `option.test.ts`:
+- Type tests (compile-time): verify input/output types of each combinator
+- AST structure tests: verify the produced AST shape
+- Execution tests (via `runPipeline`): end-to-end behavior
+
+Tests to write:
+
+**Type tests:**
+- `Iter.wrap` — input `T[]`, output `Iterator<T>`
+- `Iter.collect()` — input `Iterator<T>`, output `T[]`
+- `Iter.map(f)` — input `Iterator<T>`, output `Iterator<U>`
+- `Iter.andThen(f)` — input `Iterator<T>`, output `Iterator<U>`
+- `Iter.filter(pred)` — input `Iterator<T>`, output `Iterator<T>`
+- `Iter.iterate()` — input `Option<T>`, output `Iterator<T>`
+- Postfix `.iterate()` on Option — input `Option<T>`, output `Iterator<T>`
+- Postfix `.iterate()` on Result — input `Result<T,E>`, output `Iterator<T>`
+- Postfix `.map(f)` on Iterator output
+- Postfix `.andThen(f)` on Iterator output
+- Postfix `.filter(pred)` on Iterator output
+- Postfix `.collect()` on Iterator output
+
+**Execution tests:**
+- `Iter.wrap` wraps array: `[1,2,3]` → `{ kind: "Iterator.Iterator", value: [1,2,3] }`
+- `Iter.collect()` unwraps: `{ kind: "Iterator.Iterator", value: [1,2,3] }` → `[1,2,3]`
+- Round-trip: `pipe(constant([1,2,3]), Iter.wrap, Iter.collect())` → `[1,2,3]`
+- `Iter.map(f)` transforms each element
+- `Iter.andThen(f)` flat-maps (f returns Iterator)
+- `Iter.filter(pred)` keeps true elements, discards false
+- `Iter.filter(pred)` with all-false → empty iterator
+- `Iter.filter(pred)` with all-true → same elements
+- `.iterate()` on Some → Iterator with one element
+- `.iterate()` on None → empty Iterator
+- `.iterate()` on Ok → Iterator with one element
+- `.iterate()` on Err → empty Iterator
+- Full chain: `option.iterate().map(f).collect()`
+- Full chain: `result.iterate().filter(pred).collect()`
+
+---
+
+### Phase 2: Migration
+
+#### Task 6: Remove `.map()`, `.andThen()`, `.forEach()` from shared dispatch
+
+**Goal:** These postfix methods no longer dispatch across Option/Result. `.map()` and `.andThen()` only handle Iterator (Option/Result users call `.iterate()` first). `.forEach()` is removed entirely.
+
+##### 6.1: Simplify `mapMethod`
+
+**File:** `libs/barnum/src/ast.ts`
+
+```ts
+// Before (after Task 4):
+function mapMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: ...,
+    Option: ...,
+    Iterator: branch({
+      Iterator: chain(toAction(forEach(action)), toAction(tag("Iterator", "Iterator"))),
+    }),
+  })));
+}
+
+// After — Iterator only, no matchPrefix needed:
+function mapMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(Iter.map(action)));
+}
+```
+
+##### 6.2: Simplify `andThenMethod`
+
+```ts
+// After — Iterator only:
+function andThenMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(Iter.andThen(action)));
+}
+```
+
+##### 6.3: Remove `forEachMethod` and its registration
+
+**File:** `libs/barnum/src/ast.ts`
+
+Delete `forEachMethod` function (line ~509). Remove `forEach` from `Object.defineProperties` (line ~714). Remove the `.forEach()` type signature from the `TypedAction` type (lines ~187-190).
+
+##### 6.4: Remove Option/Result overloads from `.map()` and `.andThen()` type signatures
+
+**File:** `libs/barnum/src/ast.ts`
+
+Remove the Option and Result overloads from `.map()` and `.andThen()` in the `TypedAction` type. Keep only the Iterator overloads.
+
+##### 6.5: Simplify `filterMethod` and `collectMethod`
+
+Remove the `matchPrefix` dispatch — both become Iterator-only:
+
+```ts
+function filterMethod(this: TypedAction, predicate: Action): TypedAction {
+  return chain(toAction(this), toAction(Iter.filter(predicate)));
+}
+
+function collectMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(Iter.collect()));
+}
+```
+
+Remove the Option `.filter()` overload from `TypedAction` type. The Option `.collect()` type overload is also removed (see Task 7).
+
+##### 6.6: Update TypedAction type signatures
+
+Remove from `TypedAction` type:
+- `.forEach()` entirely
+- `.map()` Option and Result overloads (keep Iterator overload)
+- `.andThen()` Option and Result overloads (keep Iterator overload)
+- `.filter()` Option overload (keep Iterator overload)
+- `.collect()` Option overload (keep Iterator overload)
+
+---
+
+#### Task 7: Remove `Option.collect()` and `CollectSome` builtin
+
+**Goal:** `Option.collect()` is replaced by `Iterator.filter()`. Remove the namespace method, builtin, and all references.
+
+##### 7.1: Remove from `Option` namespace
+
+**File:** `libs/barnum/src/option.ts` — delete `Option.collect` method (lines ~99-104)
+
+##### 7.2: Remove `CollectSome` from TypeScript `BuiltinKind`
+
+**File:** `libs/barnum/src/ast.ts` — remove `| { kind: "CollectSome" }` from `BuiltinKind` type
+
+##### 7.3: Remove `CollectSome` from Rust `BuiltinKind`
+
+**File:** `crates/barnum_ast/src/lib.rs` — remove `CollectSome` variant
+**File:** `crates/barnum_builtins/src/lib.rs` — remove `CollectSome` match arm and tests
+
+##### 7.4: Remove `collectMethod` Option path
+
+Already handled in Task 6.5.
+
+##### 7.5: Update tests
+
+**File:** `libs/barnum/tests/option.test.ts` — remove `Option.collect` type tests, AST tests, and execution tests (lines ~111-116, ~211-216, ~357-377)
+
+---
+
+#### Task 8: Migrate demos
+
+Each demo change below replaces `forEach`/`Option.collect` patterns with Iterator equivalents. The `forEach` standalone combinator still exists (used internally by `Iter.map`) but the postfix `.forEach()` is gone.
+
+##### 8.1: `identify-and-address-refactors/run.ts`
+
+**File:** `demos/identify-and-address-refactors/run.ts`
+
+```ts
+// Before (lines 48-68):
+runPipeline(
+  pipe(
+    constant({ folder: srcDir }),
+    listTargetFiles,
+    forEach(analyze).flatten(),
+    forEach(assessWorthiness).then(Option.collect()),
+    forEach(
+      withResource({
+        create: createBranchWorktree,
+        action: implementAndReview,
+        dispose: deleteWorktree,
+      }),
+    ),
+  ),
+);
+
+// After:
+runPipeline(
+  constant({ folder: srcDir })
+    .then(listTargetFiles)
+    .iterate()
+    .andThen(analyze)
+    .filter(assessWorthiness)
+    .map(withResource({
+      create: createBranchWorktree,
+      action: implementAndReview,
+      dispose: deleteWorktree,
+    }))
+    .collect(),
+);
+```
+
+Update imports: remove `pipe`, `forEach`, `Option`. Add `Iter` if needed (not needed if only using postfix).
+
+**Complication:** `analyze` currently returns `Refactor[]` (array). For `.andThen()`, it must return `Iterator<Refactor>`. Either: (a) modify `analyze` handler to wrap its output, or (b) compose: `.andThen(chain(analyze, Iter.wrap))`. Option (b) avoids changing the handler.
+
+**Complication:** `assessWorthiness` currently returns `Option<T>` (for the `forEach + Option.collect` pattern). For `.filter()`, it must return `boolean`. This requires modifying the handler, or composing: `.filter(chain(assessWorthiness, Option.isSome()))`. Option (b) composes without handler changes.
+
+##### 8.2: `convert-folder-to-ts/run.ts`
+
+**File:** `demos/convert-folder-to-ts/run.ts`
+
+```ts
+// Before (line 26):
+listFiles.forEach(migrate({ to: "Typescript" })).drop(),
+
+// After:
+listFiles.iterate().map(migrate({ to: "Typescript" })).drop(),
+```
+
+##### 8.3: `simple-workflow/run.ts`
+
+**File:** `demos/simple-workflow/run.ts`
+
+```ts
+// Before (lines 17-27):
+runPipeline(
+  listFiles.forEach(
+    pipe(
+      implementRefactor,
+      typeCheckFiles,
+      fixTypeErrors,
+      commitChanges,
+      createPullRequest,
+    ),
+  ),
+);
+
+// After:
+runPipeline(
+  listFiles.iterate().map(
+    implementRefactor
+      .then(typeCheckFiles)
+      .then(fixTypeErrors)
+      .then(commitChanges)
+      .then(createPullRequest),
+  ).collect(),
+);
+```
+
+##### 8.4: `babysit-prs/run.ts`
+
+**File:** `demos/babysit-prs/run.ts`
+
+```ts
+// Before (lines 42-64):
+runPipeline(
+  loop<void, number[]>((recur, done) =>
+    pipe(
+      forEach(
+        bindInput<number>((prNumber) =>
+          prNumber.then(checkPR).branch({
+            ChecksFailed: fixIssues.drop().then(prNumber)
+              .then(tag<"Option", OptionDef<number>, "Some">("Some", "Option")),
+            ChecksPassed: landPR.drop()
+              .then(tag<"Option", OptionDef<number>, "None">("None", "Option")),
+            Landed: drop
+              .then(tag<"Option", OptionDef<number>, "None">("None", "Option")),
+          }),
+        ),
+      ),
+      Option.collect<number>(),
+      classifyRemaining.branch({ ... }),
+    ),
+  ),
+  [101, 102, 103],
+);
+
+// After:
+runPipeline(
+  loop<void, number[]>((recur, done) =>
+    Iter.wrap
+      .filter(
+        bindInput<number>((prNumber) =>
+          prNumber.then(checkPR).branch({
+            ChecksFailed: fixIssues.drop().then(constant(true)),
+            ChecksPassed: landPR.drop().then(constant(false)),
+            Landed: drop.then(constant(false)),
+          }),
+        ),
+      )
+      .collect()
+      .then(classifyRemaining.branch({
+        HasPRs: bindInput<number[], never>((prs) =>
+          sleep(10_000).then(prs).then(recur),
+        ),
+        AllDone: done,
+      })),
+  ),
+  [101, 102, 103],
+);
+```
+
+**Complication:** The input to the loop body is `number[]`. We need to enter Iterator first. `Iter.wrap` is a standalone action (`TypedAction<T[], Iterator<T>>`), so `.filter()` chains from it. But `Iter.wrap` is the `tag` combinator — it takes `T[]` as input. In the loop, the input is `number[]` which recur provides. So `Iter.wrap` is the entry point.
+
+**Complication:** The branch handlers change from returning `Option<number>` to returning `boolean`. Side effects (`fixIssues`, `landPR`) still run — the bool just determines whether to keep the element. This changes handler signatures but the side effects are preserved.
+
+##### 8.5: `*/handlers/type-check-fix.ts` (both demos)
+
+**File:** `demos/identify-and-address-refactors/handlers/type-check-fix.ts` (line 148)
+**File:** `demos/convert-folder-to-ts/handlers/type-check-fix.ts` (line 148)
+
+```ts
+// Before:
+HasErrors: forEach(fix).drop().then(recur),
+
+// After:
+HasErrors: Iter.iterate().map(fix).drop().then(recur),
+```
+
+`Iter.iterate()` is the standalone form — `TypedAction<T[], Iterator<T>>`. The `HasErrors` branch handler receives `TypeError[]` (auto-unwrapped), so `Iter.iterate()` wraps it as `Iterator<TypeError>`, then `.map(fix)` runs fix on each, `.drop()` discards the result, and `.then(recur)` loops.
+
+Wait — `Iter.iterate()` uses `matchPrefix` which expects Option/Result, not arrays. For arrays, we need `Iter.wrap` which is `tag("Iterator", "Iterator")`.
+
+**Correction:**
+
+```ts
+// After:
+HasErrors: chain(toAction(Iter.wrap), toAction(Iter.map(fix))).drop().then(recur),
+```
+
+Or more simply, using the `forEach` standalone which still exists:
+
+Actually, the cleanest approach for branch arms (which are standalone actions, not postfix chains) is:
+
+```ts
+// After — using standalone Iter combinators:
+HasErrors: pipe(Iter.wrap, Iter.map(fix)).drop().then(recur),
+```
+
+Or with `.then()`:
+
+```ts
+HasErrors: Iter.wrap.then(Iter.map(fix)).drop().then(recur),
+```
+
+Wait, `Iter.wrap` is `tag("Iterator", "Iterator")` which is `TypedAction<T, Iterator<...>>`. Then `.then(Iter.map(fix))` chains. This works.
+
+**Revised:**
+
+```ts
+// Before:
+HasErrors: forEach(fix).drop().then(recur),
+
+// After:
+HasErrors: Iter.wrap.then(Iter.map(fix)).drop().then(recur),
+```
+
+**Note:** `Iter.wrap` here is the `tag` combinator value, not a function call. It takes `T[]` → `Iterator<T>`. Chaining `.then(Iter.map(fix))` maps fix over each element.
+
+---
+
+#### Task 9: Update existing tests
+
+##### 9.1: Remove shared dispatch tests
+
+**File:** `libs/barnum/tests/option.test.ts`
+
+Remove or update tests that use `.map()` and `.andThen()` as postfix on Option output — these will no longer work after Phase 2. Specifically:
+- "postfix .map on Option output dispatches correctly" (line ~438) — remove
+- Any other postfix tests that rely on shared dispatch
+
+##### 9.2: Update `forEach` tests
+
+**File:** `libs/barnum/tests/forEach.test.ts`
+
+Remove tests of the postfix `.forEach()` method. Keep tests of the `forEach` standalone combinator (it's still used internally).
+
+##### 9.3: Update `branch.test.ts`
+
+**File:** `libs/barnum/tests/branch.test.ts`
+
+Tests that use `forEach(fix)` in branch cases should use `Iter.wrap.then(Iter.map(fix))` instead.
+
+##### 9.4: Update `loop.test.ts`
+
+**File:** `libs/barnum/tests/loop.test.ts`
+
+Tests that use `forEach(fix).drop()` in loop bodies should use `Iter.wrap.then(Iter.map(fix)).drop()` instead.
+
+---
+
+### Phase 3: Iterator expansion (future — not part of this implementation)
+
+Methods to add when needed. All compose from existing builtins + Phase 1 Iterator infrastructure unless noted.
+
+| Method | Needs builtin? | Implementation |
+|--------|---------------|----------------|
+| `.first()` | No | `getField("value")` → `splitFirst()` → `Option.map(getIndex(0).unwrap())` |
+| `.last()` | No | `getField("value")` → `splitLast()` → `Option.map(getIndex(1).unwrap())` |
+| `.find(pred)` | No | `Iter.filter(pred)` → `Iter.first()` |
+| `.splitFirst()` | No | `getField("value")` → `splitFirst()` (independent of `.first()`) |
+| `.splitLast()` | No | `getField("value")` → `splitLast()` (independent of `.last()`) |
+| `.collectResult()` | **Yes** | New `CollectResult` builtin: fold array, short-circuit on Err |
+| `.collectOption()` | **Yes** | New `CollectOption` builtin: fold array, short-circuit on None |
+| `.count()` | **Yes** | New `ArrayLength` builtin: `getField("value")` → length |
+| `.nth(n)` | No | `getField("value")` → `getIndex(n)` (already returns `Option<T>`) |
+| `.any(pred)` | No | `Iter.find(pred)` → `Option.isSome()` |
+| `.all(pred)` | Needs design | Name collision with `all()` combinator |
+| `.take(n)` | **Yes** | New `Take` builtin |
+| `.skip(n)` | **Yes** | New `Skip` builtin |
+| `.reverse()` | **Yes** | New `Reverse` builtin |
+| `.join(sep)` | **Yes** | New `Join` builtin |
+| `.chain(other)` | No | Unwrap both → concat (flatten) → rewrap |
+| `.zip(other)` | **Yes** | New `Zip` builtin |
