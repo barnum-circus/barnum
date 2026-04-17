@@ -22,8 +22,7 @@ Up to 10 actions. Zero arguments returns identity; one argument wraps the action
 **Postfix:** `.then(next)` chains a single action.
 
 ```ts
-listFiles.then(forEach(processFile)).then(commit)
-// equivalent to pipe(listFiles, forEach(processFile), commit)
+listFiles.forEach(processFile).then(commit)
 ```
 
 ---
@@ -125,8 +124,8 @@ function loop<TBreak, TIn>(
 
 ```ts
 loop((recur, done) =>
-  pipe(typeCheck, classifyErrors).branch({
-    HasErrors: pipe(fix, recur),
+  typeCheck.then(classifyErrors).branch({
+    HasErrors: fix.then(recur),
     Clean: done,
   })
 )
@@ -151,7 +150,7 @@ Handles type-level errors only (not exceptions/panics).
 
 ```ts
 tryCatch(
-  (throwError) => pipe(riskyStep, Result.unwrapOr(throwError)),
+  (throwError) => riskyStep.unwrapOr(throwError),
   fallbackStep,
 )
 ```
@@ -254,7 +253,7 @@ function bind<TBindings extends Action[], TOut>(
 
 ```ts
 bind([getConfig, getUser], ([configRef, userRef]) =>
-  pipe(processWithConfig(configRef), notifyUser(userRef))
+  processWithConfig(configRef).then(notifyUser(userRef))
 )
 ```
 
@@ -347,7 +346,6 @@ const drop: TypedAction<any, never>
 
 ```ts
 sideEffect.drop()
-// equivalent to pipe(sideEffect, drop)
 ```
 
 ---
@@ -421,7 +419,6 @@ function getField<
 
 ```ts
 getUserProfile.getField("email")
-// equivalent to pipe(getUserProfile, getField("email"))
 ```
 
 ---
@@ -440,7 +437,6 @@ function getIndex<TTuple extends unknown[], TIndex extends number>(
 
 ```ts
 all(getUser, getSettings).getIndex(0)
-// equivalent to pipe(all(getUser, getSettings), getIndex(0))
 ```
 
 ---
@@ -460,7 +456,6 @@ function pick<
 
 ```ts
 getUserProfile.pick("name", "email")
-// equivalent to pipe(getUserProfile, pick("name", "email"))
 ```
 
 ---
@@ -729,7 +724,7 @@ This is the main entry point. It serializes the pipeline AST to JSON, resolves t
 
 ```ts
 await runPipeline(
-  pipe(listFiles, forEach(processFile), commit),
+  listFiles.forEach(processFile).then(commit),
 );
 ```
 
