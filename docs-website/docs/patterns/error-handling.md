@@ -6,10 +6,9 @@
 
 ```ts
 tryCatch(
-  (throwError) => pipe(
-    riskyStep.unwrapOr(throwError).drop(),
-    anotherStep,
-  ),
+  (throwError) =>
+    riskyStep.unwrapOr(throwError).drop()
+      .then(anotherStep),
   recovery,
 )
 ```
@@ -24,14 +23,12 @@ From [`demos/retry-on-error/run.ts`](https://github.com/barnum-circus/barnum/tre
 loop((recur, done) =>
   tryCatch(
     (throwError) =>
-      pipe(
-        stepA.mapErr(drop).unwrapOr(done).drop(),
-        withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+      stepA.mapErr(drop).unwrapOr(done).drop()
+        .then(withTimeout(constant(2_000), stepB.unwrapOr(throwError))
           .mapErr(constant("stepB: timed out"))
           .unwrapOr(throwError)
-          .drop(),
-        stepC.unwrapOr(throwError).drop(),
-      ),
+          .drop())
+        .then(stepC.unwrapOr(throwError).drop()),
     logError.then(recur),
   ),
 )

@@ -10,18 +10,17 @@ Without `bindInput`, every handler has to accept and re-emit the fields that lat
 
 ```ts
 // Without bindInput: manual threading
-const implementAndReview = pipe(
+const implementAndReview =
   // implement needs worktreePath + description, but must also pass worktreePath through
-  augment(pipe(pick("worktreePath", "description"), implement)),
+  augment(pick("worktreePath", "description").then(implement))
   // typeCheckFix needs worktreePath, must also pass it through
-  augment(pipe(pick("worktreePath"), typeCheckFix)),
+  .then(augment(pick("worktreePath").then(typeCheckFix)))
   // judge needs the full context, must pass worktreePath through
-  augment(pipe(judgeRefactor, classifyJudgment, /* ... handle NeedsWork/Approved ... */)),
+  .then(augment(judgeRefactor.then(classifyJudgment) /* ... handle NeedsWork/Approved ... */))
   // commit needs worktreePath
-  pick("worktreePath").then(commit).drop(),
+  .then(pick("worktreePath").then(commit).drop())
   // createPR needs branch + description — hope they survived all that augmenting
-  pipe(pick("branch", "description"), preparePRInput, createPR),
-);
+  .then(pick("branch", "description").then(preparePRInput).then(createPR));
 ```
 
 Every step wraps in `augment` to merge its output back so downstream steps can access earlier fields. The pipeline becomes a mess of `augment` and `pick` calls just to thread data through. And if any step forgets to preserve a field, later steps break silently.
@@ -33,23 +32,22 @@ Every step wraps in `augment` to merge its output back so downstream steps can a
 From [`demos/identify-and-address-refactors/handlers/refactor.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/identify-and-address-refactors/handlers/refactor.ts):
 
 ```ts
-export const implementAndReview = bindInput<ImplementAndReviewParams>((params) => pipe(
-  params.pick("worktreePath", "description").then(implement).drop(),
-  params.pick("worktreePath").then(typeCheckFix).drop(),
+export const implementAndReview = bindInput<ImplementAndReviewParams>((params) =>
+  params.pick("worktreePath", "description").then(implement).drop()
+    .then(params.pick("worktreePath").then(typeCheckFix).drop())
 
-  loop((recur) =>
-    pipe(judgeRefactor, classifyJudgment).branch({
-      NeedsWork: pipe(
-        applyFeedback.drop(),
-        params.pick("worktreePath").then(typeCheckFix),
-      ).drop().then(recur),
-      Approved: drop,
-    }),
-  ).drop(),
+    .then(loop((recur) =>
+      judgeRefactor.then(classifyJudgment).branch({
+        NeedsWork: applyFeedback.drop()
+          .then(params.pick("worktreePath").then(typeCheckFix))
+          .drop().then(recur),
+        Approved: drop,
+      }),
+    ).drop())
 
-  params.pick("worktreePath").then(commit).drop(),
-  pipe(params.pick("branch", "description"), preparePRInput, createPR),
-));
+    .then(params.pick("worktreePath").then(commit).drop())
+    .then(params.pick("branch", "description").then(preparePRInput).then(createPR)),
+);
 ```
 
 `params` is a reference to the original input. `params.pick("worktreePath")` retrieves those fields at any point — even deep inside the loop's `NeedsWork` branch. No threading, no augmenting. Each step `.drop()`s its own output because downstream steps pull what they need from `params` directly.
@@ -62,11 +60,9 @@ export const implementAndReview = bindInput<ImplementAndReviewParams>((params) =
 bind(
   [fetchUser, fetchPermissions, fetchConfig],
   ([user, permissions, config]) =>
-    pipe(
-      user.then(processUser),
-      permissions.then(checkAccess),
-      config.then(applySettings),
-    ),
+    user.then(processUser)
+      .then(permissions.then(checkAccess))
+      .then(config.then(applySettings)),
 )
 ```
 

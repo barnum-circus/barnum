@@ -6,13 +6,10 @@
 
 ```ts
 earlyReturn((exit) =>
-  pipe(
-    validate,
-    branch({
-      Invalid: exit,             // return early with the error
-      Valid: processAndContinue,  // normal path
-    }),
-  ),
+  validate.branch({
+    Invalid: exit,             // return early with the error
+    Valid: processAndContinue,  // normal path
+  }),
 )
 ```
 

@@ -1,6 +1,6 @@
 # Parallel Execution
 
-Barnum has three ways to run work concurrently: `all` for a fixed set of tasks, `forEach` for dynamic fan-out over arrays, and `forEach` + `pipe` for fan-out with a follow-up aggregation step.
+Barnum has three ways to run work concurrently: `all` for a fixed set of tasks, `forEach` for dynamic fan-out over arrays, and `forEach` + `.then()` for fan-out with a follow-up aggregation step.
 
 ## all — fixed parallel tasks
 
@@ -25,16 +25,13 @@ From [`demos/simple-workflow/run.ts`](https://github.com/barnum-circus/barnum/tr
 
 ```ts
 runPipeline(
-  listFiles
-    .forEach(
-      pipe(
-        implementRefactor,
-        typeCheckFiles,
-        fixTypeErrors,
-        commitChanges,
-        createPullRequest,
-      ),
-    ),
+  listFiles.forEach(
+    implementRefactor
+      .then(typeCheckFiles)
+      .then(fixTypeErrors)
+      .then(commitChanges)
+      .then(createPullRequest),
+  ),
 );
 ```
 
@@ -48,13 +45,9 @@ From [`demos/convert-folder-to-ts/run.ts`](https://github.com/barnum-circus/barn
 
 ```ts
 runPipeline(
-  pipe(
-    setup,
-    listFiles
-      .forEach(migrate({ to: "Typescript" }))
-      .drop(),
-    typeCheckFix,
-  ),
+  setup
+    .then(listFiles.forEach(migrate({ to: "Typescript" })).drop())
+    .then(typeCheckFix),
 );
 ```
 

@@ -362,7 +362,7 @@ Option.collect<number>(),
 HasErrors: forEach(fix).drop().then(recur),
 
 // AFTER: postfix chain
-HasErrors: Iter.iterate().map(fix).collect().drop().then(recur),
+HasErrors: Iter.iterate().map(fix).drop().then(recur),
 ```
 
 ---

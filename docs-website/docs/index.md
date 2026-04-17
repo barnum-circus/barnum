@@ -51,19 +51,21 @@ export const refactor = createHandler({
 // ... typeCheck, fix, commit, createPR
 ```
 
-You compose handlers into a workflow using combinators like `pipe` (sequential) and `forEach` (fan-out):
+You compose handlers into a workflow using postfix methods like `.then()` (sequential) and `.forEach()` (fan-out):
 
 ```ts
 // run.ts
-import { runPipeline, pipe } from "@barnum/barnum/pipeline";
+import { runPipeline } from "@barnum/barnum/pipeline";
 import { listFiles, refactor, typeCheck, fix, commit, createPR } from "./handlers/steps.js";
 
 runPipeline(
-  listFiles.forEach(pipe(refactor, typeCheck, fix, commit, createPR)),
+  listFiles.forEach(
+    refactor.then(typeCheck).then(fix).then(commit).then(createPR)
+  ),
 );
 ```
 
-`listFiles` runs once and returns an array of filenames. `forEach` fans out — each filename flows through `refactor → typeCheck → fix → commit → createPR`, with each file processed in parallel.
+`listFiles` runs once and returns an array of filenames. `.forEach()` fans out — each filename flows through `refactor → typeCheck → fix → commit → createPR`, with each file processed in parallel.
 
 Each handler executes in its own isolated Node.js subprocess. The Rust runtime manages the state machine: it tracks which handlers are pending, dispatches them, collects results, and advances the workflow. No handler sees another handler's context. The agent performing the refactor has no idea that a type-check step follows — it just receives a filename and a prompt.
 

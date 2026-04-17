@@ -8,8 +8,8 @@ From [`demos/convert-folder-to-ts/handlers/type-check-fix.ts`](https://github.co
 
 ```ts
 export const typeCheckFix = loop((recur) =>
-  pipe(typeCheck, classifyErrors).branch({
-    HasErrors: pipe(forEach(fix).drop(), recur),
+  typeCheck.then(classifyErrors).branch({
+    HasErrors: forEach(fix).drop().then(recur),
     Clean: drop,
   }),
 );
@@ -22,13 +22,10 @@ export const typeCheckFix = loop((recur) =>
 Result combinators like `.unwrapOr()` are built on `branch` internally. You can also branch on Results explicitly:
 
 ```ts
-pipe(
-  riskyStep,
-  branch({
-    Ok: processSuccess,
-    Err: handleFailure,
-  }),
-)
+riskyStep.branch({
+  Ok: processSuccess,
+  Err: handleFailure,
+})
 ```
 
 ## Branching with Option types
@@ -36,11 +33,8 @@ pipe(
 The same pattern works for `Option<T>`:
 
 ```ts
-pipe(
-  maybeFind,
-  branch({
-    Some: processFound,
-    None: constant("not found"),
-  }),
-)
+maybeFind.branch({
+  Some: processFound,
+  None: constant("not found"),
+})
 ```

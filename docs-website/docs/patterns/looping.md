@@ -8,8 +8,8 @@ From [`demos/convert-folder-to-ts/handlers/type-check-fix.ts`](https://github.co
 
 ```ts
 export const typeCheckFix = loop((recur) =>
-  pipe(typeCheck, classifyErrors).branch({
-    HasErrors: pipe(forEach(fix).drop(), recur),
+  typeCheck.then(classifyErrors).branch({
+    HasErrors: forEach(fix).drop().then(recur),
     Clean: drop,
   }),
 );
@@ -28,14 +28,12 @@ From [`demos/retry-on-error/run.ts`](https://github.com/barnum-circus/barnum/tre
 loop((recur, done) =>
   tryCatch(
     (throwError) =>
-      pipe(
-        stepA.mapErr(drop).unwrapOr(done).drop(),
-        withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+      stepA.mapErr(drop).unwrapOr(done).drop()
+        .then(withTimeout(constant(2_000), stepB.unwrapOr(throwError))
           .mapErr(constant("stepB: timed out"))
           .unwrapOr(throwError)
-          .drop(),
-        stepC.unwrapOr(throwError).drop(),
-      ),
+          .drop())
+        .then(stepC.unwrapOr(throwError).drop()),
     logError.then(recur),
   ),
 )
@@ -49,11 +47,10 @@ From [`demos/identify-and-address-refactors/handlers/refactor.ts`](https://githu
 
 ```ts
 loop((recur) =>
-  pipe(judgeRefactor, classifyJudgment).branch({
-    NeedsWork: pipe(
-      applyFeedback.drop(),
-      params.pick("worktreePath").then(typeCheckFix),
-    ).drop().then(recur),
+  judgeRefactor.then(classifyJudgment).branch({
+    NeedsWork: applyFeedback.drop()
+      .then(params.pick("worktreePath").then(typeCheckFix))
+      .drop().then(recur),
     Approved: drop,
   }),
 )

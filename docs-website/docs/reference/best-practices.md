@@ -18,19 +18,19 @@ getUserProfile.getField("email")
 
 This applies to every combinator that has a postfix form: `.then()`, `.forEach()`, `.branch()`, `.drop()`, `.tag()`, `.merge()`, `.flatten()`, `.getField()`, `.getIndex()`, `.pick()`, `.wrapInField()`, `.splitFirst()`, `.splitLast()`, `.mapOption()`, `.mapErr()`, `.unwrapOr()`.
 
-## Prefer `.then()` over `pipe()` for short chains
+## Prefer `.then()` over `pipe()`
 
-For two or three steps, postfix `.then()` is more readable than `pipe()`:
+Postfix `.then()` is the primary way to chain steps. It reads naturally and infers types from context:
 
 ```ts
 // Avoid
 pipe(listFiles, forEach(processFile), commit)
 
 // Prefer
-listFiles.then(forEach(processFile)).then(commit)
+listFiles.forEach(processFile).then(commit)
 ```
 
-`pipe()` is still the right choice when you're building a free-standing pipeline with 4+ steps, or when none of the steps has a natural "root" action to chain from.
+`pipe()` is available as an alternative but rarely needed — `.then()` chains work at any length.
 
 ## Use `taggedUnionSchema` for handler validators
 

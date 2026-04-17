@@ -20,8 +20,8 @@ When multiple agents can produce the same result, race them:
 
 ```ts
 race(
-  pipe(constant("gpt-4"), callModel),
-  pipe(constant("claude"), callModel),
+  constant("gpt-4").then(callModel),
+  constant("claude").then(callModel),
 )
 ```
 
