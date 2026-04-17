@@ -29,11 +29,7 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
 }
 ```
 
-**Design question: should Option/Result keep `.map()` as a postfix method?**
-
-Two options:
-
-**Option A — Keep shared postfix methods on all families.** `.map()` dispatches via `matchPrefix` across Option, Result, and Iterator. Consistent with Rust, where Option, Result, and Iterator all have their own `.map()`. The `matchPrefix` call gains a third case:
+Shared methods (map, andThen, flatten) gain an Iterator case in their `matchPrefix` dispatch. Consistent with Rust, where Option, Result, and Iterator all have their own `.map()`:
 
 ```ts
 function mapMethod(this: TypedAction, action: Action): TypedAction {
@@ -58,21 +54,7 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
 }
 ```
 
-**Option B — Iterator-only transformation.** `.map()`, `.andThen()`, `.flatten()` are Iterator-only postfix methods. To transform an Option or Result, go through `.iterate()`:
-
-```ts
-// Option A: direct
-option.map(validate)                        // Option<Valid>
-
-// Option B: through Iterator
-option.iterate().map(validate).first()      // Option<Valid>
-```
-
-Option B is cleaner (`.map()` always means sequence transformation, no ambiguity) but more verbose. Option A matches Rust conventions. Standalone namespace methods (`Option.map(f)`, `Result.map(f)`) are available either way for `pipe()`/`.then()` chains.
-
-**Not decided yet.** Either way, Iterator needs `.iterate()` as the entry point, and the Iterator-only methods (filter, find, collect, first, last, etc.) are the same.
-
-### What all families keep regardless
+### Postfix methods by family
 
 **Option postfix methods** (via direct branch, no `matchPrefix`):
 - `.unwrapOr(default)` — exit Option
@@ -95,7 +77,7 @@ Option B is cleaner (`.map()` always means sequence transformation, no ambiguity
 
 **Shared postfix methods (using `matchPrefix`):**
 - `.unwrapOr(default)`, `.unwrap()`, `.transpose()`, `.iterate()`
-- And possibly `.map()`, `.andThen()`, `.flatten()` if Option A
+- `.map()`, `.andThen()`, `.flatten()`
 
 ---
 
@@ -164,9 +146,7 @@ const arrayIntoIter = wrapAsIterator;
 
 ## Iterator methods
 
-Iterator is the **only** type with transformation postfix methods. All iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap. The pattern is: `branch({ Iterator: chain(getField("value"), <array operation>, tag("Iterator", "Iterator")) })`.
-
-No `matchPrefix` needed — Iterator methods branch directly on the `"Iterator"` variant.
+Shared transformation methods (map, andThen, flatten) work on Iterator via `matchPrefix` alongside Option and Result. Iterator also has its own methods that don't exist on other families. All Iterator-specific methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap. The pattern is: `getField("value")` → array operation → `tag("Iterator", "Iterator")`.
 
 ### Core (compose from existing AST nodes)
 
@@ -223,11 +203,8 @@ No `matchPrefix` needed — Iterator methods branch directly on the `"Iterator"`
 ## Example chains
 
 ```ts
-// Direct map on Option (if keeping shared postfix methods)
+// Direct map on Option — works as before
 option.map(validate)                         // Option<Valid>
-
-// Same thing via Iterator
-option.iterate().map(validate).first()       // Option<Valid>
 
 // Iterator enables operations Option doesn't have
 option.iterate()                             // Iterator<string>
@@ -297,12 +274,10 @@ maybeValues                                  // Option<number>[]
 
 6. **`.forEach()` vs `.map()` naming**: Current `.forEach(f)` on arrays returns `U[]`. Rust's `Iterator::map` is the equivalent. Resolution:
    - `.forEach()` stays on plain arrays (no dispatch needed)
-   - `.map()` is Iterator-only
-   - No ambiguity
+   - `.map()` dispatches via `matchPrefix` for Option/Result/Iterator
+   - No ambiguity since arrays have no prefix
 
 7. **`chain` naming collision**: Use `.concat()` for iterator concatenation to avoid collision with barnum's `chain()`.
-
-8. **Ergonomics of Iterator path**: `option.iterate().map(f).first()` is more verbose than `option.map(f)`. The Iterator path is for when you need Iterator-specific operations (filter, find, collect, etc.). For simple transforms, `option.map(f)` may still be the right API — see the Option A vs B design question above.
 
 ---
 
