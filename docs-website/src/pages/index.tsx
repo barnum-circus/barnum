@@ -29,27 +29,28 @@ components with functional components using hooks.\`,
 // ... typeCheck, fix, commit, createPR`;
 
 const workflowExample = `// run.ts
-import { runPipeline, pipe } from "@barnum/barnum/pipeline";
+import { runPipeline } from "@barnum/barnum/pipeline";
 import {
   listFiles, refactor, typeCheck, fix, commit, createPR,
 } from "./handlers/steps.js";
 
 runPipeline(
-  listFiles.forEach(pipe(refactor, typeCheck, fix, commit, createPR)),
+  listFiles.forEach(
+    refactor.then(typeCheck).then(fix).then(commit).then(createPR),
+  ),
 );`;
 
-const advancedExample = `const refactorWithRetry = pipe(
-  refactor,
-  evaluate,
-  loop((recur) =>
-    pipe(typeCheck, classifyErrors).branch({
-      HasErrors: pipe(forEach(fix).drop(), recur),
-      Clean: drop,
-    })
-  ),
-  commit,
-  createPR,
-);
+const advancedExample = `const refactorWithRetry =
+  refactor
+    .then(evaluate)
+    .then(loop((recur) =>
+      typeCheck.then(classifyErrors).branch({
+        HasErrors: forEach(fix).drop().then(recur),
+        Clean: drop,
+      })
+    ))
+    .then(commit)
+    .then(createPR);
 
 runPipeline(
   listFiles.forEach(refactorWithRetry),
@@ -80,7 +81,7 @@ function Features() {
             <h3>🦁 A choreographed show</h3>
             <p>
               Workflows are composed from type-safe primitives:{' '}
-              <code>pipe</code>, <code>loop</code>, <code>branch</code>,{' '}
+              <code>.then()</code>, <code>loop</code>, <code>branch</code>,{' '}
               <code>forEach</code>, <code>tryCatch</code>. First-class
               constructs for orchestration, not prose or ad-hoc scripts.
             </p>
@@ -136,8 +137,8 @@ function ExampleSection() {
           Handlers are the building blocks of a Barnum workflow. Today,
           handlers are either built-in primitives or exported TypeScript async
           functions. (Support for other languages is planned.) You compose
-          them into workflows using combinators like <code>pipe</code>{' '}
-          (sequential) and <code>forEach</code> (fan-out).
+          them into workflows using postfix methods like <code>.then()</code>{' '}
+          (sequential) and <code>.forEach()</code> (fan-out).
         </p>
         <div className={styles.codeBlockWrap}>
           <CodeBlock language="ts" title="handlers/steps.ts">
@@ -195,7 +196,7 @@ function AdvancedSection() {
           or ad-hoc scripts is fragile. A programming language geared towards
           orchestration is what you actually want — one where{' '}
           <code>loop</code>, <code>branch</code>, <code>tryCatch</code>,{' '}
-          <code>forEach</code>, and <code>pipe</code> are first-class
+          <code>forEach</code>, and <code>.then()</code> are first-class
           constructs with type-safe composition.
         </p>
       </div>
@@ -233,7 +234,7 @@ function WhyBarnum() {
           <div className="col col--6">
             <ul>
               <li>
-                <strong><code>pipe</code></strong>: sequential chains.
+                <strong><code>.then()</code></strong>: sequential chains.
                 Process steps one after another.
               </li>
               <li>
