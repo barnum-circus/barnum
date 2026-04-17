@@ -118,25 +118,15 @@ The wrap/unwrap overhead is real but small — it's a Rust builtin (WrapInField/
 
 ### Implementation
 
+`.iterate()` uses `matchPrefix` for Option/Result (need to know the variant), direct wrap for arrays:
+
 ```ts
-const wrapInArray = all(identity());
-// Defined once in the Iter namespace: Iter.wrap = tag("Iterator", "Iterator")
-const wrapAsIterator = Iter.wrap;
+// Option.iterate / Result.iterate — dispatches via matchPrefix
+// Some(value) / Ok(value) → Iterator([value])
+// None / Err(_)           → Iterator([])
 
-// Option.iterate: Option<T> → Iterator<T>
-const optionIntoIter = branch({
-  Some: chain(toAction(wrapInArray), toAction(wrapAsIterator)),
-  None: chain(toAction(constant([])), toAction(wrapAsIterator)),
-});
-
-// Result.iterate: Result<T, E> → Iterator<T>
-const resultIntoIter = branch({
-  Ok: chain(toAction(wrapInArray), toAction(wrapAsIterator)),
-  Err: chain(toAction(constant([])), toAction(wrapAsIterator)),
-});
-
-// T[].iterate: T[] → Iterator<T>
-const arrayIntoIter = wrapAsIterator;
+// T[].iterate — no dispatch needed, just wrap
+// [1, 2, 3] → { kind: "Iterator.Iterator", value: [1, 2, 3] }
 ```
 
 ---
@@ -150,7 +140,7 @@ All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → oper
 | Method | Rust equivalent | Signature | Implementation | Notes |
 |--------|----------------|-----------|----------------|-------|
 | `.map(f)` | `Iterator::map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
-| `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → flatten → rewrap | Rust calls this `flat_map`; we use `andThen` for consistency |
+| `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → unwrap each inner Iterator → concat → rewrap | `f: T → Iterator<U>`. Monadic bind for Iterator. |
 | `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` (see open questions). Needed for demos. |
 | `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
 | `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → Option wrap | Exit Iterator, enter Option |
@@ -223,11 +213,11 @@ users                                        // User[]
   .map(getName)                              // Iterator<string>
   .collect()                                 // string[]
 
-// andThen (flat_map): Iterator<T[]> → Iterator<T>
-nestedArrays                                 // T[][]
-  .iterate()                                 // Iterator<T[]>
-  .andThen(iterateArray)                     // Iterator<T>
-  .collect()                                 // T[]
+// andThen (monadic bind): Iterator<File> → Iterator<Refactor>
+files                                        // File[]
+  .iterate()                                 // Iterator<File>
+  .andThen(analyze)                          // Iterator<Refactor>  (f returns Iterator<Refactor>)
+  .collect()                                 // Refactor[]
 ```
 
 ---
@@ -298,10 +288,10 @@ Each demo that uses `forEach` (postfix or standalone) needs to migrate to Iterat
 ### `identify-and-address-refactors/run.ts`
 
 ```ts
-// BEFORE (line 54): flat_map — each file produces Refactor[], then flatten
+// BEFORE (line 54): each file produces Refactor[], need to concat results
 forEach(analyze).flatten(),
 
-// AFTER: andThen is flat_map
+// AFTER: andThen (monadic bind) — f returns Iterator, results are concatenated
 constant({ folder: srcDir }).then(listTargetFiles)
   .iterate()
   .andThen(analyze)
@@ -326,7 +316,7 @@ pipe(
   constant({ folder: srcDir }),
   listTargetFiles,
   Iter.iterate(),               // T[] → Iterator<T>
-  Iter.andThen(analyze),        // flat_map: each file → Refactor[]
+  Iter.andThen(analyze),        // monadic bind: each file → Iterator<Refactor>, concatenated
   Iter.filter(assessWorthiness),// keep only worthwhile (Option predicate)
   Iter.map(withResource({ create: createBranchWorktree, action: implementAndReview, dispose: deleteWorktree })),
   Iter.collect(),               // Iterator<T> → T[]
