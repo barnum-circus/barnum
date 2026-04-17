@@ -18,12 +18,12 @@ runPipeline(
       // isEven: 0 → true, n → isOdd(n - 1)
       classifyZero.branch({
         Zero: constant(true),
-        NonZero: pipe(subtractOne, isOdd),
+        NonZero: subtractOne.then(isOdd),
       }),
       // isOdd: 0 → false, n → isEven(n - 1)
       classifyZero.branch({
         Zero: constant(false),
-        NonZero: pipe(subtractOne, isEven),
+        NonZero: subtractOne.then(isEven),
       }),
     ],
   )((isEven, _isOdd) => isEven),

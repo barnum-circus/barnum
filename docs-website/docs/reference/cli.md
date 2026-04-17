@@ -6,11 +6,11 @@ Barnum workflows are TypeScript programs. There is no separate CLI to learn — 
 
 ```ts
 // run.ts
-import { pipe, forEach, runPipeline } from "barnum";
+import { forEach, runPipeline } from "barnum";
 import { listFiles, processFile, commit } from "./handlers.js";
 
 await runPipeline(
-  pipe(listFiles, forEach(processFile).drop(), commit),
+  listFiles.then(forEach(processFile).drop()).then(commit),
 );
 ```
 

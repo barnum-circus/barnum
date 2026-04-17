@@ -9,7 +9,7 @@ Extract verifiable claims from a document, then fact-check each one independentl
 ## Pattern
 
 ```ts
-pipe(extractClaims, forEach(verifyClaim))
+extractClaims.then(forEach(verifyClaim))
 ```
 
 ## Example
@@ -51,7 +51,7 @@ export const verifyClaim = createHandler({
 
 ```ts
 runPipeline(
-  pipe(extractClaims, forEach(verifyClaim)),
+  extractClaims.then(forEach(verifyClaim)),
 );
 ```
 

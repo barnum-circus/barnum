@@ -146,7 +146,7 @@ The standalone `augment(action)` function in `builtins.ts` does the same thing a
 
 ```ts
 // Standalone: augment wraps the action
-augment(pipe(pick("file"), computeHash))
+augment(pick("file").then(computeHash))
 
 // Postfix: augment follows the sub-pipeline
 pick("file").then(computeHash).augment()
@@ -181,10 +181,9 @@ This matters for throw tokens. `throwError` from `tryCatch` has type `TypedActio
 
 ```ts
 tryCatch(
-  (throwError) => pipe(
+  (throwError) =>
     riskyStep.unwrapOr(throwError),  // throwError: TypedAction<Error, never>
-    //                                   CaseHandler<Error, string> ← ✓ never <: string
-  ),
+                                     // CaseHandler<Error, string> ← ✓ never <: string
   recovery,
 )
 ```

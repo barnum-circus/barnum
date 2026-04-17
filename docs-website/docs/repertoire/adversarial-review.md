@@ -10,9 +10,9 @@ Implement a change, have a separate agent judge it, and loop until the judge app
 
 ```ts
 loop((recur, done) =>
-  pipe(implement, judge).branch({
+  implement.then(judge).branch({
     Approved: done,
-    NeedsWork: pipe(revise, recur),
+    NeedsWork: revise.then(recur),
   })
 )
 ```
@@ -65,12 +65,11 @@ export const revise = createHandler({
 
 ```ts
 runPipeline(
-  pipe(
-    implement,
+  implement.then(
     loop((recur, done) =>
-      pipe(judge).branch({
+      judge.branch({
         Approved: done,
-        NeedsWork: pipe(revise, implement, recur),
+        NeedsWork: revise.then(implement).then(recur),
       })
     ),
   ),

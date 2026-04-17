@@ -6,22 +6,17 @@ Bump dependencies across a project (or multiple projects), fix breaking API chan
 
 ```ts
 runPipeline(
-  pipe(
-    listOutdatedDeps,
+  listOutdatedDeps.then(
     forEach(
       withResource({
         create: createUpdateBranch,
-        action: pipe(
-          bumpDependency,
+        action: bumpDependency.then(
           tryCatch(
-            (throwError) => pipe(
-              runTests.unwrapOr(throwError).drop(),
-              typeCheck.unwrapOr(throwError).drop(),
-            ),
-            pipe(diagnoseBreakage, applyFix),
+            (throwError) => runTests.unwrapOr(throwError).drop()
+              .then(typeCheck.unwrapOr(throwError).drop()),
+            diagnoseBreakage.then(applyFix),
           ),
-          createPR,
-        ),
+        ).then(createPR),
         dispose: cleanupBranch,
       }),
     ),

@@ -1,6 +1,6 @@
 # TypeScript AST
 
-Barnum's TypeScript library is a DSL that produces a serializable AST. `pipe(listFiles, forEach(refactor))` builds a JSON tree describing the workflow structure. The Rust runtime receives this tree and executes it.
+Barnum's TypeScript library is a DSL that produces a serializable AST. `listFiles.then(forEach(refactor))` builds a JSON tree describing the workflow structure. The Rust runtime receives this tree and executes it.
 
 The DSL maintains three properties:
 
@@ -190,10 +190,9 @@ Internally:
 ## Serialization example
 
 ```ts
-const workflow = pipe(
-  listFiles,
-  forEach(pipe(refactor, typeCheck, fix))
-).drop();
+const workflow = listFiles
+  .then(forEach(refactor.then(typeCheck).then(fix)))
+  .drop();
 ```
 
 Serializes to:

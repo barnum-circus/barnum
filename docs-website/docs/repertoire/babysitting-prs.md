@@ -8,11 +8,11 @@ Monitor open pull requests, respond to reviewer comments, fix CI failures, and k
 runPipeline(
   listOpenPRs.forEach(
     loop((recur, done) =>
-      pipe(checkPRStatus, classifyStatus).branch({
-        CIFailing: pipe(diagnoseCIFailure, applyFix, pushAndWait, recur),
-        ReviewComments: pipe(addressComments, pushAndWait, recur),
+      checkPRStatus.then(classifyStatus).branch({
+        CIFailing: diagnoseCIFailure.then(applyFix).then(pushAndWait).then(recur),
+        ReviewComments: addressComments.then(pushAndWait).then(recur),
         Approved: done,
-        Stale: pipe(rebase, pushAndWait, recur),
+        Stale: rebase.then(pushAndWait).then(recur),
       })
     )
   ),

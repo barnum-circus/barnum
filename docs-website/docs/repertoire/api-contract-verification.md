@@ -6,16 +6,13 @@ Compare an API specification (OpenAPI, GraphQL schema, protobuf) against the act
 
 ```ts
 runPipeline(
-  pipe(
-    all(parseAPISpec, analyzeImplementation),
-    compareContracts,
-    forEach(classifyDrift).then(
-      branch({
-        Breaking: forEach(generateFix),
-        NonBreaking: drop,
-      })
-    ),
-  ),
+  all(parseAPISpec, analyzeImplementation)
+    .then(compareContracts)
+    .then(forEach(classifyDrift))
+    .then(branch({
+      Breaking: forEach(generateFix),
+      NonBreaking: drop,
+    })),
 );
 ```
 

@@ -8,19 +8,17 @@ From [`demos/identify-and-address-refactors/run.ts`](https://github.com/barnum-c
 
 ```ts
 runPipeline(
-  pipe(
-    constant({ folder: srcDir }),
-    listTargetFiles,
-    forEach(analyze).flatten(),
-    forEach(assessWorthiness).then(Option.collect()),
-    forEach(
+  constant({ folder: srcDir })
+    .then(listTargetFiles)
+    .then(forEach(analyze).flatten())
+    .then(forEach(assessWorthiness).then(Option.collect()))
+    .then(forEach(
       withResource({
         create: createBranchWorktree,
         action: implementAndReview,
         dispose: deleteWorktree,
       }),
-    ),
-  ),
+    )),
 );
 ```
 
@@ -36,23 +34,22 @@ runPipeline(
 From [`demos/identify-and-address-refactors/handlers/refactor.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/identify-and-address-refactors/handlers/refactor.ts):
 
 ```ts
-export const implementAndReview = bindInput<ImplementAndReviewParams>((params) => pipe(
-  params.pick("worktreePath", "description").then(implement).drop(),
-  params.pick("worktreePath").then(typeCheckFix).drop(),
+export const implementAndReview = bindInput<ImplementAndReviewParams>((params) =>
+  params.pick("worktreePath", "description").then(implement).drop()
+    .then(params.pick("worktreePath").then(typeCheckFix).drop())
 
-  loop((recur) =>
-    pipe(judgeRefactor, classifyJudgment).branch({
-      NeedsWork: pipe(
-        applyFeedback.drop(),
-        params.pick("worktreePath").then(typeCheckFix),
-      ).drop().then(recur),
-      Approved: drop,
-    }),
-  ).drop(),
+    .then(loop((recur) =>
+      judgeRefactor.then(classifyJudgment).branch({
+        NeedsWork: applyFeedback.drop()
+          .then(params.pick("worktreePath").then(typeCheckFix))
+          .drop().then(recur),
+        Approved: drop,
+      }),
+    ).drop())
 
-  params.pick("worktreePath").then(commit).drop(),
-  pipe(params.pick("branch", "description"), preparePRInput, createPR),
-));
+    .then(params.pick("worktreePath").then(commit).drop())
+    .then(params.pick("branch", "description").then(preparePRInput).then(createPR)),
+);
 ```
 
 Each refactor goes through: implement → type-check/fix → judge → revise if needed → commit → PR. The `bindInput` gives every step access to the original parameters (worktree path, branch name, description) without threading them through the pipeline.

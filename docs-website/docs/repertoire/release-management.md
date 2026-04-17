@@ -6,23 +6,19 @@ Automate the release process: aggregate changelogs from commits, determine the v
 
 ```ts
 runPipeline(
-  pipe(
-    listCommitsSinceLastRelease,
-    all(
-      pipe(forEach(classifyCommit), determineVersionBump),
+  listCommitsSinceLastRelease
+    .then(all(
+      forEach(classifyCommit).then(determineVersionBump),
       generateChangelog,
-    ),
-    merge(),
-    applyVersionBump,
-    tryCatch(
-      (throwError) => pipe(
-        buildAndTest.unwrapOr(throwError).drop(),
-        tagRelease,
-        publish,
-      ),
+    ))
+    .merge()
+    .then(applyVersionBump)
+    .then(tryCatch(
+      (throwError) => buildAndTest.unwrapOr(throwError).drop()
+        .then(tagRelease)
+        .then(publish),
       rollbackVersion,
-    ),
-  ),
+    )),
 );
 ```
 

@@ -6,23 +6,18 @@ Scan a codebase for security vulnerabilities, classify their severity, generate 
 
 ```ts
 runPipeline(
-  pipe(
-    runSecurityScan,
-    forEach(classifySeverity),
-    forEach(
-      pipe(
-        generatePatch,
+  runSecurityScan
+    .then(forEach(classifySeverity))
+    .then(forEach(
+      generatePatch.then(
         tryCatch(
-          (throwError) => pipe(
-            applyPatch,
-            runTests.unwrapOr(throwError).drop(),
-            verifyNoRegression.unwrapOr(throwError).drop(),
-          ),
+          (throwError) => applyPatch
+            .then(runTests.unwrapOr(throwError).drop())
+            .then(verifyNoRegression.unwrapOr(throwError).drop()),
           rollbackPatch,
         ),
       )
-    ),
-  ),
+    )),
 );
 ```
 

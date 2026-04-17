@@ -6,21 +6,19 @@ Analyze a repository, generate setup guides, and verify the instructions actuall
 
 ```ts
 runPipeline(
-  pipe(
-    all(
-      analyzeRepoStructure,
-      analyzeDevDependencies,
-      analyzeBuildSystem,
-    ),
-    merge(),
-    generateSetupGuide,
-    loop((recur) =>
-      pipe(testInCleanEnv, classifyResult).branch({
+  all(
+    analyzeRepoStructure,
+    analyzeDevDependencies,
+    analyzeBuildSystem,
+  )
+    .merge()
+    .then(generateSetupGuide)
+    .then(loop((recur) =>
+      testInCleanEnv.then(classifyResult).branch({
         Works: drop,
-        Broken: pipe(fixGuide, recur),
+        Broken: fixGuide.then(recur),
       })
-    ),
-  ),
+    )),
 );
 ```
 

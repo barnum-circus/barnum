@@ -6,16 +6,13 @@ Analyze source files, generate test suites, run them, and iterate on failures un
 
 ```ts
 runPipeline(
-  pipe(
-    listSourceFiles,
+  listSourceFiles.then(
     forEach(
-      pipe(
-        analyzeForTestability,
-        generateTests,
+      analyzeForTestability.then(generateTests).then(
         loop((recur) =>
-          pipe(runTests, classifyResults).branch({
+          runTests.then(classifyResults).branch({
             Passing: drop,
-            Failing: pipe(fixTests, recur),
+            Failing: fixTests.then(recur),
           })
         ),
       )

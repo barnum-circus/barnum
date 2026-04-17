@@ -8,13 +8,11 @@ From [`demos/convert-folder-to-ts`](https://github.com/barnum-circus/barnum/tree
 
 ```ts
 runPipeline(
-  pipe(
-    setup,
-    listFiles
+  setup
+    .then(listFiles
       .forEach(migrate({ to: "Typescript" }))
-      .drop(),
-    typeCheckFix,
-  ),
+      .drop())
+    .then(typeCheckFix),
 );
 ```
 
@@ -27,8 +25,8 @@ runPipeline(
 
 ```ts
 export const typeCheckFix = loop((recur) =>
-  pipe(typeCheck, classifyErrors).branch({
-    HasErrors: pipe(forEach(fix).drop(), recur),
+  typeCheck.then(classifyErrors).branch({
+    HasErrors: forEach(fix).drop().then(recur),
     Clean: drop,
   }),
 );

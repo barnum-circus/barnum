@@ -6,17 +6,13 @@ Extract user-facing strings from a codebase, translate them into target language
 
 ```ts
 runPipeline(
-  pipe(
-    extractStrings,
-    forEach(
-      pipe(
-        all(...targetLanguages.map(lang => translateTo(lang))),
-        forEach(verifyInContext),
-      )
-    ),
-    flattenResults,
-    writeLocaleFiles,
-  ),
+  extractStrings
+    .then(forEach(
+      all(...targetLanguages.map(lang => translateTo(lang)))
+        .then(forEach(verifyInContext)),
+    ))
+    .then(flattenResults)
+    .then(writeLocaleFiles),
 );
 ```
 

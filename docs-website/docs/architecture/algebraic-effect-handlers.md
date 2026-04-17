@@ -50,7 +50,7 @@ This is a departure from traditional algebraic effects, where the continuation i
 
 ```ts
 loop<string>((recur, done) =>
-  pipe(step, classify).branch({
+  step.then(classify).branch({
     Continue: recur,    // restart the loop
     Break: done,        // exit the loop
   })

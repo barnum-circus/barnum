@@ -9,10 +9,8 @@ Fan out a contract review into parallel specialist analyses, then synthesize a f
 ## Pattern
 
 ```ts
-pipe(
-  all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis),
-  synthesize,
-)
+all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis)
+  .then(synthesize)
 ```
 
 ## Example
@@ -67,10 +65,8 @@ export const synthesize = createHandler({
 
 ```ts
 runPipeline(
-  pipe(
-    all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis),
-    synthesize,
-  ),
+  all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis)
+    .then(synthesize),
 );
 ```
 

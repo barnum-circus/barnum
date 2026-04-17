@@ -34,13 +34,11 @@ withTimeout(constant(2_000), stepB.unwrapOr(throwError))
 The timeout duration doesn't have to be constant. It can come from the pipeline:
 
 ```ts
-pipe(
-  getConfig,                           // { timeout: 10000, ... }
-  withTimeout(
+getConfig                              // { timeout: 10000, ... }
+  .then(withTimeout(
     getField("timeout"),           // extract the timeout from the config
     getField("payload").then(work) // extract the payload and process it
-  ),
-)
+  ))
 ```
 
 ## How it works

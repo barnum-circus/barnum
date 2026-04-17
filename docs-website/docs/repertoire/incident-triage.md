@@ -6,22 +6,20 @@ When an alert fires, automatically collect context from multiple systems in para
 
 ```ts
 runPipeline(
-  pipe(
-    all(
-      collectLogs,
-      collectMetrics,
-      collectRecentDeploys,
-      queryBusinessIntelligence,
-    ),
-    merge(),
-    all(
+  all(
+    collectLogs,
+    collectMetrics,
+    collectRecentDeploys,
+    queryBusinessIntelligence,
+  )
+    .merge()
+    .then(all(
       correlateEvents,
       classifySeverity,
       identifyAffectedServices,
-    ),
-    merge(),
-    draftTriageDocument,
-  ),
+    ))
+    .merge()
+    .then(draftTriageDocument),
 );
 ```
 
