@@ -138,27 +138,27 @@ These are speculative. The point is that the single-variant enum pattern scales 
 
 ## Implementation pattern
 
-Every newtype follows the same template:
+Every newtype follows the same template. Matches the existing convention where `Option.some` is `tag("Some", "Option")` and `Result.ok` is `tag("Ok", "Result")` — these are `TypedAction` values (pipeline steps), not functions:
 
 ```ts
 // 1. Type definition
 type FooDef<T> = { Foo: T };
 type Foo<T> = TaggedUnion<"Foo", FooDef<T>>;
 
-// 2. Constructor (wrap)
+// 2. Namespace — same shape as Option/Result
 const Foo = {
-  new: tag("Foo", "Foo"),  // T → Foo<T>
+  /** Tag action: T → Foo<T>. Compose into pipelines, don't call directly. */
+  wrap: tag("Foo", "Foo"),
+
+  /** Unwrap + transform + rewrap. Foo<T> → Foo<U>. */
+  map<T, U>(action: Pipeable<T, U>): TypedAction<Foo<T>, Foo<U>> {
+    return chain(
+      toAction(getField("value")),
+      toAction(action),
+      toAction(Foo.wrap),
+    ) as TypedAction<Foo<T>, Foo<U>>;
+  },
 };
-
-// 3. Unwrap (for internal use in methods)
-const unwrapFoo = getField("value");  // Foo<T> → T
-
-// 4. Methods operate as: unwrap → transform → rewrap
-const fooMap = (action) => chain(
-  toAction(unwrapFoo),
-  toAction(action),
-  toAction(Foo.new),
-);
 ```
 
 For postfix dispatch via `matchPrefix`, the newtype's case handler is always: `getField("value")` → operation → `tag(Name, Name)`. No inner branch.

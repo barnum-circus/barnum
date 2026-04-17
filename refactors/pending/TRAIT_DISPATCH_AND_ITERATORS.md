@@ -48,7 +48,7 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
     Iterator: chain(
       toAction(getField("value")),
       toAction(forEach(action)),
-      toAction(tag("Iterator", "Iterator")),
+      toAction(Iter.wrap),
     ),
   })));
 }
@@ -124,7 +124,8 @@ The wrap/unwrap overhead is real but small — it's a Rust builtin (WrapInField/
 
 ```ts
 const wrapInArray = all(identity());
-const wrapAsIterator = tag("Iterator", "Iterator");
+// Defined once in the Iter namespace: Iter.wrap = tag("Iterator", "Iterator")
+const wrapAsIterator = Iter.wrap;
 
 // Option.iterate: Option<T> → Iterator<T>
 const optionIntoIter = branch({
@@ -146,7 +147,7 @@ const arrayIntoIter = wrapAsIterator;
 
 ## Iterator methods
 
-Shared transformation methods (map, andThen, flatten) work on Iterator via `matchPrefix` alongside Option and Result. Iterator also has its own methods that don't exist on other families. All Iterator-specific methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap. The pattern is: `getField("value")` → array operation → `tag("Iterator", "Iterator")`.
+Shared transformation methods (map, andThen, flatten) work on Iterator via `matchPrefix` alongside Option and Result. Iterator also has its own methods that don't exist on other families. All Iterator-specific methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap. The pattern is: `getField("value")` → array operation → `Iter.wrap`.
 
 ### Core (compose from existing AST nodes)
 
