@@ -40,17 +40,28 @@ The source has the same problem in miniature: `builtins.ts` is a grab bag of ~17
 
 ---
 
-## Source restructuring: split `builtins.ts`
+## Source restructuring: split `builtins.ts` into `src/builtins/`
 
-### New source files
+Replace the single `builtins.ts` file with a `src/builtins/` folder:
 
-| New file | Functions | Rationale |
-|----------|-----------|-----------|
-| `src/scalar.ts` | `constant`, `identity`, `drop`, `panic` | Universal transforms on any single value. No dependencies on other builtins. |
-| `src/struct.ts` | `getField`, `pick`, `wrapInField`, `merge` | Operations on typed objects with known fields. `pick` composes the others internally. |
-| `src/array.ts` | `getIndex`, `flatten`, `splitFirst`, `splitLast`, `range` | Operations on arrays and tuples. |
-| `src/tagged-union.ts` | `tag`, `extractPrefix`, `taggedUnionSchema` | Tagged union construction and inspection. `tag` composes scalar + struct builtins. |
-| `src/with-resource.ts` | `withResource` | RAII composite — already complex enough for its own file. |
+```
+src/builtins/
+  index.ts          ← barrel re-export (replaces builtins.ts)
+  scalar.ts         ← constant, identity, drop, panic
+  struct.ts         ← getField, pick, wrapInField, merge
+  array.ts          ← getIndex, flatten, splitFirst, splitLast, range
+  tagged-union.ts   ← tag, extractPrefix, taggedUnionSchema
+  with-resource.ts  ← withResource
+```
+
+| File | Functions | Rationale |
+|------|-----------|-----------|
+| `builtins/scalar.ts` | `constant`, `identity`, `drop`, `panic` | Universal transforms on any single value. No dependencies on other builtins. |
+| `builtins/struct.ts` | `getField`, `pick`, `wrapInField`, `merge` | Operations on typed objects with known fields. `pick` composes the others internally. |
+| `builtins/array.ts` | `getIndex`, `flatten`, `splitFirst`, `splitLast`, `range` | Operations on arrays and tuples. |
+| `builtins/tagged-union.ts` | `tag`, `extractPrefix`, `taggedUnionSchema` | Tagged union construction and inspection. `tag` composes scalar + struct builtins. |
+| `builtins/with-resource.ts` | `withResource` | RAII composite — already complex enough for its own file. |
+| `builtins/index.ts` | Re-exports everything | All internal imports (`from "./builtins.js"`) continue to work unchanged. |
 
 ### Files that stay
 
@@ -61,13 +72,9 @@ The source has the same problem in miniature: `builtins.ts` is a grab bag of ~17
 | `src/ast.ts` | Core types, `matchPrefix`, postfix method implementations |
 | `src/pipe.ts`, `src/chain.ts`, `src/all.ts`, etc. | Already modular |
 
-### `builtins.ts` becomes a re-export barrel
+### Import changes
 
-After splitting, `builtins.ts` re-exports everything from the new files for backward compatibility with internal imports. Eventually delete it and update import sites directly.
-
-### `index.ts` changes
-
-Update `index.ts` to export from the new source files instead of `builtins.ts`. Public API is unchanged.
+`builtins/index.ts` re-exports everything, so all existing `import { ... } from "./builtins.js"` sites continue to resolve. `index.ts` exports from `./builtins/index.js` instead of `./builtins.js`. No other files need to change their imports.
 
 ---
 
@@ -79,11 +86,11 @@ Each test file below contains **type tests**, **AST structure tests** (where use
 
 | Test file | Source module | Migrates from |
 |-----------|-------------|---------------|
-| `scalar.test.ts` | `src/scalar.ts` — constant, identity, drop, panic | types: "builtin types" (constant, identity, drop). run: constant/identity tests. |
-| `struct.test.ts` | `src/struct.ts` — getField, pick, wrapInField, merge | types: "builtin types" (getField, merge). patterns: `.getField()` postfix AST. |
-| `array.test.ts` | `src/array.ts` — getIndex, flatten, splitFirst, splitLast, range. Also tests `first()`, `last()` from `option.ts`. | types: "builtin types" (range, flatten). patterns: `.flatten()` postfix AST. |
-| `tagged-union.test.ts` | `src/tagged-union.ts` — tag, extractPrefix, taggedUnionSchema. Also tests `matchPrefix` from `ast.ts`. | patterns: `.tag()` postfix AST. |
-| `with-resource.test.ts` | `src/with-resource.ts` — withResource | (no existing tests) |
+| `scalar.test.ts` | `builtins/scalar.ts` — constant, identity, drop, panic | types: "builtin types" (constant, identity, drop). run: constant/identity tests. |
+| `struct.test.ts` | `builtins/struct.ts` — getField, pick, wrapInField, merge | types: "builtin types" (getField, merge). patterns: `.getField()` postfix AST. |
+| `array.test.ts` | `builtins/array.ts` — getIndex, flatten, splitFirst, splitLast, range. Also tests `first()`, `last()` from `option.ts`. | types: "builtin types" (range, flatten). patterns: `.flatten()` postfix AST. |
+| `tagged-union.test.ts` | `builtins/tagged-union.ts` — tag, extractPrefix, taggedUnionSchema. Also tests `matchPrefix` from `ast.ts`. | patterns: `.tag()` postfix AST. |
+| `with-resource.test.ts` | `builtins/with-resource.ts` — withResource | (no existing tests) |
 | `option.test.ts` | `src/option.ts` — Option namespace, postfix dispatch for Option | types: "Option namespace types". patterns: "Option namespace". |
 | `result.test.ts` | `src/result.ts` — Result namespace, postfix dispatch for Result | types: "Result types", "Result.unwrapOr with throw tokens". patterns: "Result combinators". |
 | `pipe.test.ts` | `src/pipe.ts` + `src/chain.ts` — pipe, chain, .then() | types: "pipe type safety", "combinator types" (pipe). patterns: "pipe". run: multi-step pipeline. |
@@ -542,7 +549,7 @@ Below: `[E]` = existing test (migrated), `[N]` = new test to add.
 
 ## Migration strategy
 
-1. Split `builtins.ts` into `scalar.ts`, `struct.ts`, `array.ts`, `tagged-union.ts`, `with-resource.ts`. Update `builtins.ts` to re-export. Update `index.ts`.
+1. Replace `builtins.ts` with `builtins/` folder (scalar.ts, struct.ts, array.ts, tagged-union.ts, with-resource.ts, index.ts barrel). Update `index.ts`.
 2. Create test files one at a time, starting with `scalar.test.ts` (simplest, most foundational).
 3. For each new test file: copy existing tests from patterns/types/run, then add new execution tests.
 4. After all new files pass, delete `patterns.test.ts`, `types.test.ts`, `run.test.ts`.
