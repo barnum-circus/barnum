@@ -30,7 +30,6 @@ import {
   race,
   sleep,
   withTimeout,
-  withUnion,
 } from "../src/ast.js";
 import { allocateRestartHandlerId } from "../src/effect-id.js";
 import {
@@ -44,7 +43,7 @@ import {
   tag,
 } from "../src/builtins.js";
 import { Option as O } from "../src/option.js";
-import { Result as R, resultMethods } from "../src/result.js";
+import { Result as R } from "../src/result.js";
 import {
   setup,
   build,
@@ -538,21 +537,22 @@ describe("config entry point", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Postfix .map() — dispatched via __union for Option and Result
+// Postfix .map() — dispatched via matchPrefix for Option and Result
 // ---------------------------------------------------------------------------
 
 describe("postfix .map() type safety", () => {
   it("rejects .map() when Out is not Option<T> or Result<T,E>", () => {
     // verify outputs { verified: boolean } — not an Option or Result
     // @ts-expect-error — map requires Option or Result output
-    expect(() => verify.map(deploy)).toThrow(".map() requires a union type (Option or Result)");
+    verify.map(deploy);
+    // Type-level rejection only; at runtime, matchPrefix generates an AST
+    // that would fail at engine dispatch time (no matching prefix).
   });
 
   it("rejects .map() when Out is a different tagged union", () => {
-    // classifyErrors outputs ClassifyResult = { kind: "ClassifyResult.HasErrors"; ... } | { kind: "ClassifyResult.Clean"; ... }
-    // Not Option<T> (which has kind "Some" | "None")
+    // classifyErrors outputs ClassifyResult — not Option or Result
     // @ts-expect-error — map requires Option or Result output
-    expect(() => classifyErrors.map(deploy)).toThrow(".map() requires a union type (Option or Result)");
+    classifyErrors.map(deploy);
   });
 });
 
@@ -931,10 +931,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() infers types from this constraint", () => {
-    const resultAction = withUnion(
-      identity() as TypedAction<string, Result<string, number>>,
-      "Result", resultMethods,
-    );
+    const resultAction = identity() as TypedAction<string, Result<string, number>>;
     const throwToken = typedAction<number, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
@@ -942,13 +939,10 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() composes in tryCatch pipeline", () => {
-    const handler = withUnion(
-      identity() as TypedAction<
-        { data: string },
-        Result<{ data: string }, { code: number }>
-      >,
-      "Result", resultMethods,
-    );
+    const handler = identity() as TypedAction<
+      { data: string },
+      Result<{ data: string }, { code: number }>
+    >;
     const action = tryCatch(
       (throwError) => handler.unwrapOr(throwError),
       pipe(drop, constant({ data: "fallback" })),
@@ -958,13 +952,10 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() chains into further pipeline steps", () => {
-    const handler = withUnion(
-      identity() as TypedAction<
-        { artifact: string },
-        Result<{ verified: boolean }, string>
-      >,
-      "Result", resultMethods,
-    );
+    const handler = identity() as TypedAction<
+      { artifact: string },
+      Result<{ verified: boolean }, string>
+    >;
     const action = tryCatch(
       (throwError) => pipe(
         handler.unwrapOr(throwError),
@@ -977,10 +968,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() produces Chain AST node", () => {
-    const resultAction = withUnion(
-      identity() as TypedAction<void, Result<string, string>>,
-      "Result", resultMethods,
-    );
+    const resultAction = identity() as TypedAction<void, Result<string, string>>;
     const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     expect(action.kind).toBe("Chain");
@@ -989,7 +977,8 @@ describe("Result.unwrapOr with throw tokens", () => {
   it("rejects .unwrapOr() on non-Result output", () => {
     // deploy outputs { deployed: boolean } — not an Option or Result
     // @ts-expect-error — unwrapOr requires Option or Result output
-    expect(() => deploy.unwrapOr(drop)).toThrow(".unwrapOr() requires a union type (Option or Result)");
+    deploy.unwrapOr(drop);
+    // Type-level rejection only; matchPrefix generates an AST at runtime.
   });
 });
 
@@ -1089,8 +1078,7 @@ describe("loop type parameter constraints", () => {
   });
 
   // -- Pattern 2: retry loop (retry-on-error) --------------------------------
-  // Skipped: requires __union dispatch on Result, which is the enumKind gap.
-  // Will be re-added when enumKind lands.
+  // TODO: add retry-on-error test using Result.unwrapOr + recur.
 
   // -- Pattern 3: stateful loop (healthCheck style) --------------------------
 

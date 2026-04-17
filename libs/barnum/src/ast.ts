@@ -1,12 +1,15 @@
 import type { JSONSchema7 } from "json-schema";
 import { chain } from "./chain.js";
 import {
+  constant,
   drop,
+  extractPrefix,
   flatten as flattenBuiltin,
   getField,
   getIndex,
   identity,
   merge,
+  panic,
   pick,
   splitFirst,
   splitLast,
@@ -121,7 +124,8 @@ export type BuiltinKind =
   | { kind: "SplitLast" }
   | { kind: "WrapInField"; field: string }
   | { kind: "Sleep"; ms: number }
-  | { kind: "Panic"; message: string };
+  | { kind: "Panic"; message: string }
+  | { kind: "ExtractPrefix" };
 
 /**
  * When T is `never` or `void` (handler ignores input / recur doesn't
@@ -155,66 +159,6 @@ export type MergeTuple<TTuple> = TTuple extends unknown[]
   : never;
 
 // ---------------------------------------------------------------------------
-// Union dispatch — runtime method table for Option/Result postfix methods
-// ---------------------------------------------------------------------------
-
-/**
- * Runtime dispatch table for union postfix methods. Each method is optional —
- * Option and Result provide different subsets. TypedAction type signatures
- * gate availability at compile time; this table handles runtime dispatch.
- */
-export interface UnionMethods {
-  // Shared (Option + Result)
-  map?: (action: Action) => Action;
-  andThen?: (action: Action) => Action;
-  unwrap?: () => Action;
-  unwrapOr?: (action: Action) => Action;
-  // Option-only
-  filter?: (predicate: Action) => Action;
-  collect?: () => Action;
-  isSome?: () => Action;
-  isNone?: () => Action;
-  // Result-only
-  mapErr?: (action: Action) => Action;
-  and?: (other: Action) => Action;
-  or?: (fallback: Action) => Action;
-  toOption?: () => Action;
-  toOptionErr?: () => Action;
-  transpose?: () => Action;
-  isOk?: () => Action;
-  isErr?: () => Action;
-}
-
-/**
- * Runtime dispatch info attached to every TypedAction. Non-null when the
- * output is a union type (Option, Result). `name` identifies the type for
- * error messages; `methods` is the dispatch table.
- */
-export interface UnionDispatch {
-  name: string;
-  methods: UnionMethods;
-}
-
-/**
- * Attach a union dispatch table to a TypedAction. Used by constructors
- * and family-preserving combinators so postfix methods can dispatch
- * to the correct implementation.
- */
-export function withUnion<In, Out>(
-  action: TypedAction<In, Out>,
-  name: string,
-  methods: UnionMethods,
-): TypedAction<In, Out> {
-  Object.defineProperty(action, "__union", {
-    value: { name, methods },
-    configurable: true,
-    enumerable: false,
-    writable: true,
-  });
-  return action;
-}
-
-// ---------------------------------------------------------------------------
 // Phantom Types — type-safe input/output tracking
 // ---------------------------------------------------------------------------
 
@@ -237,8 +181,6 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
-  /** Runtime dispatch info for union postfix methods (Option/Result). Null for non-union outputs. */
-  __union: UnionDispatch | null;
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
@@ -341,8 +283,6 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<TValue, TError>>,
     defaultAction: Pipeable<TError, TValue>,
   ): TypedAction<TIn, TValue>;
-
-  // --- Dispatched postfix methods (via __union) ---
 
   /** Monadic bind. Option: `Option<T> → Option<U>`. Result: `Result<T,E> → Result<U,E>`. */
   andThen<TIn, TValue, TOut>(
@@ -617,104 +557,133 @@ function splitLastMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(splitLast()));
 }
 
-/**
- * Require a dispatch method, throwing a descriptive error if missing.
- * Uses the union's type name for context.
- */
-function requireDispatch<TResult>(
-  dispatch: UnionDispatch | null,
-  methodName: string,
-  accessor: (methods: UnionMethods) => TResult | undefined,
-): TResult {
-  if (!dispatch) {
-    throw new Error(`.${methodName}() requires a union type (Option or Result)`);
-  }
-  const method = accessor(dispatch.methods);
-  if (!method) {
-    throw new Error(`.${methodName}() is not available on ${dispatch.name}`);
-  }
-  return method;
-}
+// --- Shared postfix methods (Option + Result) — dispatch via matchPrefix ---
 
 function mapMethod(this: TypedAction, action: Action): TypedAction {
-  const map = requireDispatch(this.__union, "map", (m) => m.map);
-  return chain(toAction(this), toAction(map(action)));
-}
-
-function mapErrMethod(this: TypedAction, action: Action): TypedAction {
-  const mapErr = requireDispatch(this.__union, "mapErr", (m) => m.mapErr);
-  return chain(toAction(this), toAction(mapErr(action)));
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({
+      Ok: chain(toAction(action), toAction(Result.ok)),
+      Err: Result.err,
+    }),
+    Option: branch({
+      Some: chain(toAction(action), toAction(Option.some)),
+      None: Option.none,
+    }),
+  })));
 }
 
 function unwrapMethod(this: TypedAction): TypedAction {
-  const unwrap = requireDispatch(this.__union, "unwrap", (m) => m.unwrap);
-  return chain(toAction(this), toAction(unwrap()));
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
+    Option: branch({ Some: identity(), None: panic("called unwrap on None") }),
+  })));
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  const unwrapOr = requireDispatch(this.__union, "unwrapOr", (m) => m.unwrapOr);
-  return chain(toAction(this), toAction(unwrapOr(defaultAction)));
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: identity(), Err: defaultAction }),
+    Option: branch({ Some: identity(), None: defaultAction }),
+  })));
 }
-
-// --- Dispatched postfix methods (via __union) ---
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
-  const andThen = requireDispatch(this.__union, "andThen", (m) => m.andThen);
-  return chain(toAction(this), toAction(andThen(action)));
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: action, Err: Result.err }),
+    Option: branch({ Some: action, None: Option.none }),
+  })));
 }
 
+function transposeMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Option: branch({
+      Some: branch({
+        Ok: chain(toAction(Option.some), toAction(Result.ok)),
+        Err: Result.err,
+      }),
+      None: chain(toAction(chain(toAction(drop), toAction(Option.none))), toAction(Result.ok)),
+    }),
+    Result: branch({
+      Ok: branch({
+        Some: chain(toAction(Result.ok), toAction(Option.some)),
+        None: chain(toAction(drop), toAction(Option.none)),
+      }),
+      Err: chain(toAction(Result.err), toAction(Option.some)),
+    }),
+  })));
+}
+
+// --- Result-only postfix methods ---
+
+function mapErrMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: Result.ok,
+    Err: chain(toAction(action), toAction(Result.err)),
+  })));
+}
+
+function orMethod(this: TypedAction, fallback: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: Result.ok,
+    Err: fallback,
+  })));
+}
+
+function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: chain(toAction(drop), toAction(other)),
+    Err: Result.err,
+  })));
+}
+
+function toOptionMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: Option.some,
+    Err: chain(toAction(drop), toAction(Option.none)),
+  })));
+}
+
+function toOptionErrMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: chain(toAction(drop), toAction(Option.none)),
+    Err: Option.some,
+  })));
+}
+
+function isOkMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: constant(true), Err: constant(false),
+  })));
+}
+
+function isErrMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branch({
+    Ok: constant(false), Err: constant(true),
+  })));
+}
+
+// --- Option-only postfix methods ---
+
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
-  const filter = requireDispatch(this.__union, "filter", (m) => m.filter);
-  return chain(toAction(this), toAction(filter(predicate)));
+  return chain(toAction(this), toAction(branch({
+    Some: predicate,
+    None: Option.none,
+  })));
 }
 
 function isSomeMethod(this: TypedAction): TypedAction {
-  const isSome = requireDispatch(this.__union, "isSome", (m) => m.isSome);
-  return chain(toAction(this), toAction(isSome()));
+  return chain(toAction(this), toAction(branch({
+    Some: constant(true), None: constant(false),
+  })));
 }
 
 function isNoneMethod(this: TypedAction): TypedAction {
-  const isNone = requireDispatch(this.__union, "isNone", (m) => m.isNone);
-  return chain(toAction(this), toAction(isNone()));
+  return chain(toAction(this), toAction(branch({
+    Some: constant(false), None: constant(true),
+  })));
 }
 
 function collectMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(Option.collect()));
-}
-
-function orMethod(this: TypedAction, fallback: Action): TypedAction {
-  const or = requireDispatch(this.__union, "or", (m) => m.or);
-  return chain(toAction(this), toAction(or(fallback)));
-}
-
-function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
-  const and = requireDispatch(this.__union, "and", (m) => m.and);
-  return chain(toAction(this), toAction(and(other)));
-}
-
-function toOptionMethod(this: TypedAction): TypedAction {
-  const toOption = requireDispatch(this.__union, "toOption", (m) => m.toOption);
-  return chain(toAction(this), toAction(toOption()));
-}
-
-function toOptionErrMethod(this: TypedAction): TypedAction {
-  const toOptionErr = requireDispatch(this.__union, "toOptionErr", (m) => m.toOptionErr);
-  return chain(toAction(this), toAction(toOptionErr()));
-}
-
-function isOkMethod(this: TypedAction): TypedAction {
-  const isOk = requireDispatch(this.__union, "isOk", (m) => m.isOk);
-  return chain(toAction(this), toAction(isOk()));
-}
-
-function isErrMethod(this: TypedAction): TypedAction {
-  const isErr = requireDispatch(this.__union, "isErr", (m) => m.isErr);
-  return chain(toAction(this), toAction(isErr()));
-}
-
-function transposeMethod(this: TypedAction): TypedAction {
-  const transpose = requireDispatch(this.__union, "transpose", (m) => m.transpose);
-  return chain(toAction(this), toAction(transpose()));
 }
 
 function bindMethod(
@@ -741,7 +710,6 @@ export function typedAction<In = unknown, Out = unknown>(
 ): TypedAction<In, Out> {
   if (!("then" in action)) {
     Object.defineProperties(action, {
-      __union: { value: null, configurable: true, enumerable: false, writable: true },
       then: { value: thenMethod, configurable: true },
       forEach: { value: forEachMethod, configurable: true },
       branch: { value: branchMethod, configurable: true },
@@ -871,6 +839,22 @@ export function branch<TCases extends Record<string, Action>>(
   ExtractOutput<TCases[keyof TCases & string]>
 > {
   return typedAction({ kind: "Branch", cases: unwrapBranchCases(cases) });
+}
+
+/**
+ * Two-level dispatch: extract the enum prefix from a tagged value's `kind`,
+ * then branch on that prefix. Used by postfix methods (`.map()`, `.unwrapOr()`,
+ * etc.) to dispatch across union families (Option, Result) without runtime
+ * metadata.
+ *
+ * `matchPrefix({ Result: ..., Option: ... })` ≡ `chain(extractPrefix(), branch(cases))`
+ */
+export function matchPrefix(cases: Record<string, Action>): TypedAction {
+  return typedAction({
+    kind: "Chain",
+    first: toAction(extractPrefix()),
+    rest: toAction(branch(cases)),
+  });
 }
 
 type LoopResultDef<TContinue, TBreak> = {

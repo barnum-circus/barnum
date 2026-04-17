@@ -7,12 +7,9 @@ import {
   type TypedAction,
   toAction,
   typedAction,
-  withUnion,
 } from "./ast.js";
 import { chain } from "./chain.js";
 import { all } from "./all.js";
-// Lazy: optionMethods is only accessed inside function bodies, not at module init.
-import { optionMethods } from "./option.js";
 import { z } from "zod";
 
 /**
@@ -200,17 +197,13 @@ export function getField<
 export function getIndex<TTuple extends unknown[], TIndex extends number>(
   index: TIndex,
 ): TypedAction<TTuple, OptionT<TTuple[TIndex]>> {
-  return withUnion(
-    typedAction({
-      kind: "Invoke",
-      handler: {
-        kind: "Builtin",
-        builtin: { kind: "GetIndex", index },
-      },
-    }),
-    "Option",
-    optionMethods,
-  );
+  return typedAction({
+    kind: "Invoke",
+    handler: {
+      kind: "Builtin",
+      builtin: { kind: "GetIndex", index },
+    },
+  });
 }
 
 
@@ -338,14 +331,10 @@ export function splitFirst<TElement>(): TypedAction<
   TElement[],
   OptionT<[TElement, TElement[]]>
 > {
-  return withUnion(
-    typedAction({
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
-    }),
-    "Option",
-    optionMethods,
-  );
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -366,13 +355,29 @@ export function splitLast<TElement>(): TypedAction<
   TElement[],
   OptionT<[TElement[], TElement]>
 > {
-  return withUnion(
-    typedAction({
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
-    }),
-    "Option",
-    optionMethods,
-  );
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ExtractPrefix — extract enum prefix from tagged value kind
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the enum prefix from a tagged value's `kind` field.
+ *
+ * Input:  `{ kind: "Result.Ok", value: 42 }`
+ * Output: `{ kind: "Result", value: { kind: "Result.Ok", value: 42 } }`
+ *
+ * If `kind` contains no `'.'`, the entire kind string becomes the prefix.
+ * Used internally by `matchPrefix` for two-level dispatch.
+ */
+export function extractPrefix(): TypedAction {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "ExtractPrefix" } },
+  });
 }
 
