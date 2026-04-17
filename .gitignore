@@ -7,5 +7,6 @@
 **/.vscode/**
 **/.td/**
 **/.test-data/**
+*.tsbuildinfo
 .turbo
 crates/intern/Cargo.lock
