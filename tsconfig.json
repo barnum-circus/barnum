@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "files": [],
+  "references": [
+    { "path": "libs/barnum" },
+    { "path": "demos/analyze-file" },
+    { "path": "demos/babysit-prs" },
+    { "path": "demos/convert-folder-to-ts" },
+    { "path": "demos/identify-and-address-refactors" },
+    { "path": "demos/peano-arithmetic" },
+    { "path": "demos/retry-on-error" },
+    { "path": "demos/simple-workflow" },
+    { "path": "demos/workflow-output" }
+  ]
+}
