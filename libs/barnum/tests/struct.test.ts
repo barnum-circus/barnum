@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
-  type MergeTuple,
   pipe,
 } from "../src/ast.js";
 import {

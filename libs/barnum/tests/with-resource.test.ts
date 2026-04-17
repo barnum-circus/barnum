@@ -9,7 +9,6 @@ import {
   withResource,
   getField,
   wrapInField,
-  merge,
 } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 
