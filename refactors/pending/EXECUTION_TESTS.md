@@ -6,13 +6,18 @@
 
 Tests are currently split by *kind* — AST structure (`patterns.test.ts`), types (`types.test.ts`), execution (`run.test.ts`), and serialization (`round-trip.test.ts`). This makes it hard to answer "is Option.map fully tested?" because its tests are scattered across three files. Worse, execution test coverage is almost nonexistent: only 7 trivial tests (constant, identity, pipe), and zero execution tests for any combinator, builtin, Option method, or Result method.
 
+The source has the same problem in miniature: `builtins.ts` is a grab bag of ~17 unrelated functions (scalar transforms, struct operations, array operations, tagged union constructors, resource management). Splitting it enables focused test files.
+
 ## Goals
 
-1. **Organize by module, not by test kind.** Each module (Option, Result, builtins, pipe, etc.) gets one test file containing type tests, AST structure tests, and execution tests.
+1. **Organize by module, not by test kind.** Each module gets one test file containing type tests, AST structure tests, and execution tests.
 2. **One test per branch.** Every combinator that dispatches (Option/Result methods, branch, loop) gets one execution test per branch (e.g., Ok case + Err case for `Result.unwrapOr`).
 3. **Comprehensive execution coverage.** Every public function and combinator gets at least one execution test through `runPipeline`.
+4. **Split builtins.ts** into focused source modules, with matching test files.
 
 ## Current state
+
+### Test files
 
 | File | Contents | Test count |
 |------|----------|------------|
@@ -23,32 +28,79 @@ Tests are currently split by *kind* — AST structure (`patterns.test.ts`), type
 | `schema.test.ts` | `zodToCheckedJsonSchema` | ~60 |
 | `handlers.ts` | Test fixture handlers | (not tests) |
 
-## Proposed structure
+### Source: `builtins.ts` contents
 
-Each file below contains **type tests**, **AST structure tests** (where useful), and **execution tests** colocated together.
+| Function | Category | Depends on |
+|----------|----------|------------|
+| `constant`, `identity`, `drop`, `panic` | Scalar transforms | Nothing |
+| `getField`, `pick`, `wrapInField`, `merge` | Struct operations | `getField` is standalone; `pick` uses `getField` + `wrapInField` + `merge` |
+| `getIndex`, `flatten`, `splitFirst`, `splitLast`, `range` | Array operations | `getIndex` returns Option (uses `typedAction` only) |
+| `tag`, `extractPrefix`, `taggedUnionSchema` | Tagged union | `tag` uses `constant` + `wrapInField` + `merge` |
+| `withResource` | Resource management | Uses `all`, `identity`, `getIndex`, `chain`, `merge` |
+
+---
+
+## Source restructuring: split `builtins.ts`
+
+### New source files
+
+| New file | Functions | Rationale |
+|----------|-----------|-----------|
+| `src/scalar.ts` | `constant`, `identity`, `drop`, `panic` | Universal transforms on any single value. No dependencies on other builtins. |
+| `src/struct.ts` | `getField`, `pick`, `wrapInField`, `merge` | Operations on typed objects with known fields. `pick` composes the others internally. |
+| `src/array.ts` | `getIndex`, `flatten`, `splitFirst`, `splitLast`, `range` | Operations on arrays and tuples. |
+| `src/tagged-union.ts` | `tag`, `extractPrefix`, `taggedUnionSchema` | Tagged union construction and inspection. `tag` composes scalar + struct builtins. |
+| `src/with-resource.ts` | `withResource` | RAII composite — already complex enough for its own file. |
+
+### Files that stay
+
+| File | Contents |
+|------|----------|
+| `src/option.ts` | Option namespace + `first()`, `last()` (these compose splitFirst/splitLast with Option.map) |
+| `src/result.ts` | Result namespace |
+| `src/ast.ts` | Core types, `matchPrefix`, postfix method implementations |
+| `src/pipe.ts`, `src/chain.ts`, `src/all.ts`, etc. | Already modular |
+
+### `builtins.ts` becomes a re-export barrel
+
+After splitting, `builtins.ts` re-exports everything from the new files for backward compatibility with internal imports. Eventually delete it and update import sites directly.
+
+### `index.ts` changes
+
+Update `index.ts` to export from the new source files instead of `builtins.ts`. Public API is unchanged.
+
+---
+
+## Test restructuring
+
+Each test file below contains **type tests**, **AST structure tests** (where useful), and **execution tests** colocated together.
 
 ### Files to create
 
-| File | Module | Migrates from |
-|------|--------|---------------|
-| `builtins.test.ts` | constant, identity, drop, panic, range, wrapInField, merge, flatten, getField, getIndex, pick, splitFirst, splitLast, first, last, tag, extractPrefix, withResource | types: "builtin types". run: constant/identity tests. patterns: postfix operator AST tests for `.drop()`, `.flatten()`, `.getField()`, `.tag()` |
-| `option.test.ts` | Option.some/none, map, andThen, unwrap, unwrapOr, filter, collect, isSome, isNone, transpose. Postfix dispatch for Option. | types: "Option namespace types". patterns: "Option namespace" |
-| `result.test.ts` | Result.ok/err, map, mapErr, andThen, or, and, unwrap, unwrapOr, toOption, toOptionErr, transpose, isOk, isErr. Postfix dispatch for Result. | types: "Result types", "Result.unwrapOr with throw tokens". patterns: "Result combinators" |
-| `pipe.test.ts` | pipe, chain, .then() | types: "pipe type safety", "combinator types" (pipe subset). patterns: "pipe". run: multi-step pipeline tests. |
-| `branch.test.ts` | branch, matchPrefix, postfix .branch() | types: "{ kind, value } convention", "postfix .branch() type safety". patterns: "branch", postfix `.branch()` tests |
-| `forEach.test.ts` | forEach, postfix .forEach() | types: "combinator types" (forEach subset). patterns: "forEach" |
-| `all.test.ts` | all | types: "combinator types" (all subset). patterns: "all", "reader monad pattern" |
-| `loop.test.ts` | loop, recur, earlyReturn | types: "loop type parameter constraints", "combinator types" (loop subset). patterns: "loop" |
-| `bind.test.ts` | bind, bindInput, VarRef | types: "bind types", "bindInput types". patterns: "bind", "bindInput" |
-| `effects.test.ts` | tryCatch, race, withTimeout, sleep | types: "tryCatch types", "race types", "withTimeout types" |
-| `handler.test.ts` | createHandler, createHandlerWithConfig | types: "handler types", "optional handler types: createHandler", "optional handler types: createHandlerWithConfig" |
+| Test file | Source module | Migrates from |
+|-----------|-------------|---------------|
+| `scalar.test.ts` | `src/scalar.ts` — constant, identity, drop, panic | types: "builtin types" (constant, identity, drop). run: constant/identity tests. |
+| `struct.test.ts` | `src/struct.ts` — getField, pick, wrapInField, merge | types: "builtin types" (getField, merge). patterns: `.getField()` postfix AST. |
+| `array.test.ts` | `src/array.ts` — getIndex, flatten, splitFirst, splitLast, range. Also tests `first()`, `last()` from `option.ts`. | types: "builtin types" (range, flatten). patterns: `.flatten()` postfix AST. |
+| `tagged-union.test.ts` | `src/tagged-union.ts` — tag, extractPrefix, taggedUnionSchema. Also tests `matchPrefix` from `ast.ts`. | patterns: `.tag()` postfix AST. |
+| `with-resource.test.ts` | `src/with-resource.ts` — withResource | (no existing tests) |
+| `option.test.ts` | `src/option.ts` — Option namespace, postfix dispatch for Option | types: "Option namespace types". patterns: "Option namespace". |
+| `result.test.ts` | `src/result.ts` — Result namespace, postfix dispatch for Result | types: "Result types", "Result.unwrapOr with throw tokens". patterns: "Result combinators". |
+| `pipe.test.ts` | `src/pipe.ts` + `src/chain.ts` — pipe, chain, .then() | types: "pipe type safety", "combinator types" (pipe). patterns: "pipe". run: multi-step pipeline. |
+| `branch.test.ts` | `src/ast.ts` — branch, postfix .branch() | types: "{ kind, value } convention", ".branch() type safety". patterns: "branch". |
+| `forEach.test.ts` | `src/ast.ts` — forEach, .forEach() | types: forEach subset. patterns: "forEach". |
+| `all.test.ts` | `src/all.ts` — all | types: all subset. patterns: "all", "reader monad". |
+| `loop.test.ts` | `src/ast.ts` — loop, recur, earlyReturn | types: "loop type parameter constraints". patterns: "loop". |
+| `bind.test.ts` | `src/bind.ts` — bind, bindInput, VarRef | types: "bind types", "bindInput types". patterns: "bind", "bindInput". |
+| `effects.test.ts` | `src/try-catch.ts` + `src/race.ts` — tryCatch, race, withTimeout, sleep | types: "tryCatch types", "race types", "withTimeout types". |
+| `handler.test.ts` | `src/handler.ts` — createHandler, createHandlerWithConfig | types: "handler types", "optional handler types". |
 
 ### Files to keep as-is
 
 | File | Reason |
 |------|--------|
 | `schema.test.ts` | Already well-organized, self-contained |
-| `round-trip.test.ts` | Cross-cutting serialization tests; keep separate |
+| `round-trip.test.ts` | Cross-cutting serialization tests |
 | `handlers.ts` | Shared fixture handlers |
 
 ### Files to delete
@@ -65,66 +117,113 @@ Each file below contains **type tests**, **AST structure tests** (where useful),
 
 Below: `[E]` = existing test (migrated), `[N]` = new test to add.
 
-### `builtins.test.ts`
+### `scalar.test.ts`
 
 **Type tests:**
 - `[E]` constant: `any → T`
 - `[E]` identity: `T → T`
 - `[E]` drop: `any → void`
-- `[E]` range: `any → number[]`
-- `[E]` flatten: `T[][] → T[]`
+- `[N]` panic: `any → never`
+
+**AST structure tests:**
+- `[E]` `.drop()` produces Chain → Drop
+
+**Execution tests:**
+- `[E]` constant(42) returns 42 *(from run.test.ts)*
+- `[E]` constant("hello") returns "hello" *(from run.test.ts)*
+- `[E]` constant({x: 1}) returns object *(from run.test.ts)*
+- `[E]` constant(null) returns null *(from run.test.ts)*
+- `[E]` identity passes through input *(from run.test.ts)*
+- `[N]` drop returns null
+- `[N]` panic("msg") causes runPipeline to reject
+
+### `struct.test.ts`
+
+**Type tests:**
 - `[E]` getField: `{ key: V } → V`
 - `[E]` merge: `[A, B] → A & B`
-- `[N]` panic: `any → never`
 - `[N]` wrapInField: `T → Record<F, T>`
-- `[N]` getIndex: `Tuple → Option<Tuple[N]>`
 - `[N]` pick: `Obj → Pick<Obj, Keys>`
+
+**AST structure tests:**
+- `[E]` `.getField()` produces Chain → GetField
+
+**Execution tests (all `[N]`):**
+- getField("name")({name: "alice", age: 30}) → "alice"
+- wrapInField("foo")(42) → {foo: 42}
+- wrapInField with complex object value
+- merge([{a: 1}, {b: 2}]) → {a: 1, b: 2}
+- merge([{a: 1}, {b: 2}, {c: 3}]) → {a: 1, b: 2, c: 3}
+- pick("a", "b") from {a: 1, b: 2, c: 3} → {a: 1, b: 2}
+
+### `array.test.ts`
+
+**Type tests:**
+- `[E]` range: `any → number[]`
+- `[E]` flatten: `T[][] → T[]`
+- `[N]` getIndex: `Tuple → Option<Tuple[N]>`
 - `[N]` splitFirst: `T[] → Option<[T, T[]]>`
 - `[N]` splitLast: `T[] → Option<[T[], T]>`
 - `[N]` first: `T[] → Option<T>`
 - `[N]` last: `T[] → Option<T>`
-- `[N]` tag: `T → TaggedUnion<TDef>`
-- `[N]` extractPrefix: `TypedAction<any, any>` (untyped — transforms kind string)
-- `[N]` withResource: `TIn → TOut` (through create/action/dispose lifecycle)
 
 **AST structure tests:**
-- `[E]` `.drop()` produces Chain → Drop
 - `[E]` `.flatten()` produces Chain → Flatten
-- `[E]` `.getField()` produces Chain → GetField
-- `[E]` `.tag()` produces Chain → tag composition
-- `[E]` postfix methods are chainable
 
 **Execution tests (all `[N]`):**
-- constant(42) returns 42
-- constant("hello") returns "hello" *(migrate from run.test.ts)*
-- constant({x: 1}) returns object *(migrate from run.test.ts)*
-- constant(null) returns null *(migrate from run.test.ts)*
-- identity passes through input *(migrate from run.test.ts)*
-- drop returns null
-- panic halts pipeline (test that runPipeline rejects)
 - range(0, 5) returns [0, 1, 2, 3, 4]
 - range(3, 3) returns []
-- wrapInField("foo")(42) → {foo: 42}
-- merge([{a: 1}, {b: 2}]) → {a: 1, b: 2}
+- range(2, 5) returns [2, 3, 4]
 - flatten([[1, 2], [3]]) → [1, 2, 3]
 - flatten([]) → []
-- getField("name")({name: "alice", age: 30}) → "alice"
+- flatten([[], [1], []]) → [1]
 - getIndex(0) on [10, 20, 30] → Option.Some(10)
+- getIndex(2) on [10, 20, 30] → Option.Some(30)
 - getIndex(5) on [10, 20, 30] → Option.None
 - getIndex(0) on [] → Option.None
-- pick("a", "b") from {a: 1, b: 2, c: 3} → {a: 1, b: 2}
 - splitFirst on [1, 2, 3] → Some([1, [2, 3]])
+- splitFirst on [42] → Some([42, []])
 - splitFirst on [] → None
 - splitLast on [1, 2, 3] → Some([[1, 2], 3])
+- splitLast on [42] → Some([[], 42])
 - splitLast on [] → None
 - first on [10, 20] → Some(10)
 - first on [] → None
 - last on [10, 20] → Some(20)
 - last on [] → None
+
+### `tagged-union.test.ts`
+
+**Type tests:**
+- `[N]` tag: `T → TaggedUnion<TEnumName, TDef>`
+- `[N]` extractPrefix: untyped (transforms kind string)
+- `[N]` taggedUnionSchema: produces correct Zod type
+
+**AST structure tests:**
+- `[E]` `.tag()` produces Chain → tag composition AST
+- `[E]` postfix methods are chainable (tag-related subset)
+
+**Execution tests (all `[N]`):**
 - tag("Ok", "Result")(42) → {kind: "Result.Ok", value: 42}
 - tag("None", "Option")(null) → {kind: "Option.None", value: null}
+- tag("Foo", "MyEnum")("bar") → {kind: "MyEnum.Foo", value: "bar"}
 - extractPrefix on {kind: "Result.Ok", value: 42} → {kind: "Result", value: {kind: "Result.Ok", value: 42}}
-- withResource: create acquires, action runs, dispose cleans up, returns action output
+- extractPrefix on {kind: "NoDot", value: 1} → {kind: "NoDot", value: {kind: "NoDot", value: 1}}
+- matchPrefix dispatches to "Result" arm for Result.Ok input
+- matchPrefix dispatches to "Option" arm for Option.Some input
+- taggedUnionSchema validates correct values
+- taggedUnionSchema rejects incorrect values
+- taggedUnionSchema with void variant (z.null())
+
+### `with-resource.test.ts`
+
+**Type tests:**
+- `[N]` withResource: `TIn → TOut` (create/action/dispose lifecycle types)
+
+**Execution tests (all `[N]`):**
+- withResource: create acquires, action uses resource, dispose cleans up, returns action output
+- withResource: dispose runs even when action produces a value (not an error — no tryCatch here)
+- withResource: resource fields merged with input for action
 
 ### `option.test.ts`
 
@@ -282,7 +381,7 @@ Below: `[E]` = existing test (migrated), `[N]` = new test to add.
 - `[E]` pipe rejects unrelated types (ts-expect-error)
 
 **Execution tests:**
-- `[E]` multi-step pipeline (constant → setup → build) *(migrate from run.test.ts)*
+- `[E]` multi-step pipeline (constant → setup → build) *(from run.test.ts)*
 - `[N]` pipe of 4+ steps through handlers
 - `[N]` .then() postfix chains correctly
 - `[N]` chain(a, b) is equivalent to pipe(a, b)
@@ -296,6 +395,8 @@ Below: `[E]` = existing test (migrated), `[N]` = new test to add.
 - `[E]` phantom __def on tagged unions
 - `[E]` postfix .branch(): input preserved, output is union
 - `[E]` postfix .branch() + .drop() compose
+- `[E]` rejects .map() on non-Option/Result output
+- `[E]` rejects .map() on different tagged union
 
 **AST structure tests:**
 - `[E]` branch accepts cases with same output type
@@ -305,8 +406,6 @@ Below: `[E]` = existing test (migrated), `[N]` = new test to add.
 **Execution tests (all `[N]`):**
 - branch dispatches on kind string, extracts value, routes to correct case
 - branch with 3+ cases selects the right one
-- matchPrefix dispatches Option correctly (prefix = "Option")
-- matchPrefix dispatches Result correctly (prefix = "Result")
 - postfix .branch() on handler output dispatches correctly
 
 ### `forEach.test.ts`
@@ -443,34 +542,44 @@ Below: `[E]` = existing test (migrated), `[N]` = new test to add.
 
 ## Migration strategy
 
-1. Create new test files one at a time, starting with `builtins.test.ts` (foundational).
-2. For each new file: copy existing tests from patterns/types/run, then add new tests.
-3. After all new files are created and passing, delete `patterns.test.ts`, `types.test.ts`, `run.test.ts`.
-4. Run full suite after each file to catch regressions.
+1. Split `builtins.ts` into `scalar.ts`, `struct.ts`, `array.ts`, `tagged-union.ts`, `with-resource.ts`. Update `builtins.ts` to re-export. Update `index.ts`.
+2. Create test files one at a time, starting with `scalar.test.ts` (simplest, most foundational).
+3. For each new test file: copy existing tests from patterns/types/run, then add new execution tests.
+4. After all new files pass, delete `patterns.test.ts`, `types.test.ts`, `run.test.ts`.
+5. Run full suite after each file to catch regressions.
 
 Order of implementation:
-1. `builtins.test.ts` — foundation, most new execution tests
-2. `option.test.ts` — depends on builtins being tested
-3. `result.test.ts` — parallel with option
-4. `pipe.test.ts` — core combinator
-5. `branch.test.ts` — dispatching, matchPrefix
-6. `forEach.test.ts` — simple
-7. `all.test.ts` — simple
-8. `loop.test.ts` — complex control flow
-9. `bind.test.ts` — effect system
-10. `effects.test.ts` — tryCatch, race, timeout
-11. `handler.test.ts` — mostly migration
-12. Delete old files
+1. Split `builtins.ts` source (no test changes yet — just restructure source)
+2. `scalar.test.ts` — simplest, foundation
+3. `struct.test.ts` — struct operations
+4. `array.test.ts` — array operations
+5. `tagged-union.test.ts` — tag, extractPrefix, matchPrefix, taggedUnionSchema
+6. `with-resource.test.ts` — RAII composite
+7. `option.test.ts` — Option namespace
+8. `result.test.ts` — Result namespace
+9. `pipe.test.ts` — core combinator
+10. `branch.test.ts` — dispatching
+11. `forEach.test.ts` — simple
+12. `all.test.ts` — simple
+13. `loop.test.ts` — complex control flow
+14. `bind.test.ts` — effect system
+15. `effects.test.ts` — tryCatch, race, timeout
+16. `handler.test.ts` — mostly migration
+17. Delete old test files
 
 ## Test counts
 
 | File | Existing (migrated) | New | Total |
 |------|--------------------:|----:|------:|
-| `builtins.test.ts` | ~12 | ~32 | ~44 |
+| `scalar.test.ts` | ~6 | ~2 | ~8 |
+| `struct.test.ts` | ~3 | ~8 | ~11 |
+| `array.test.ts` | ~4 | ~23 | ~27 |
+| `tagged-union.test.ts` | ~2 | ~13 | ~15 |
+| `with-resource.test.ts` | 0 | ~4 | ~4 |
 | `option.test.ts` | ~17 | ~30 | ~47 |
 | `result.test.ts` | ~22 | ~36 | ~58 |
 | `pipe.test.ts` | ~12 | ~3 | ~15 |
-| `branch.test.ts` | ~11 | ~5 | ~16 |
+| `branch.test.ts` | ~13 | ~3 | ~16 |
 | `forEach.test.ts` | ~3 | ~5 | ~8 |
 | `all.test.ts` | ~5 | ~3 | ~8 |
 | `loop.test.ts` | ~14 | ~5 | ~19 |
@@ -479,7 +588,7 @@ Order of implementation:
 | `handler.test.ts` | ~40 | ~3 | ~43 |
 | `schema.test.ts` | ~60 | 0 | ~60 |
 | `round-trip.test.ts` | ~6 | 0 | ~6 |
-| **Total** | **~230** | **~134** | **~364** |
+| **Total** | **~235** | **~150** | **~385** |
 
 ## Execution test infrastructure
 
