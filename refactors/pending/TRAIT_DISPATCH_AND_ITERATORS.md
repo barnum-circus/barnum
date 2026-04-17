@@ -151,14 +151,16 @@ All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → oper
 |--------|----------------|-----------|----------------|-------|
 | `.map(f)` | `Iterator::map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
 | `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → flatten → rewrap | Rust calls this `flat_map`; we use `andThen` for consistency |
+| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` (see open questions). Needed for demos. |
 | `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
 | `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → Option wrap | Exit Iterator, enter Option |
+
+All Phase 1 methods exist in both forms: postfix (`.map(f)`) and standalone (`Iter.map(f)`). Standalone forms are `TypedAction` values composable into pipelines.
 
 ### Future — add when needed
 
 | Method | Rust equivalent | Signature | Implementation | Notes |
 |--------|----------------|-----------|----------------|-------|
-| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` (see open questions) |
 | `.find(pred)` | `Iterator::find` | `Iterator<T> → Option<T>` | Unwrap → `forEach(pred)` → collectSome → first | Exits Iterator, enters Option. Not short-circuiting |
 | `.collectResult()` | `collect::<Result<Vec,E>>` | `Iterator<Result<T,E>> → Result<T[],E>` | Unwrap → fold with short-circuit on Err | Exit Iterator, enter Result |
 | `.collectOption()` | `collect::<Option<Vec>>` | `Iterator<Option<T>> → Option<T[]>` | Unwrap → fold with short-circuit on None | Exit Iterator, enter Option |
@@ -289,15 +291,127 @@ The `ForEach` AST node itself is unchanged. It's an implementation detail, not u
 
 ---
 
+## Demo migration plan
+
+Each demo that uses `forEach` (postfix or standalone) needs to migrate to Iterator. Specific changes:
+
+### `identify-and-address-refactors/run.ts`
+
+```ts
+// BEFORE (line 54): flat_map — each file produces Refactor[], then flatten
+forEach(analyze).flatten(),
+
+// AFTER: andThen is flat_map
+constant({ folder: srcDir }).then(listTargetFiles)
+  .iterate()
+  .andThen(analyze)
+
+// BEFORE (line 57): filter — assess each, collect Somes
+forEach(assessWorthiness).then(Option.collect()),
+
+// AFTER: filter with Option predicate
+  .filter(assessWorthiness)
+
+// BEFORE (line 60-66): map with resource
+forEach(withResource({ ... })),
+
+// AFTER:
+  .map(withResource({ ... }))
+  .collect(),
+```
+
+Full pipeline becomes:
+```ts
+pipe(
+  constant({ folder: srcDir }),
+  listTargetFiles,
+  Iter.iterate(),               // T[] → Iterator<T>
+  Iter.andThen(analyze),        // flat_map: each file → Refactor[]
+  Iter.filter(assessWorthiness),// keep only worthwhile (Option predicate)
+  Iter.map(withResource({ create: createBranchWorktree, action: implementAndReview, dispose: deleteWorktree })),
+  Iter.collect(),               // Iterator<T> → T[]
+)
+```
+
+### `convert-folder-to-ts/run.ts`
+
+```ts
+// BEFORE (line 26):
+listFiles.forEach(migrate({ to: "Typescript" })).drop(),
+
+// AFTER:
+listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
+```
+
+### `simple-workflow/run.ts`
+
+```ts
+// BEFORE (line 18):
+listFiles.forEach(pipe(implementRefactor, typeCheckFiles, fixTypeErrors, commitChanges, createPullRequest)),
+
+// AFTER:
+listFiles.iterate().map(pipe(implementRefactor, typeCheckFiles, fixTypeErrors, commitChanges, createPullRequest)).collect(),
+```
+
+### `babysit-prs/run.ts`
+
+```ts
+// BEFORE (lines 44-56):
+forEach(bindInput<number>((prNumber) => prNumber.then(checkPR).branch({...}))),
+Option.collect<number>(),
+
+// AFTER: filter replaces forEach + Option.collect
+Iter.iterate(),
+Iter.filter(bindInput<number>((prNumber) => prNumber.then(checkPR).branch({...}))),
+Iter.collect(),
+```
+
+### `*/handlers/type-check-fix.ts` (both demos)
+
+```ts
+// BEFORE (line 148):
+HasErrors: forEach(fix).drop().then(recur),
+
+// AFTER:
+HasErrors: Iter.iterate().then(Iter.map(fix)).then(Iter.collect()).drop().then(recur),
+// or with postfix:
+HasErrors: pipe(Iter.iterate(), Iter.map(fix), Iter.collect(), drop, recur),
+```
+
+---
+
+## Testing
+
+Per `refactors/PROCESS.md`, every implementation task follows test-first:
+
+1. **Commit 1:** Add failing tests for Iterator type, `Iter` namespace methods, `.iterate()` postfix, and each Iterator postfix method (map, andThen, filter, collect, first). Tests assert correct behavior but fail because the implementation doesn't exist yet.
+2. **Commit 2:** Implement the feature, making tests pass.
+3. **Commit 3:** Remove failure markers.
+
+Tests should cover:
+- `Iter.wrap` produces `{ kind: "Iterator.Iterator", value: [...] }`
+- `Iter.map(f)` transforms each element and re-wraps
+- `Iter.andThen(f)` flat-maps and re-wraps
+- `Iter.filter(pred)` keeps Somes, discards Nones, re-wraps
+- `Iter.collect()` unwraps to plain array
+- `Iter.first()` returns `Option<T>` (Some for non-empty, None for empty)
+- `.iterate()` on Option (Some → `[value]`, None → `[]`)
+- `.iterate()` on Result (Ok → `[value]`, Err → `[]`)
+- `.iterate()` on arrays (direct wrap)
+- Phase 2 migration: existing tests that use `.map()`, `.forEach()`, `.andThen()` on Option/Result are updated to use Iterator equivalents
+
+---
+
 ## Priority
 
 **Phase 0** (done): `matchPrefix` + `ExtractPrefix` prefix-based dispatch, `unwrapOr`, `unwrap`, `mapErr`, `transpose`, `Panic` builtin
 
 **Phase 1** (Iterator foundation — implement now):
 - `Iterator<T>` tagged wrapper type + `IteratorDef`
-- `Iter` namespace with standalone methods
+- `Iter` namespace with standalone methods (`Iter.wrap`, `Iter.map`, `Iter.andThen`, `Iter.filter`, `Iter.collect`, `Iter.first`, `Iter.iterate`)
 - `.iterate()` postfix method (uses `matchPrefix` for Option/Result, direct wrap for arrays)
-- Iterator postfix methods: `.map()`, `.andThen()`, `.collect()`, `.first()`
+- Iterator postfix methods: `.map()`, `.andThen()`, `.filter()`, `.collect()`, `.first()`
+- Tests for all of the above
 
 **Phase 2** (migration — remove shared postfix methods):
 - Remove `.map()`, `.andThen()`, `.forEach()` postfix methods from Option/Result/arrays
@@ -305,7 +419,7 @@ The `ForEach` AST node itself is unchanged. It's an implementation detail, not u
 - Remove multi-family `matchPrefix` dispatch from `mapMethod`, `andThenMethod`
 
 **Phase 3** (Iterator expansion — add when needed):
-- `.filter()`, `.find()`, `.last()`
+- `.find()`, `.last()`
 - `.collectResult()`, `.collectOption()`
 - `.any()`, `.all()`, `.count()`, `.nth()`
 - `.enumerate()`, `.take()`, `.skip()`
