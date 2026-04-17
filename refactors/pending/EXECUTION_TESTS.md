@@ -63,18 +63,29 @@ src/builtins/
 | `builtins/with-resource.ts` | `withResource` | RAII composite — already complex enough for its own file. |
 | `builtins/index.ts` | Re-exports everything | All internal imports (`from "./builtins.js"`) continue to work unchanged. |
 
-### Files that stay
+### Optional future: group AST node constructors
+
+`pipe.ts`, `chain.ts`, `all.ts`, `bind.ts`, `try-catch.ts`, `race.ts`, `recursive.ts` are scattered at `src/` top level alongside `ast.ts`. These could be grouped into a folder, but `ast.ts` has circular dependency entanglements (postfix methods import constructors, constructors import types) that make the split nontrivial. Defer until the file count becomes painful.
+
+### Files that stay at `src/` top level
+
+Everything except `builtins.ts` stays where it is:
 
 | File | Contents |
 |------|----------|
-| `src/option.ts` | Option namespace + `first()`, `last()` (these compose splitFirst/splitLast with Option.map) |
+| `src/ast.ts` | Core types, `forEach`, `branch`, `matchPrefix`, `loop`, `recur`, `earlyReturn`, postfix methods |
+| `src/option.ts` | Option namespace + `first()`, `last()` |
 | `src/result.ts` | Result namespace |
-| `src/ast.ts` | Core types, `matchPrefix`, postfix method implementations |
-| `src/pipe.ts`, `src/chain.ts`, `src/all.ts`, etc. | Already modular |
+| `src/pipe.ts`, `chain.ts`, `all.ts`, `bind.ts`, `try-catch.ts`, `race.ts`, `recursive.ts` | Node constructors |
+| `src/handler.ts` | `createHandler`, `createHandlerWithConfig` |
+| `src/schema.ts` | `zodToCheckedJsonSchema` |
+| `src/run.ts` | `runPipeline` |
+| `src/effect-id.ts` | Effect ID allocation |
+| `src/index.ts` | Public barrel export |
 
 ### Import changes
 
-`builtins/index.ts` re-exports everything, so all existing `import { ... } from "./builtins.js"` sites continue to resolve. `index.ts` exports from `./builtins/index.js` instead of `./builtins.js`. No other files need to change their imports.
+`builtins/index.ts` is a barrel re-export, so all existing `import { ... } from "./builtins.js"` sites resolve unchanged. `src/index.ts` exports from `./builtins/index.js` instead of `./builtins.js`.
 
 ---
 
