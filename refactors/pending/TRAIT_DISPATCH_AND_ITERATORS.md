@@ -245,7 +245,7 @@ files                                        // File[]
    - `T → bool` (requires a new `FilterByBool` builtin in Rust)
    - Recommendation: `T → Option<T>`. Different from Rust but internally consistent.
 
-4. **Short-circuit semantics**: Rust's `Iterator::find`, `Iterator::any`, `Iterator::all` all short-circuit. In barnum, `forEach` processes all elements eagerly. True short-circuit needs engine support (early exit from ForEach). For now, compose eagerly. Deliberate semantic difference from Rust.
+4. ~~**Short-circuit semantics**~~ **Not an issue now:** All Phase 1 methods (map, andThen, filter, collect) are inherently non-short-circuiting. Short-circuit matters for find/any/all — those are future phases.
 
 5. **`collect` destination types**: Rust's `Iterator::collect` is generic over the destination type via `FromIterator`. Barnum uses separate named methods:
    - `.collect()` → `T[]` (default, like `Vec`)
