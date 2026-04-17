@@ -46,8 +46,9 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
       Some: chain(toAction(action), toAction(Option.some)),
       None: Option.none,
     }),
-    // Single-variant: no inner branch needed. matchPrefix unwraps to
-    // { kind: "Iterator.Iterator", value: T[] }, so getField("value") extracts T[].
+    // Single variant — no inner branch needed. matchPrefix outer branch
+    // auto-unwraps to { kind: "Iterator.Iterator", value: T[] }.
+    // getField("value") extracts the T[] for the array operation.
     Iterator: chain(
       toAction(getField("value")),
       toAction(forEach(action)),
