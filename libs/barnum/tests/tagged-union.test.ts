@@ -177,6 +177,32 @@ describe("tagged-union execution", () => {
     expect(result).toBe("hello");
   });
 
+  it("branchFamily dispatches to 'Array' arm for bare array input", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant([10, 20, 30]),
+        branchFamily({
+          Array: identity(),
+          Option: branch({ Some: identity(), None: identity() }),
+        }),
+      ),
+    );
+    expect(result).toEqual([10, 20, 30]);
+  });
+
+  it("branchFamily dispatches to 'Array' arm for empty array input", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant([]),
+        branchFamily({
+          Array: identity(),
+          Option: branch({ Some: identity(), None: identity() }),
+        }),
+      ),
+    );
+    expect(result).toEqual([]);
+  });
+
   it("taggedUnionSchema validates correct values", () => {
     const schema = taggedUnionSchema("Result", {
       Ok: z.number(),

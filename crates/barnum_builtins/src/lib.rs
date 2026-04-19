@@ -205,12 +205,16 @@ pub async fn execute_builtin(
         }
 
         BuiltinKind::ExtractPrefix => {
+            // Array fallback: if input is an array (no `kind` field), wrap as Array family.
+            if input.is_array() {
+                return Ok(json!({ "kind": "Array", "value": input }));
+            }
             let kind_str = input
                 .get("kind")
                 .and_then(Value::as_str)
                 .ok_or_else(|| BuiltinError::TypeMismatch {
                     builtin: "ExtractPrefix",
-                    expected: "object with string 'kind' field",
+                    expected: "object with string 'kind' field, or array",
                     actual: input.clone(),
                 })?;
             let prefix = kind_str
@@ -519,5 +523,25 @@ mod tests {
         let result =
             execute_builtin(&BuiltinKind::ExtractPrefix, &json!({"kind": 123})).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn extract_prefix_array_fallback() {
+        let input = json!([1, 2, 3]);
+        let result = execute_builtin(&BuiltinKind::ExtractPrefix, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Array", "value": [1, 2, 3]})
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_prefix_empty_array_fallback() {
+        let input = json!([]);
+        let result = execute_builtin(&BuiltinKind::ExtractPrefix, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Array", "value": []})
+        );
     }
 }
