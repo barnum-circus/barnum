@@ -47,7 +47,7 @@ export function tag<
  * Output: `{ kind: "Result", value: { kind: "Result.Ok", value: 42 } }`
  *
  * If `kind` contains no `'.'`, the entire kind string becomes the prefix.
- * Used internally by `matchPrefix` for two-level dispatch.
+ * Used internally by `branchFamily` for two-level dispatch.
  */
 export function extractPrefix(): TypedAction {
   return typedAction({

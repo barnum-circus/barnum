@@ -5,7 +5,7 @@ import {
   type ExtractOutput,
   pipe,
   branch,
-  matchPrefix,
+  branchFamily,
 } from "../src/ast.js";
 import {
   constant,
@@ -151,11 +151,11 @@ describe("tagged-union execution", () => {
     });
   });
 
-  it("matchPrefix dispatches to 'Result' arm for Result.Ok input", async () => {
+  it("branchFamily dispatches to 'Result' arm for Result.Ok input", async () => {
     const result = await runPipeline(
       pipe(
         constant({ kind: "Result.Ok", value: 42 }),
-        matchPrefix({
+        branchFamily({
           Result: branch({ Ok: identity(), Err: identity() }),
           Option: branch({ Some: identity(), None: identity() }),
         }),
@@ -164,11 +164,11 @@ describe("tagged-union execution", () => {
     expect(result).toBe(42);
   });
 
-  it("matchPrefix dispatches to 'Option' arm for Option.Some input", async () => {
+  it("branchFamily dispatches to 'Option' arm for Option.Some input", async () => {
     const result = await runPipeline(
       pipe(
         constant({ kind: "Option.Some", value: "hello" }),
-        matchPrefix({
+        branchFamily({
           Result: branch({ Ok: identity(), Err: identity() }),
           Option: branch({ Some: identity(), None: identity() }),
         }),

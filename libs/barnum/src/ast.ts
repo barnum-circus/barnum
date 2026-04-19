@@ -576,10 +576,10 @@ function splitLastMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(splitLast()));
 }
 
-// --- Shared postfix methods (Option + Result) — dispatch via matchPrefix ---
+// --- Shared postfix methods (Option + Result) — dispatch via branchFamily ---
 
 function mapMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
+  return chain(toAction(this), toAction(branchFamily({
     Result: branch({
       Ok: chain(toAction(action), toAction(Result.ok())),
       Err: Result.err(),
@@ -592,28 +592,28 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
 }
 
 function unwrapMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
+  return chain(toAction(this), toAction(branchFamily({
     Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
     Option: branch({ Some: identity(), None: panic("called unwrap on None") }),
   })));
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
+  return chain(toAction(this), toAction(branchFamily({
     Result: branch({ Ok: identity(), Err: defaultAction }),
     Option: branch({ Some: identity(), None: defaultAction }),
   })));
 }
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
+  return chain(toAction(this), toAction(branchFamily({
     Result: branch({ Ok: action, Err: Result.err() }),
     Option: branch({ Some: action, None: Option.none() }),
   })));
 }
 
 function transposeMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
+  return chain(toAction(this), toAction(branchFamily({
     Option: branch({
       Some: branch({
         Ok: chain(toAction(Option.some()), toAction(Result.ok())),
@@ -863,9 +863,9 @@ export function branch<TCases extends Record<string, Action>>(
  * etc.) to dispatch across union families (Option, Result) without runtime
  * metadata.
  *
- * `matchPrefix({ Result: ..., Option: ... })` ≡ `chain(extractPrefix(), branch(cases))`
+ * `branchFamily({ Result: ..., Option: ... })` ≡ `chain(extractPrefix(), branch(cases))`
  */
-export function matchPrefix(cases: Record<string, Action>): TypedAction {
+export function branchFamily(cases: Record<string, Action>): TypedAction {
   return typedAction({
     kind: "Chain",
     first: toAction(extractPrefix()),
