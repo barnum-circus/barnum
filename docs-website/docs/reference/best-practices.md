@@ -16,7 +16,7 @@ pipe(getUserProfile, getField<UserProfile, "email">("email"))
 getUserProfile.getField("email")
 ```
 
-This applies to every combinator that has a postfix form: `.then()`, `.forEach()`, `.branch()`, `.drop()`, `.tag()`, `.merge()`, `.flatten()`, `.getField()`, `.getIndex()`, `.pick()`, `.wrapInField()`, `.splitFirst()`, `.splitLast()`, `.mapOption()`, `.mapErr()`, `.unwrapOr()`.
+This applies to every combinator that has a postfix form: `.then()`, `.iterate()`, `.map()`, `.flatMap()`, `.filter()`, `.collect()`, `.branch()`, `.drop()`, `.tag()`, `.merge()`, `.flatten()`, `.getField()`, `.getIndex()`, `.pick()`, `.wrapInField()`, `.splitFirst()`, `.splitLast()`, `.mapErr()`, `.unwrapOr()`.
 
 ## Prefer `.then()` over `pipe()`
 
@@ -24,10 +24,10 @@ Postfix `.then()` is the primary way to chain steps. It reads naturally and infe
 
 ```ts
 // Avoid
-pipe(listFiles, forEach(processFile), commit)
+pipe(listFiles, Iterator.fromArray(), Iterator.map(processFile), Iterator.collect(), commit)
 
 // Prefer
-listFiles.forEach(processFile).then(commit)
+listFiles.iterate().map(processFile).collect().then(commit)
 ```
 
 `pipe()` is available as an alternative but rarely needed — `.then()` chains work at any length.

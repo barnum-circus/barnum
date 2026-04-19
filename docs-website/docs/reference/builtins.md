@@ -22,7 +22,7 @@ Up to 10 actions. Zero arguments returns identity; one argument wraps the action
 **Postfix:** `.then(next)` chains a single action.
 
 ```ts
-listFiles.forEach(processFile).then(commit)
+listFiles.iterate().map(processFile).collect().then(commit)
 ```
 
 ---
@@ -65,9 +65,107 @@ function chain<T1, T2, T3>(
 
 ---
 
-### `forEach(action)`
+### Iterator methods
 
-Apply an action to each element of an array, concurrently.
+The Iterator pattern is the preferred way to transform collections. It provides `.map()`, `.flatMap()`, `.filter()`, and `.collect()` — all building on the `ForEach` AST node internally.
+
+#### `.iterate()` — enter Iterator
+
+Converts an array, Option, or Result into an `Iterator<T>` via `branchFamily` dispatch.
+
+```ts
+// On arrays: T[] → Iterator<T>
+// On Option<T>: Some → Iterator with one element, None → empty Iterator
+// On Result<T, E>: Ok → Iterator with one element, Err → empty Iterator
+```
+
+**Postfix:** Yes — `.iterate()`. Available when output is `T[]`, `Option<T>`, or `Result<T, E>`.
+
+```ts
+listFiles.iterate()           // TypedAction<void, Iterator<string>>
+option.iterate()              // TypedAction<In, Iterator<T>>
+result.iterate()              // TypedAction<In, Iterator<T>>
+```
+
+#### `.map(f)` — transform each element
+
+Apply an action to each element (parallel). Stays in Iterator.
+
+```ts
+// Iterator<T> → Iterator<U>
+```
+
+**Postfix:** Yes — `.map(action)`. Available when output is `Iterator<T>`, `Option<T>`, or `Result<T, E>`.
+
+```ts
+listFiles.iterate().map(processFile)
+// Iterator<string> → Iterator<ProcessResult>
+```
+
+#### `.flatMap(f)` — flat-map with IntoIterator
+
+Apply an action to each element where `f` returns any IntoIterator type (Iterator, Option, Result, or array). Results are flattened into a single Iterator.
+
+```ts
+// Iterator<T> → Iterator<U>
+// f can return: U[], Option<U>, Result<U, E>, or Iterator<U>
+```
+
+**Postfix:** Yes — `.flatMap(action)`. Available when output is `Iterator<T>`.
+
+```ts
+files.iterate().flatMap(analyze)
+// analyze: File → Refactor[] (array is IntoIterator), results concatenated
+```
+
+#### `.filter(pred)` — keep matching elements
+
+Keep elements where the predicate returns `true`.
+
+```ts
+// Iterator<T> → Iterator<T>
+// pred: T → boolean
+```
+
+**Postfix:** Yes — `.filter(predicate)`. Available when output is `Iterator<T>`.
+
+```ts
+files.iterate().filter(isRelevant)
+// Iterator<File> → Iterator<File> (only relevant files kept)
+```
+
+#### `.collect()` — exit Iterator
+
+Unwrap Iterator back to a plain array.
+
+```ts
+// Iterator<T> → T[]
+```
+
+**Postfix:** Yes — `.collect()`. Available when output is `Iterator<T>`.
+
+```ts
+listFiles.iterate().map(processFile).collect()
+// Iterator<ProcessResult> → ProcessResult[]
+```
+
+#### Standalone constructors
+
+```ts
+Iterator.fromArray<TElement>()    // T[] → Iterator<T>
+Iterator.fromOption<TElement>()   // Option<T> → Iterator<T>
+Iterator.fromResult<TElement, TError>()  // Result<T, E> → Iterator<T>
+Iterator.map<TIn, TOut>(action)   // Iterator<TIn> → Iterator<TOut>
+Iterator.flatMap<TIn, TOut>(action) // Iterator<TIn> → Iterator<TOut>
+Iterator.filter<T>(predicate)     // Iterator<T> → Iterator<T>
+Iterator.collect<T>()             // Iterator<T> → T[]
+```
+
+---
+
+### `forEach(action)` (low-level)
+
+Apply an action to each element of an array, concurrently. This is the underlying `ForEach` AST node — **prefer Iterator methods** (`.iterate().map(f).collect()`) for user-facing code.
 
 ```ts
 function forEach<TIn, TOut>(
@@ -75,11 +173,14 @@ function forEach<TIn, TOut>(
 ): TypedAction<TIn[], TOut[]>
 ```
 
-**Postfix:** Yes — `.forEach(action)`. **Prefer postfix** — it infers the element type from the preceding action's array output.
+**Postfix:** Yes — `.forEach(action)`. Available but prefer `.iterate().map(action).collect()`.
 
 ```ts
-listFiles.forEach(processFile)
-// Input: string[] → Output: ProcessResult[]
+// Low-level (still works):
+listFiles.then(forEach(processFile))
+
+// Preferred:
+listFiles.iterate().map(processFile).collect()
 ```
 
 ---
@@ -404,6 +505,39 @@ function flatten<TElement>(): TypedAction<TElement[][], TElement[]>
 
 ---
 
+### `extractPrefix()`
+
+Split a namespaced `kind` string (e.g., `"Option.Some"`) into a two-level structure for `branchFamily` dispatch. When the input has no `kind` field and is an array, produces `{ kind: "Array", value: input }` as a fallback — this enables `branchFamily` to dispatch arrays alongside Option/Result/Iterator.
+
+```ts
+function extractPrefix(): TypedAction<
+  { kind: string; value: unknown },
+  { kind: string; value: { kind: string; value: unknown } }
+>
+```
+
+**Postfix:** No. This is an internal builtin used by `branchFamily` — not typically called directly.
+
+---
+
+### `asOption()`
+
+Convert a boolean to `Option<void>`. `true` produces `Some(void)`, `false` produces `None`. Used internally by `Iterator.filter()` to convert boolean predicates into Option values for flatMap-based filtering.
+
+```ts
+function asOption(): TypedAction<boolean, Option<void>>
+```
+
+**Postfix:** Yes — `.asOption()`. Available when output is `boolean`.
+
+```ts
+isValid.asOption()
+// true → { kind: "Option.Some", value: null }
+// false → { kind: "Option.None", value: null }
+```
+
+---
+
 ### `getField(field)` / `.getField(field)`
 
 Extract a single field from an object.
@@ -724,7 +858,7 @@ This is the main entry point. It serializes the pipeline AST to JSON, resolves t
 
 ```ts
 await runPipeline(
-  listFiles.forEach(processFile).then(commit),
+  listFiles.iterate().map(processFile).collect().then(commit),
 );
 ```
 
@@ -737,7 +871,12 @@ These methods are available on any `TypedAction` via dot-chaining. **Always pref
 | Method | Standalone equivalent | Notes |
 |---|---|---|
 | `.then(next)` | `chain(a, next)` | |
-| `.forEach(action)` | `chain(a, forEach(action))` | Requires array output |
+| `.iterate()` | `Iterator.fromArray()` / `Iterator.fromOption()` / `Iterator.fromResult()` | Requires array, Option, or Result output |
+| `.map(action)` | `Iterator.map(action)` | Requires Iterator output (also works on Option, Result) |
+| `.flatMap(action)` | `Iterator.flatMap(action)` | Requires Iterator output; `action` returns any IntoIterator |
+| `.filter(pred)` | `Iterator.filter(pred)` | Requires Iterator output; pred returns boolean |
+| `.collect()` | `Iterator.collect()` | Requires Iterator output; unwraps to `T[]` |
+| `.forEach(action)` | `chain(a, forEach(action))` | Low-level; requires array output; prefer `.iterate().map(action).collect()` |
 | `.branch(cases)` | `chain(a, branch(cases))` | Requires tagged union output |
 | `.drop()` | `chain(a, drop)` | |
 | `.tag(kind)` | `chain(a, tag(kind))` | |
@@ -750,6 +889,7 @@ These methods are available on any `TypedAction` via dot-chaining. **Always pref
 | `.splitFirst()` | `chain(a, splitFirst())` | Requires array output |
 | `.splitLast()` | `chain(a, splitLast())` | Requires array output |
 | `.augment()` | `augment(a)` | Merges output back into input |
+| `.asOption()` | `asOption()` | Requires boolean output; converts to `Option<void>` |
 | `.mapOption(action)` | `chain(a, Option.map(action))` | Requires `Option` output |
 | `.mapErr(action)` | `chain(a, Result.mapErr(action))` | Requires `Result` output |
 | `.unwrapOr(default)` | `chain(a, Result.unwrapOr(default))` | Requires `Result` output |

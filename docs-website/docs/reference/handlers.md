@@ -6,7 +6,7 @@ A handler is an async function wrapped in `createHandler`. The wrapper does thre
 
 1. **Registers the handler** with the Barnum runtime by recording its file path and export name.
 2. **Attaches Zod validators** (optional) so input and output are validated at runtime via JSON Schema.
-3. **Returns a `TypedAction`** that can be composed with combinators like `pipe`, `forEach`, `branch`, etc.
+3. **Returns a `TypedAction`** that can be composed with combinators like `.then()`, `.iterate()`, `.branch()`, etc.
 
 Handlers run in isolated subprocesses. Each invocation gets its own process — handlers never share memory with each other or with the orchestrator.
 
@@ -36,7 +36,7 @@ function createHandler<TValue = never, TOutput = unknown>(
 
 ### Return type
 
-Returns a `Handler`, which is a `TypedAction` branded with runtime metadata. It can be passed directly to any combinator (`pipe`, `forEach`, `branch`, etc.) or used with postfix methods (`.then()`, `.forEach()`, etc.).
+Returns a `Handler`, which is a `TypedAction` branded with runtime metadata. It can be passed directly to any combinator or used with postfix methods (`.then()`, `.iterate()`, `.branch()`, etc.).
 
 If `handle` returns `Promise<void>`, the output type is `never` — fire-and-forget handlers compose naturally without needing `.drop()`.
 
@@ -174,7 +174,7 @@ export const migrate = createHandlerWithConfig({
 }, "migrate");
 
 // In the workflow — config is baked in at composition time
-listFiles.forEach(migrate({ to: "TypeScript" }));
+listFiles.iterate().map(migrate({ to: "TypeScript" })).collect();
 ```
 
 The same [rules](#rules) apply: the handler must be exported, and the export name must match.

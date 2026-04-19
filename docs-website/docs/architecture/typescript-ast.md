@@ -1,6 +1,6 @@
 # TypeScript AST
 
-Barnum's TypeScript library is a DSL that produces a serializable AST. `listFiles.then(forEach(refactor))` builds a JSON tree describing the workflow structure. The Rust runtime receives this tree and executes it.
+Barnum's TypeScript library is a DSL that produces a serializable AST. `listFiles.iterate().map(refactor).collect()` builds a JSON tree describing the workflow structure. The Rust runtime receives this tree and executes it.
 
 The DSL maintains three properties:
 
@@ -53,13 +53,14 @@ Phantom fields use `?:` (optional) because they're never assigned. At runtime, a
 
 ### Non-enumerable methods
 
-`TypedAction` also has methods (`.then()`, `.forEach()`, `.branch()`, `.drop()`, etc.) attached via `Object.defineProperties` as **non-enumerable**:
+`TypedAction` also has methods (`.then()`, `.iterate()`, `.map()`, `.branch()`, `.drop()`, etc.) attached via `Object.defineProperties` as **non-enumerable**:
 
 ```ts
 function typedAction(action: Action): TypedAction {
   Object.defineProperties(action, {
     then: { value: thenMethod, configurable: true },
-    forEach: { value: forEachMethod, configurable: true },
+    iterate: { value: iterateMethod, configurable: true },
+    map: { value: mapMethod, configurable: true },
     branch: { value: branchMethod, configurable: true },
     // ...
   });
@@ -83,7 +84,19 @@ pipe(a, b, c)
 
 `pipe` right-folds its arguments into nested `Chain` nodes. The TypeScript overloads (up to 12 arguments) enforce that each step's output matches the next step's input.
 
-### forEach
+### Iterator (user-facing API)
+
+The Iterator pattern is the preferred way to work with collections. It wraps the `ForEach` AST node in a higher-level interface:
+
+```ts
+listFiles.iterate().map(refactor).collect()
+// Produces: Chain(listFiles, Chain(BranchFamily→wrap, Chain(GetField("value"), Chain(ForEach(refactor), Tag("Iterator","Iterator")))))
+//   ...then Chain(GetField("value"))
+```
+
+`.iterate()` wraps the array as `Iterator<T>` via `branchFamily` dispatch. `.map(f)` unwraps, applies `ForEach(f)`, and re-wraps. `.collect()` unwraps the Iterator back to `T[]`. The underlying `ForEach` node is still the execution primitive — Iterator provides the ergonomic layer.
+
+### forEach (low-level primitive)
 
 ```ts
 forEach(action)
@@ -91,7 +104,7 @@ forEach(action)
 // Type: TypedAction<In[], Out[]>
 ```
 
-When chained after an action that outputs `string[]`, `forEach` applies the inner action to each element and collects results back into an array.
+`ForEach` is the fundamental AST node for element-wise parallel operations. It applies the inner action to each array element and collects results. Iterator's `.map()`, `.flatMap()`, and `.filter()` all compile down to `ForEach` internally. The standalone `forEach(action)` combinator is available but Iterator methods are preferred for user-facing code.
 
 ### all
 
@@ -191,11 +204,13 @@ Internally:
 
 ```ts
 const workflow = listFiles
-  .then(forEach(refactor.then(typeCheck).then(fix)))
+  .iterate()
+  .map(refactor.then(typeCheck).then(fix))
+  .collect()
   .drop();
 ```
 
-Serializes to:
+The Iterator methods compile down to the same fundamental AST nodes. `.iterate()` wraps via `BranchFamily` dispatch, `.map(f)` uses `ForEach`, and `.collect()` uses `GetField("value")`. The serialized AST contains `ForEach` nodes — Iterator is purely a TypeScript-level abstraction:
 
 ```json
 {
@@ -204,14 +219,26 @@ Serializes to:
     "kind": "Chain",
     "first": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./steps.ts", "func": "listFiles" } },
     "rest": {
-      "kind": "ForEach",
-      "action": {
+      "kind": "Chain",
+      "first": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "Tag", "prefix": "Iterator", "kind_": "Iterator" } } },
+      "rest": {
         "kind": "Chain",
-        "first": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./steps.ts", "func": "refactor" } },
+        "first": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "GetField", "field": "value" } } },
         "rest": {
           "kind": "Chain",
-          "first": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./steps.ts", "func": "typeCheck" } },
-          "rest": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./steps.ts", "func": "fix" } }
+          "first": {
+            "kind": "ForEach",
+            "action": {
+              "kind": "Chain",
+              "first": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./steps.ts", "func": "refactor" } },
+              "rest": {
+                "kind": "Chain",
+                "first": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./steps.ts", "func": "typeCheck" } },
+                "rest": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./steps.ts", "func": "fix" } }
+              }
+            }
+          },
+          "rest": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "Tag", "prefix": "Iterator", "kind_": "Iterator" } } }
         }
       }
     }
@@ -220,4 +247,4 @@ Serializes to:
 }
 ```
 
-No types, no methods, no phantom fields. Just structure. The Rust runtime deserializes this into `Action` variants via serde and executes it.
+No types, no methods, no phantom fields. Just structure. The Rust runtime deserializes this into `Action` variants via serde and executes it. Note that Iterator methods compile away entirely — the AST contains only `ForEach`, `GetField`, `Tag`, and other fundamental nodes.

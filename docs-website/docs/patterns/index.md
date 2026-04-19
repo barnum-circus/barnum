@@ -5,7 +5,7 @@ Patterns are the technical building blocks of Barnum workflows. Each pattern iso
 | Pattern | Combinator | What it does |
 |---|---|---|
 | [Serial execution](./serial-execution.md) | `pipe`, `.then()` | Chain steps sequentially |
-| [Parallel execution](./parallel-execution.md) | `all`, `forEach` | Run work concurrently, collect results |
+| [Parallel execution](./parallel-execution.md) | `all`, `.iterate().map()` | Run work concurrently, collect results |
 | [Branching](./branching.md) | `branch` | Route on tagged unions |
 | [Looping](./looping.md) | `loop` | Retry until a condition is met |
 | [Error handling](./error-handling.md) | `tryCatch` | Catch failures, route to recovery |
