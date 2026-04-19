@@ -247,7 +247,6 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
 | `Result.flatten()` | `Result<Result<T, E>, E> → Result<T, E>` | composable | `Result.andThen(identity())` |
-| `Result.and(action)` | `Result<T, E> → Result<U, E>` | composable | `andThen` where body ignores input |
 
 ---
 
