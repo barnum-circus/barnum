@@ -489,10 +489,9 @@ jobs:
   deploy-website:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [gate-docs, build-website, test, demo-tests]
+    needs: [build-website, test, demo-tests]
     if: >-
       always() &&
-      needs.gate-docs.outputs.skip != 'true' &&
       needs.build-website.result == 'success' &&
       (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       (needs.demo-tests.result == 'success' || needs.demo-tests.result == 'skipped') &&
@@ -516,8 +515,8 @@ jobs:
           commit_message: 'Deploy docs from barnum@${{ github.sha }}'
 
   publish:
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [gate-rust, typecheck, vitest, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [typecheck, vitest, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
