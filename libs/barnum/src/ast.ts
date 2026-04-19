@@ -207,6 +207,12 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     kind: TKind,
     enumName: TEnumName,
   ): TypedAction<In, TaggedUnion<TEnumName, TDef>>;
+  /** Wrap output as `Option.Some`. `T → Option<T>` */
+  some(): TypedAction<In, Option<Out>>;
+  /** Wrap output as `Result.Ok`. `T → Result<T, unknown>` */
+  ok(): TypedAction<In, Result<Out, unknown>>;
+  /** Wrap output as `Result.Err`. `T → Result<unknown, T>` */
+  err(): TypedAction<In, Result<unknown, Out>>;
   /** Extract a field from the output object. `a.getField("name")` ≡ `pipe(a, getField("name"))`. */
   getField<TField extends keyof Out & string>(
     field: TField,
@@ -529,6 +535,18 @@ function tagMethod(this: TypedAction, kind: string, enumName: string): TypedActi
   return chain(toAction(this), toAction(tag(kind, enumName)));
 }
 
+function someMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(Option.some()));
+}
+
+function okMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(Result.ok()));
+}
+
+function errMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(Result.err()));
+}
+
 function getFieldMethod(this: TypedAction, field: string): TypedAction {
   return chain(toAction(this), toAction(getField(field)));
 }
@@ -716,6 +734,9 @@ export function typedAction<In = unknown, Out = unknown>(
       flatten: { value: flattenMethod, configurable: true },
       drop: { value: dropMethod, configurable: true },
       tag: { value: tagMethod, configurable: true },
+      some: { value: someMethod, configurable: true },
+      ok: { value: okMethod, configurable: true },
+      err: { value: errMethod, configurable: true },
       getField: { value: getFieldMethod, configurable: true },
       getIndex: { value: getIndexMethod, configurable: true },
       wrapInField: { value: wrapInFieldMethod, configurable: true },
