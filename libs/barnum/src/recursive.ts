@@ -51,6 +51,12 @@ const UNUSED_STATE = null;
  * is Chain(Tag("CallN"), ResumePerform(id)). The handler dispatches to the
  * correct function body by tag. The caller's pipeline is preserved as a
  * ResumePerformFrame across each call.
+ *
+ * **Known limitation:** concurrent calls to the same function do not work
+ * as expected. `all(f(x), f(x))` will NOT call `f` twice — both branches
+ * perform on the same ResumeHandle, and the second perform will not
+ * execute independently. Use sequential calls (chain/then) instead of
+ * concurrent calls (all) when calling recursive functions multiple times.
  */
 export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
   bodiesFn: (...fns: FunctionRefs<TDefs>) => {
