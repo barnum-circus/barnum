@@ -10,7 +10,7 @@ export {
   getField,
   getIndex,
   identity,
-  merge,
+
   panic,
   pick,
   range,

@@ -10,8 +10,6 @@ import {
   constant,
   identity,
   getField,
-  merge,
-  wrapInField,
 } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import {
@@ -76,16 +74,6 @@ describe("all AST structure", () => {
     expect(cfg.workflow.kind).toBe("Chain");
   });
 
-  it("reader monad: all + identity + merge preserves context", () => {
-    const cfg = config(
-      pipe(
-        constant({ initialized: true, project: "test" }),
-        all(identity(), build),
-        merge<[{ initialized: boolean; project: string }, { artifact: string }]>(),
-      ),
-    );
-    expect(cfg.workflow.kind).toBe("Chain");
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -130,14 +118,4 @@ describe("all execution", () => {
     expect(result).toEqual(["hello", 42]);
   });
 
-  it("all + merge produces merged object", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(10),
-        all(wrapInField("a"), wrapInField("b")),
-        merge(),
-      ),
-    );
-    expect(result).toEqual({ a: 10, b: 10 });
-  });
 });

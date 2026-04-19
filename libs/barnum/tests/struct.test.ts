@@ -9,7 +9,6 @@ import {
   constant,
   getField,
   wrapInField,
-  merge,
   pick,
 } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
@@ -35,17 +34,6 @@ describe("struct type tests", () => {
       IsExact<ExtractInput<typeof action>, { name: string; age: number }>
     >();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
-    expect(action.kind).toBe("Invoke");
-  });
-
-  it("merge: [A, B] -> A & B", () => {
-    const action = merge<[{ a: number }, { b: string }]>();
-    assertExact<
-      IsExact<ExtractInput<typeof action>, [{ a: number }, { b: string }]>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, { a: number } & { b: string }>
-    >();
     expect(action.kind).toBe("Invoke");
   });
 
@@ -123,20 +111,6 @@ describe("struct execution", () => {
       pipe(constant({ x: [1, 2] }), wrapInField("data")),
     );
     expect(result).toEqual({ data: { x: [1, 2] } });
-  });
-
-  it("merge combines two objects", async () => {
-    const result = await runPipeline(
-      pipe(constant([{ a: 1 }, { b: 2 }]), merge()),
-    );
-    expect(result).toEqual({ a: 1, b: 2 });
-  });
-
-  it("merge combines three objects", async () => {
-    const result = await runPipeline(
-      pipe(constant([{ a: 1 }, { b: 2 }, { c: 3 }]), merge()),
-    );
-    expect(result).toEqual({ a: 1, b: 2, c: 3 });
   });
 
   it("pick selects named fields", async () => {

@@ -8,7 +8,6 @@ import {
   getField,
   getIndex,
   identity,
-  merge,
   panic,
   pick,
   splitFirst,
@@ -233,9 +232,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   wrapInField<TField extends string>(
     field: TField,
   ): TypedAction<In, Record<TField, Out>>;
-  /** Merge a tuple of objects into a single object. `a.merge()` ≡ `pipe(a, merge())`. */
-  merge(): TypedAction<In, MergeTuple<Out>>;
-  /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
+/** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
   ): TypedAction<In, Pick<Out, TKeys[number]>>;
@@ -626,10 +623,6 @@ function wrapInFieldMethod(this: TypedAction, field: string): TypedAction {
   return chain(toAction(this), toAction(wrapInField(field)));
 }
 
-function mergeMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(merge()));
-}
-
 function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
   return chain(toAction(this), toAction(pick(...keys)));
 }
@@ -826,7 +819,7 @@ export function typedAction<In = unknown, Out = unknown>(
       getField: { value: getFieldMethod, configurable: true },
       getIndex: { value: getIndexMethod, configurable: true },
       wrapInField: { value: wrapInFieldMethod, configurable: true },
-      merge: { value: mergeMethod, configurable: true },
+
       pick: { value: pickMethod, configurable: true },
       splitFirst: { value: splitFirstMethod, configurable: true },
       splitLast: { value: splitLastMethod, configurable: true },
