@@ -85,20 +85,25 @@ Struct operations take literal keys as type parameters. Distinct from hashmaps (
 
 Not yet supported. Future work — distinct type from structs.
 
+### Primitives (new builtins)
+
 | Name | Signature | Notes |
 |------|-----------|-------|
-| `HashMap.new()` | `void → Record<string, T>` | Constructor (empty map) |
-| `HashMap.fromEntries()` | `{key: string, value: T}[] → Record<string, T>` | Constructor |
-| `HashMap.get(key)` | `Record<string, T> → Option<T>` | Lookup |
-| `HashMap.insert(key, value)` | `Record<string, T> → Record<string, T>` | Add/overwrite |
-| `HashMap.remove(key)` | `Record<string, T> → Record<string, T>` | Remove |
-| `HashMap.containsKey(key)` | `Record<string, T> → boolean` | |
-| `HashMap.keys()` | `Record<string, T> → string[]` | |
-| `HashMap.values()` | `Record<string, T> → T[]` | |
-| `HashMap.entries()` | `Record<string, T> → {key: string, value: T}[]` | |
-| `HashMap.len()` | `Record<string, T> → number` | |
-| `HashMap.isEmpty()` | `Record<string, T> → boolean` | |
-| `.iterate()` | `Record<string, T> → Iterator<{key: string, value: T}>` | Implements IntoIterator via `branchFamily` dispatch |
+| `HashMap.new()` | `void → HashMap<T>` | Constructor (empty map) |
+| `HashMap.fromEntries()` | `{key: string, value: T}[] → HashMap<T>` | Constructor |
+| `HashMap.get(key)` | `HashMap<T> → Option<T>` | Lookup |
+| `HashMap.insert(key, value)` | `HashMap<T> → HashMap<T>` | Add/overwrite |
+| `HashMap.remove(key)` | `HashMap<T> → HashMap<T>` | Remove |
+| `HashMap.len()` | `HashMap<T> → number` | |
+| `.iterate()` | `HashMap<T> → Iterator<{key: string, value: T}>` | IntoIterator via `branchFamily` dispatch |
+
+### Composable (no new builtins)
+
+| Name | Signature | Notes |
+|------|-----------|-------|
+| `HashMap.containsKey(key)` | `HashMap<T> → boolean` | `.get(key).isSome()` |
+| `HashMap.isEmpty()` | `HashMap<T> → boolean` | `.len()` + compare to 0 |
+| keys/values/entries | via `.iterate()` | `.iterate().map(getField("key"))` etc. |
 
 ---
 
