@@ -1,4 +1,4 @@
-import type { TaggedUnion, OptionDef, ResultDef } from "./ast.js";
+import type { TaggedUnion, OptionDef, ResultDef, IteratorDef } from "./ast.js";
 
 export * from "./ast.js";
 export {
@@ -18,9 +18,11 @@ export {
   splitLast,
   wrapInField,
   taggedUnionSchema,
+  asOption,
 } from "./builtins/index.js";
 export { Option, first, last } from "./option.js";
 export { Result } from "./result.js";
+export { Iterator } from "./iterator.js";
 export { runPipeline, type RunPipelineOptions, type LogLevel } from "./run.js";
 export { zodToCheckedJsonSchema } from "./schema.js";
 
@@ -29,3 +31,4 @@ export { zodToCheckedJsonSchema } from "./schema.js";
 // type aliases here so consumers get both the type and value under one name.
 export type Option<T> = TaggedUnion<"Option", OptionDef<T>>;
 export type Result<TValue, TError> = TaggedUnion<"Result", ResultDef<TValue, TError>>;
+export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
