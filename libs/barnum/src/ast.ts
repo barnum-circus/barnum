@@ -562,12 +562,12 @@ function splitLastMethod(this: TypedAction): TypedAction {
 function mapMethod(this: TypedAction, action: Action): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
     Result: branch({
-      Ok: chain(toAction(action), toAction(Result.ok)),
-      Err: Result.err,
+      Ok: chain(toAction(action), toAction(Result.ok())),
+      Err: Result.err(),
     }),
     Option: branch({
-      Some: chain(toAction(action), toAction(Option.some)),
-      None: Option.none,
+      Some: chain(toAction(action), toAction(Option.some())),
+      None: Option.none(),
     }),
   })));
 }
@@ -588,8 +588,8 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
-    Result: branch({ Ok: action, Err: Result.err }),
-    Option: branch({ Some: action, None: Option.none }),
+    Result: branch({ Ok: action, Err: Result.err() }),
+    Option: branch({ Some: action, None: Option.none() }),
   })));
 }
 
@@ -597,17 +597,17 @@ function transposeMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
     Option: branch({
       Some: branch({
-        Ok: chain(toAction(Option.some), toAction(Result.ok)),
-        Err: Result.err,
+        Ok: chain(toAction(Option.some()), toAction(Result.ok())),
+        Err: Result.err(),
       }),
-      None: chain(toAction(chain(toAction(drop), toAction(Option.none))), toAction(Result.ok)),
+      None: chain(toAction(chain(toAction(drop), toAction(Option.none()))), toAction(Result.ok())),
     }),
     Result: branch({
       Ok: branch({
-        Some: chain(toAction(Result.ok), toAction(Option.some)),
-        None: chain(toAction(drop), toAction(Option.none)),
+        Some: chain(toAction(Result.ok()), toAction(Option.some())),
+        None: chain(toAction(drop), toAction(Option.none())),
       }),
-      Err: chain(toAction(Result.err), toAction(Option.some)),
+      Err: chain(toAction(Result.err()), toAction(Option.some())),
     }),
   })));
 }
@@ -616,14 +616,14 @@ function transposeMethod(this: TypedAction): TypedAction {
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: Result.ok,
-    Err: chain(toAction(action), toAction(Result.err)),
+    Ok: Result.ok(),
+    Err: chain(toAction(action), toAction(Result.err())),
   })));
 }
 
 function orMethod(this: TypedAction, fallback: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: Result.ok,
+    Ok: Result.ok(),
     Err: fallback,
   })));
 }
@@ -631,21 +631,21 @@ function orMethod(this: TypedAction, fallback: Action): TypedAction {
 function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
     Ok: chain(toAction(drop), toAction(other)),
-    Err: Result.err,
+    Err: Result.err(),
   })));
 }
 
 function toOptionMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: Option.some,
-    Err: chain(toAction(drop), toAction(Option.none)),
+    Ok: Option.some(),
+    Err: chain(toAction(drop), toAction(Option.none())),
   })));
 }
 
 function toOptionErrMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(branch({
-    Ok: chain(toAction(drop), toAction(Option.none)),
-    Err: Option.some,
+    Ok: chain(toAction(drop), toAction(Option.none())),
+    Err: Option.some(),
   })));
 }
 
@@ -666,7 +666,7 @@ function isErrMethod(this: TypedAction): TypedAction {
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
     Some: predicate,
-    None: Option.none,
+    None: Option.none(),
   })));
 }
 

@@ -1,5 +1,6 @@
 import {
   type Option as OptionT,
+  type OptionDef,
   type Pipeable,
   type Result as ResultT,
   type TypedAction,
@@ -31,15 +32,19 @@ import { Result } from "./result.js";
  */
 export const Option = {
   /** Tag combinator: wrap value as `Option.Some`. `T → Option<T>` */
-  some: tag("Some", "Option"),
+  some<T>(): TypedAction<T, OptionT<T>> {
+    return tag<"Option", OptionDef<T>, "Some">("Some", "Option");
+  },
   /** Tag combinator: wrap value as `Option.None`. `void → Option<T>` */
-  none: tag("None", "Option"),
+  none<T>(): TypedAction<void, OptionT<T>> {
+    return tag<"Option", OptionDef<T>, "None">("None", "Option");
+  },
 
   /** Transform the Some value. `Option<T> → Option<U>` */
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
     return branch({
-      Some: chain(toAction(action), toAction(Option.some)),
-      None: Option.none,
+      Some: chain(toAction(action), toAction(Option.some())),
+      None: Option.none(),
     }) as TypedAction<OptionT<T>, OptionT<U>>;
   },
 
@@ -52,7 +57,7 @@ export const Option = {
   ): TypedAction<OptionT<T>, OptionT<U>> {
     return branch({
       Some: action,
-      None: Option.none,
+      None: Option.none(),
     }) as TypedAction<OptionT<T>, OptionT<U>>;
   },
 
@@ -88,7 +93,7 @@ export const Option = {
   ): TypedAction<OptionT<T>, OptionT<T>> {
     return branch({
       Some: predicate,
-      None: Option.none,
+      None: Option.none(),
     }) as TypedAction<OptionT<T>, OptionT<T>>;
   },
 
@@ -137,10 +142,10 @@ export const Option = {
   > {
     return branch({
       Some: branch({
-        Ok: chain(toAction(Option.some), toAction(Result.ok)),
-        Err: Result.err,
+        Ok: chain(toAction(Option.some()), toAction(Result.ok())),
+        Err: Result.err(),
       }),
-      None: chain(toAction(chain(toAction(drop), toAction(Option.none))), toAction(Result.ok)),
+      None: chain(toAction(chain(toAction(drop), toAction(Option.none()))), toAction(Result.ok())),
     }) as TypedAction<
       OptionT<ResultT<TValue, TError>>,
       ResultT<OptionT<TValue>, TError>

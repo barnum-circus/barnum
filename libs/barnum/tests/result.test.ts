@@ -64,22 +64,21 @@ function resultErr<TValue, TError>(error: TError): TypedAction<any, Result<TValu
 
 describe("Result constructor type info", () => {
   it("Result.ok() retains value type", () => {
-    // @ts-expect-error — ok is currently a value, not a function
     const ok = R.ok<string>();
     assertExact<IsExact<ExtractInput<typeof ok>, string>>();
     assertExact<IsExact<ExtractOutput<typeof ok>, Result<string, unknown>>>();
   });
 
   it("Result.err() retains error type", () => {
-    // @ts-expect-error — err is currently a value, not a function
     const err = R.err<unknown, number>();
     assertExact<IsExact<ExtractInput<typeof err>, number>>();
   });
 
   it("Result.ok() infers type from chain context", () => {
-    // @ts-expect-error — ok is currently a value, not a function
+    // @ts-expect-error — R.ok() eagerly evaluates to TypedAction<unknown, ...>;
+    // TypeScript can't backward-infer TValue from .then() context
     const result = constant("hello").then(R.ok());
-    // @ts-expect-error — result is any until constructors are functions
+    // @ts-expect-error — result type is wrong because TValue wasn't inferred
     assertExact<IsExact<ExtractOutput<typeof result>, Result<string, unknown>>>();
   });
 });

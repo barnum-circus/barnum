@@ -61,22 +61,21 @@ function optionNone<T>(): TypedAction<any, Option<T>> {
 
 describe("Option constructor type info", () => {
   it("Option.some() retains element type", () => {
-    // @ts-expect-error — some is currently a value, not a function
     const some = O.some<number>();
     assertExact<IsExact<ExtractInput<typeof some>, number>>();
     assertExact<IsExact<ExtractOutput<typeof some>, Option<number>>>();
   });
 
   it("Option.none() retains element type", () => {
-    // @ts-expect-error — none is currently a value, not a function
     const none = O.none<string>();
     assertExact<IsExact<ExtractOutput<typeof none>, Option<string>>>();
   });
 
   it("Option.some() infers type from chain context", () => {
-    // @ts-expect-error — some is currently a value, not a function
+    // @ts-expect-error — O.some() eagerly evaluates to TypedAction<unknown, ...>;
+    // TypeScript can't backward-infer T from .then() context
     const result = constant(42).then(O.some());
-    // @ts-expect-error — result is any until constructors are functions
+    // @ts-expect-error — result type is wrong because T wasn't inferred
     assertExact<IsExact<ExtractOutput<typeof result>, Option<number>>>();
   });
 });

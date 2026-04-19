@@ -2,6 +2,7 @@ import {
   type Option as OptionT,
   type Pipeable,
   type Result as ResultT,
+  type ResultDef,
   type TypedAction,
   toAction,
   branch,
@@ -16,17 +17,21 @@ import { Option } from "./option.js";
 
 export const Result = {
   /** Tag combinator: wrap value as `Result.Ok`. `TValue → Result<TValue, TError>` */
-  ok: tag("Ok", "Result"),
+  ok<TValue, TError = unknown>(): TypedAction<TValue, ResultT<TValue, TError>> {
+    return tag<"Result", ResultDef<TValue, TError>, "Ok">("Ok", "Result");
+  },
   /** Tag combinator: wrap value as `Result.Err`. `TError → Result<TValue, TError>` */
-  err: tag("Err", "Result"),
+  err<TValue = unknown, TError = never>(): TypedAction<TError, ResultT<TValue, TError>> {
+    return tag<"Result", ResultDef<TValue, TError>, "Err">("Err", "Result");
+  },
 
   /** Transform the Ok value. `Result<TValue, TError> → Result<TOut, TError>` */
   map<TValue, TOut, TError>(
     action: Pipeable<TValue, TOut>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return branch({
-      Ok: chain(toAction(action), toAction(Result.ok)),
-      Err: Result.err,
+      Ok: chain(toAction(action), toAction(Result.ok())),
+      Err: Result.err(),
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
   },
 
@@ -35,8 +40,8 @@ export const Result = {
     action: Pipeable<TError, TErrorOut>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return branch({
-      Ok: Result.ok,
-      Err: chain(toAction(action), toAction(Result.err)),
+      Ok: Result.ok(),
+      Err: chain(toAction(action), toAction(Result.err())),
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>;
   },
 
@@ -49,7 +54,7 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return branch({
       Ok: action,
-      Err: Result.err,
+      Err: Result.err(),
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
   },
 
@@ -58,7 +63,7 @@ export const Result = {
     fallback: Pipeable<TError, ResultT<TValue, TErrorOut>>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return branch({
-      Ok: Result.ok,
+      Ok: Result.ok(),
       Err: fallback,
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>;
   },
@@ -69,7 +74,7 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return branch({
       Ok: chain(drop, other),
-      Err: Result.err,
+      Err: Result.err(),
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
   },
 
@@ -105,8 +110,8 @@ export const Result = {
     OptionT<TValue>
   > {
     return branch({
-      Ok: Option.some,
-      Err: chain(toAction(drop), toAction(Option.none)),
+      Ok: Option.some(),
+      Err: chain(toAction(drop), toAction(Option.none())),
     }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>;
   },
 
@@ -118,8 +123,8 @@ export const Result = {
     OptionT<TError>
   > {
     return branch({
-      Ok: chain(toAction(drop), toAction(Option.none)),
-      Err: Option.some,
+      Ok: chain(toAction(drop), toAction(Option.none())),
+      Err: Option.some(),
     }) as TypedAction<ResultT<TValue, TError>, OptionT<TError>>;
   },
 
@@ -133,10 +138,10 @@ export const Result = {
   > {
     return branch({
       Ok: branch({
-        Some: chain(toAction(Result.ok), toAction(Option.some)),
-        None: chain(toAction(drop), toAction(Option.none)),
+        Some: chain(toAction(Result.ok()), toAction(Option.some())),
+        None: chain(toAction(drop), toAction(Option.none())),
       }),
-      Err: chain(toAction(Result.err), toAction(Option.some)),
+      Err: chain(toAction(Result.err()), toAction(Option.some())),
     }) as TypedAction<
       ResultT<OptionT<TValue>, TError>,
       OptionT<ResultT<TValue, TError>>

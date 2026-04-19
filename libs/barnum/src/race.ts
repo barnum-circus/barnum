@@ -144,13 +144,13 @@ export function withTimeout<TIn, TOut>(
 
   // Branch 1: body → Tag("Ok") → Break → RestartPerform
   const bodyBranch = toAction(chain(
-    toAction(chain(toAction(body), toAction(Result.ok))),
+    toAction(chain(toAction(body), toAction(Result.ok()))),
     toAction(perform),
   ));
 
   // Branch 2: ms → sleep() → Tag("Err") → Break → RestartPerform
   const sleepBranch = toAction(chain(
-    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(Result.err))),
+    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(Result.err()))),
     toAction(perform),
   ));
 
