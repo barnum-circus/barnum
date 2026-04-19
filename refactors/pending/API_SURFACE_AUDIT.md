@@ -127,18 +127,11 @@ Not yet supported. Future work — distinct type from structs.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `Arr.length()` | `T[] → number` | proposed | New `ArrayLength` builtin |
+| `Arr.length()` | `T[] → number` | proposed | New `ArrayLength` builtin. Also powers `Iterator.count()`. |
 | `Arr.isEmpty()` | `T[] → boolean` | proposed | |
 | `Arr.join(sep)` | `string[] → string` | proposed | New builtin |
-| `Arr.reverse()` | `T[] → T[]` | proposed | New `Reverse` builtin |
-| `Arr.take(n)` | `T[] → T[]` | proposed | New `Take` builtin |
-| `Arr.skip(n)` | `T[] → T[]` | proposed | New `Skip` builtin |
-| `Arr.contains(v)` | `T[] → boolean` | proposed | |
-| `Arr.enumerate()` | `T[] → [number, T][]` | proposed | New `Enumerate` builtin |
-| `Arr.sortBy(f)` | `T[] → T[]` | proposed | New `SortBy` AST node |
-| `Arr.unique()` | `T[] → T[]` | proposed | |
-| `Arr.zip()` | `[T[], U[]] → [T, U][]` | proposed | Binary |
-| `Arr.append()` | `[T[], T[]] → T[]` | proposed | Binary concat |
+
+Other array operations (reverse, take, skip, enumerate, sortBy, unique, zip, append, contains) belong on Iterator. Use `.iterate()` to enter the Iterator API.
 
 ---
 
@@ -191,6 +184,7 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `.partition(pred)` | `Iterator<T> → [T[], T[]]` | proposed (needs scan) | |
 | `.zip(other)` | `(Iterator<T>, Iterator<U>) → Iterator<[T, U]>` | proposed | New `Zip` builtin |
 | `.sortBy(f)` | `Iterator<T> → Iterator<T>` | proposed | New `SortBy` AST node |
+| `.unique()` | `Iterator<T> → Iterator<T>` | proposed | New `Unique` builtin |
 
 ---
 
@@ -390,7 +384,7 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [ ] Refactor `tag`, `pick`, `withResource` to use `allObject` internally
 
 ### Lower priority
-- [ ] Arr: reverse, take, skip, contains, enumerate, sortBy, unique, zip, append
-- [ ] Iterator: take, skip, reverse, chain, zip, sortBy, partition, takeWhile, skipWhile, chunks, windows
+- [ ] Arr: length, isEmpty, join
+- [ ] Iterator: take, skip, reverse, chain, zip, sortBy, unique, partition, takeWhile, skipWhile, chunks, windows, contains/any, append/concat
 - [ ] Option: zip
 - [ ] HashMap: first-class support
