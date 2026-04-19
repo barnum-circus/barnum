@@ -6,7 +6,6 @@ import {
   type OptionDef,
   type Result,
   type ResultDef,
-  type TypedAction,
   pipe,
   forEach,
 } from "../src/ast.js";
@@ -47,35 +46,35 @@ function expectedTagAst(kind: string) {
   };
 }
 
-// Helpers for constructing typed Option values in execution tests
-function optionSome<T>(value: T): TypedAction<any, Option<T>> {
-  return pipe(constant(value), tag<"Option", OptionDef<T>, "Some">("Some", "Option"));
-}
-function optionNone<T>(): TypedAction<any, Option<T>> {
-  return pipe(constant(null), tag<"Option", OptionDef<T>, "None">("None", "Option"));
-}
-
 // ---------------------------------------------------------------------------
 // Type tests
 // ---------------------------------------------------------------------------
 
 describe("Option constructor type info", () => {
-  it("Option.some() retains element type", () => {
+  it("Option.some<T>() retains element type with explicit param", () => {
     const some = O.some<number>();
     assertExact<IsExact<ExtractInput<typeof some>, number>>();
     assertExact<IsExact<ExtractOutput<typeof some>, Option<number>>>();
   });
 
-  it("Option.none() retains element type", () => {
+  it("Option.none<T>() retains element type with explicit param", () => {
     const none = O.none<string>();
     assertExact<IsExact<ExtractOutput<typeof none>, Option<string>>>();
   });
 
-  it("Option.some() infers type from chain context", () => {
-    // @ts-expect-error — O.some() eagerly evaluates to TypedAction<unknown, ...>;
-    // TypeScript can't backward-infer T from .then() context
-    const result = constant(42).then(O.some());
-    // @ts-expect-error — result type is wrong because T wasn't inferred
+  it("postfix .some() infers type from output", () => {
+    const result = constant(42).some();
+    assertExact<IsExact<ExtractOutput<typeof result>, Option<number>>>();
+  });
+
+  it("pipe(x, Option.some<T>()) retains type with explicit param", () => {
+    const result = pipe(constant(42), O.some<number>());
+    assertExact<IsExact<ExtractOutput<typeof result>, Option<number>>>();
+  });
+
+  it("pipe(x, Option.some()) does not infer T from pipe context", () => {
+    const result = pipe(constant(42), O.some());
+    // @ts-expect-error — T defaults to unknown; pipe accepts it but output is Option<unknown>
     assertExact<IsExact<ExtractOutput<typeof result>, Option<number>>>();
   });
 });
@@ -260,26 +259,26 @@ describe("Option AST structure", () => {
 describe("Option execution", () => {
   // -- Construction --
   it("Option.some wraps value", async () => {
-    const result = await runPipeline(optionSome(42));
+    const result = await runPipeline(constant(42).some());
     expect(result).toEqual({ kind: "Option.Some", value: 42 });
   });
 
   it("Option.none produces None", async () => {
-    const result = await runPipeline(optionNone<number>());
+    const result = await runPipeline(pipe(constant(null), O.none<number>()));
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   // -- map --
   it("Option.map on Some transforms value", async () => {
     const result = await runPipeline(
-      pipe(optionSome(10), O.map(constant(20))),
+      pipe(constant(10).some(), O.map(constant(20))),
     );
     expect(result).toEqual({ kind: "Option.Some", value: 20 });
   });
 
   it("Option.map on None stays None", async () => {
     const result = await runPipeline(
-      pipe(optionNone<number>(), O.map(constant(999))),
+      pipe(pipe(constant(null), O.none<number>()), O.map(constant(999))),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
@@ -288,7 +287,7 @@ describe("Option execution", () => {
   it("Option.andThen on Some, action returns Some -> Some", async () => {
     const result = await runPipeline(
       pipe(
-        optionSome(5),
+        constant(5).some(),
         O.andThen<number, number>(pipe(constant(10), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
       ),
     );
@@ -298,7 +297,7 @@ describe("Option execution", () => {
   it("Option.andThen on Some, action returns None -> None", async () => {
     const result = await runPipeline(
       pipe(
-        optionSome(5),
+        constant(5).some(),
         O.andThen<number, number>(pipe(drop, tag<"Option", OptionDef<number>, "None">("None", "Option"))),
       ),
     );
@@ -308,7 +307,7 @@ describe("Option execution", () => {
   it("Option.andThen on None -> None", async () => {
     const result = await runPipeline(
       pipe(
-        optionNone<number>(),
+        pipe(constant(null), O.none<number>()),
         O.andThen<number, number>(pipe(constant(10), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
       ),
     );
@@ -318,28 +317,28 @@ describe("Option execution", () => {
   // -- unwrap --
   it("Option.unwrap on Some extracts value", async () => {
     const result = await runPipeline(
-      pipe(optionSome(42), O.unwrap()),
+      pipe(constant(42).some(), O.unwrap()),
     );
     expect(result).toBe(42);
   });
 
   it("Option.unwrap on None panics", async () => {
     await expect(
-      runPipeline(pipe(optionNone<number>(), O.unwrap())),
+      runPipeline(pipe(pipe(constant(null), O.none<number>()), O.unwrap())),
     ).rejects.toThrow();
   });
 
   // -- unwrapOr --
   it("Option.unwrapOr on Some returns value", async () => {
     const result = await runPipeline(
-      pipe(optionSome(42), O.unwrapOr(constant(0))),
+      pipe(constant(42).some(), O.unwrapOr(constant(0))),
     );
     expect(result).toBe(42);
   });
 
   it("Option.unwrapOr on None runs fallback", async () => {
     const result = await runPipeline(
-      pipe(optionNone<number>(), O.unwrapOr(constant(0))),
+      pipe(pipe(constant(null), O.none<number>()), O.unwrapOr(constant(0))),
     );
     expect(result).toBe(0);
   });
@@ -348,7 +347,7 @@ describe("Option execution", () => {
   it("Option.filter on Some where predicate returns Some -> keeps", async () => {
     const result = await runPipeline(
       pipe(
-        optionSome(42),
+        constant(42).some(),
         O.filter<number>(pipe(identity(), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
       ),
     );
@@ -358,7 +357,7 @@ describe("Option execution", () => {
   it("Option.filter on Some where predicate returns None -> drops", async () => {
     const result = await runPipeline(
       pipe(
-        optionSome(42),
+        constant(42).some(),
         O.filter<number>(pipe(drop, tag<"Option", OptionDef<number>, "None">("None", "Option"))),
       ),
     );
@@ -368,7 +367,7 @@ describe("Option execution", () => {
   it("Option.filter on None -> None", async () => {
     const result = await runPipeline(
       pipe(
-        optionNone<number>(),
+        pipe(constant(null), O.none<number>()),
         O.filter<number>(pipe(identity(), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
       ),
     );
@@ -399,22 +398,22 @@ describe("Option execution", () => {
 
   // -- isSome / isNone --
   it("Option.isSome on Some -> true", async () => {
-    const result = await runPipeline(pipe(optionSome(1), O.isSome()));
+    const result = await runPipeline(pipe(constant(1).some(), O.isSome()));
     expect(result).toBe(true);
   });
 
   it("Option.isSome on None -> false", async () => {
-    const result = await runPipeline(pipe(optionNone<number>(), O.isSome()));
+    const result = await runPipeline(pipe(pipe(constant(null), O.none<number>()), O.isSome()));
     expect(result).toBe(false);
   });
 
   it("Option.isNone on Some -> false", async () => {
-    const result = await runPipeline(pipe(optionSome(1), O.isNone()));
+    const result = await runPipeline(pipe(constant(1).some(), O.isNone()));
     expect(result).toBe(false);
   });
 
   it("Option.isNone on None -> true", async () => {
-    const result = await runPipeline(pipe(optionNone<number>(), O.isNone()));
+    const result = await runPipeline(pipe(pipe(constant(null), O.none<number>()), O.isNone()));
     expect(result).toBe(true);
   });
 
@@ -447,7 +446,7 @@ describe("Option execution", () => {
   it("Option.transpose None -> Ok(None)", async () => {
     type Inner = Result<number, string>;
     const result = await runPipeline(
-      pipe(optionNone<Inner>(), O.transpose()),
+      pipe(pipe(constant(null), O.none<Inner>()), O.transpose()),
     );
     expect(result).toEqual({
       kind: "Result.Ok",
@@ -457,27 +456,27 @@ describe("Option execution", () => {
 
   // -- Postfix dispatch --
   it("postfix .map on Option output dispatches correctly", async () => {
-    const result = await runPipeline(optionSome(42).map(constant(99)));
+    const result = await runPipeline(constant(42).some().map(constant(99)));
     expect(result).toEqual({ kind: "Option.Some", value: 99 });
   });
 
   it("postfix .unwrap on Option output", async () => {
-    const result = await runPipeline(optionSome(42).unwrap());
+    const result = await runPipeline(constant(42).some().unwrap());
     expect(result).toBe(42);
   });
 
   it("postfix .unwrapOr on Option output", async () => {
-    const result = await runPipeline(optionNone<number>().unwrapOr(constant(99)));
+    const result = await runPipeline(pipe(constant(null), O.none<number>()).unwrapOr(constant(99)));
     expect(result).toBe(99);
   });
 
   it("postfix .isSome on Option output", async () => {
-    const result = await runPipeline(optionSome(42).isSome());
+    const result = await runPipeline(constant(42).some().isSome());
     expect(result).toBe(true);
   });
 
   it("postfix .isNone on Option output", async () => {
-    const result = await runPipeline(optionSome(42).isNone());
+    const result = await runPipeline(constant(42).some().isNone());
     expect(result).toBe(false);
   });
 });
