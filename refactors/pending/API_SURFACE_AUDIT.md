@@ -112,12 +112,7 @@ Not yet supported. Future work — distinct type from structs.
 |------|-----------|--------|-------|
 | `range(start, end)` | `any → number[]` | exists | Constant array, input ignored |
 | `forEach(action)` | `T[] → U[]` | exists, postfix | Low-level parallel map. **Prefer `.iterate().map(action).collect()`.** |
-| `getIndex(n)` | `T[] → Option<T[N]>` | exists, postfix | Returns `Option`. Compose `.unwrap()` for known-present. |
 | `flatten()` | `T[][] → T[]` | exists, postfix | One level of flattening |
-| `splitFirst()` | `T[] → Option<[T, T[]]>` | exists, postfix | Head/tail decomposition |
-| `splitLast()` | `T[] → Option<[T[], T]>` | exists, postfix | Init/last decomposition |
-| `first()` | `T[] → Option<T>` | exists | Standalone. Composes `splitFirst` + `Option.map(getIndex(0).unwrap())`. |
-| `last()` | `T[] → Option<T>` | exists | Standalone. Composes `splitLast` + `Option.map(getIndex(1).unwrap())`. |
 | `.iterate()` | `T[] → Iterator<T>` | exists, postfix | Enter Iterator |
 
 ### Proposed
@@ -167,9 +162,11 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `.filterMap(f)` | `Iterator<T> → Iterator<U>` | composable | `flatMap(f)` where `f: T → Option<U>` |
 | `.flatten()` | `Iterator<IntoIter<T>> → Iterator<T>` | composable | `flatMap(identity())` |
 | `.enumerate()` | `Iterator<T> → Iterator<[number, T]>` | proposed | New `Enumerate` builtin |
-| `.first()` / `.last()` | `Iterator<T> → Option<T>` | composable | `collect` → `splitFirst`/`splitLast` → `Option.map(getIndex)` |
+| `.splitFirst()` | `Iterator<T> → Option<[T, Iterator<T>]>` | composable | `.collect()` → `SplitFirst` builtin, re-wrap tail |
+| `.splitLast()` | `Iterator<T> → Option<[Iterator<T>, T]>` | composable | `.collect()` → `SplitLast` builtin, re-wrap init |
+| `.first()` / `.last()` | `Iterator<T> → Option<T>` | composable | `.collect()` → `getIndex(0)` / `getIndex(-1)` |
 | `.find(pred)` | `Iterator<T> → Option<T>` | composable | `filter(pred).first()` |
-| `.nth(n)` | `Iterator<T> → Option<T>` | composable | `collect` → `getIndex(n)` |
+| `.nth(n)` | `Iterator<T> → Option<T>` | composable | `.collect()` → `GetIndex` builtin |
 | `.count()` | `Iterator<T> → number` | proposed | New `ArrayLength` builtin |
 | `.isEmpty()` | `Iterator<T> → boolean` | composable | `.count()` + compare to 0 |
 | `.any(pred)` | `Iterator<T> → boolean` | composable | `find(pred).isSome()` |
@@ -264,8 +261,6 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 |------|-----------|--------|-------|
 | `taggedUnionSchema(enumName, cases)` | Zod schema constructor | exists | Builds `z.discriminatedUnion` for `TaggedUnion` |
 | `asOption()` | `boolean → Option<void>` | exists | Standalone form of `.asOption()` postfix |
-| `first()` | `T[] → Option<T>` | exists | See array section |
-| `last()` | `T[] → Option<T>` | exists | See array section |
 | `runPipeline(pipeline, input?)` | `Action → Promise<TOut>` | exists | Execute a pipeline via the Rust runtime |
 | `zodToCheckedJsonSchema(schema)` | Zod schema → JSON Schema | exists | Validates and converts Zod schemas for handler definitions |
 | `config(workflow)` | `Action → Config` | exists | Wraps a pipeline for `runPipeline` |
@@ -291,6 +286,10 @@ These exist in the codebase but are not part of the public API. Kept for referen
 | Name | Notes |
 |------|-------|
 | `merge()` | Rust builtin. Merges a tuple of objects. Used internally by `pick`, `allObject`, `tag`, `withResource`. |
+| `splitFirst()` | Rust builtin. `T[] → Option<[T, T[]]>`. Used by Iterator `.splitFirst()`, `.first()`. |
+| `splitLast()` | Rust builtin. `T[] → Option<[T[], T]>`. Used by Iterator `.splitLast()`, `.last()`. |
+| `getIndex(n)` | Rust builtin. `T[] → Option<T>`. Used by Iterator `.nth(n)`. |
+| `first()` / `last()` | Composites. Used by Iterator `.first()`, `.last()`. |
 | `toAction()` | Strips phantom types from Pipeable → Action. |
 | `typedAction()` | Attaches postfix methods to a plain Action. |
 | `resetEffectIdCounter()` | Testing utility. Resets gensym counters. |
@@ -363,7 +362,9 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 ### Proposed: Iterator Phase 2 (see ITERATOR_METHODS.md)
 - [ ] `.filterMap(f)` — composable: type-constrained flatMap
 - [ ] `.flatten()` — composable: `flatMap(identity())`
-- [ ] `.first()` / `.last()` — composable
+- [ ] `.splitFirst()` / `.splitLast()` — composable (move from array to Iterator)
+- [ ] `.first()` / `.last()` — composable (move from standalone to Iterator)
+- [ ] `.nth(n)` — composable (move `getIndex` from array to Iterator)
 - [ ] `.find(pred)` — composable: `filter(pred).first()`
 - [ ] `.enumerate()` — new `Enumerate` builtin
 - [ ] `.count()` — new `ArrayLength` builtin
