@@ -5,9 +5,10 @@
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test": "turbo run test",
-    "prepare": "git config core.hooksPath .githooks"
+    "prepare": "husky"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
     "turbo": "^2.9.4",
     "typescript": "^6.0.3"
   }
