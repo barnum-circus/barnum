@@ -11,12 +11,7 @@ import {
   withTimeout,
   resetEffectIdCounter,
 } from "../src/ast.js";
-import {
-  constant,
-  drop,
-  getField,
-  identity,
-} from "../src/builtins/index.js";
+import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup, build, verify } from "./handlers.js";
 
@@ -48,13 +43,10 @@ describe("tryCatch type tests", () => {
   });
 
   it("throwError token is TypedAction<TError, never>", () => {
-    tryCatch(
-      (throwError) => {
-        assertExact<IsExact<typeof throwError, TypedAction<string, never>>>();
-        return identity();
-      },
-      identity(),
-    );
+    tryCatch((throwError) => {
+      assertExact<IsExact<typeof throwError, TypedAction<string, never>>>();
+      return identity();
+    }, identity());
   });
 
   it("recovery input type matches throwError payload type", () => {
@@ -75,15 +67,12 @@ describe("tryCatch type tests", () => {
             TypedAction<{ initialized: boolean; project: string }, never>
           >
         >();
-        return tryCatch(
-          (throwInner) => {
-            assertExact<
-              IsExact<typeof throwInner, TypedAction<{ artifact: string }, never>>
-            >();
-            return pipe(drop, constant({ verified: true }));
-          },
-          verify,
-        );
+        return tryCatch((throwInner) => {
+          assertExact<
+            IsExact<typeof throwInner, TypedAction<{ artifact: string }, never>>
+          >();
+          return pipe(drop, constant({ verified: true }));
+        }, verify);
       },
       pipe(build, verify),
     );
@@ -142,7 +131,9 @@ describe("withTimeout type tests", () => {
   it("withTimeout: preserves input, wraps output in Result<TOut, void>", () => {
     const action = withTimeout(constant(5000), verify);
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<{ verified: boolean }, void>>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Result<{ verified: boolean }, void>>
+    >();
   });
 
   it("withTimeout produces Chain(Tag(Continue), Handle(...)) AST", () => {
@@ -183,10 +174,7 @@ describe("tryCatch execution", () => {
 
   it("body succeeds, returns body result", async () => {
     const result = await runPipeline(
-      tryCatch(
-        (_throwError) => constant("success"),
-        constant("recovery"),
-      ),
+      tryCatch((_throwError) => constant("success"), constant("recovery")),
     );
     expect(result).toBe("success");
   });
@@ -224,9 +212,7 @@ describe("race execution", () => {
 
   it("race returns first completed result", async () => {
     // Both branches are constant (instant), but race should still return one of them
-    const result = await runPipeline(
-      race(constant("a"), constant("b")),
-    );
+    const result = await runPipeline(race(constant("a"), constant("b")));
     // Either "a" or "b" — both are valid. In practice, first branch wins.
     expect(["a", "b"]).toContain(result);
   });

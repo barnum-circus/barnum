@@ -16,22 +16,22 @@ import {
 import { classifyZero, subtractOne } from "./handlers/steps";
 
 runPipeline(
-  defineRecursiveFunctions<[
-    [number, boolean], // isEven: number → boolean
-    [number, boolean], // isOdd:  number → boolean
-  ]>(
-    (isEven, isOdd) => [
-      // isEven body
-      classifyZero.branch({
-        Zero: constant(true),
-        NonZero: subtractOne.then(isOdd),
-      }),
-      // isOdd body
-      classifyZero.branch({
-        Zero: constant(false),
-        NonZero: subtractOne.then(isEven),
-      }),
-    ],
-  )((isEven, _isOdd) => isEven),
+  defineRecursiveFunctions<
+    [
+      [number, boolean], // isEven: number → boolean
+      [number, boolean], // isOdd:  number → boolean
+    ]
+  >((isEven, isOdd) => [
+    // isEven body
+    classifyZero.branch({
+      Zero: constant(true),
+      NonZero: subtractOne.then(isOdd),
+    }),
+    // isOdd body
+    classifyZero.branch({
+      Zero: constant(false),
+      NonZero: subtractOne.then(isEven),
+    }),
+  ])((isEven, _isOdd) => isEven),
   7,
 );

@@ -363,9 +363,9 @@ describe("zodToCheckedJsonSchema", () => {
     });
 
     it("throws for .refine()", () => {
-      expect(() =>
-        convert(z.string().refine((s) => s.length > 0)),
-      ).toThrow(/\.refine\(\) and \.superRefine\(\) are not supported/);
+      expect(() => convert(z.string().refine((s) => s.length > 0))).toThrow(
+        /\.refine\(\) and \.superRefine\(\) are not supported/,
+      );
     });
 
     it("throws for .superRefine()", () => {
@@ -376,9 +376,7 @@ describe("zodToCheckedJsonSchema", () => {
 
     it("throws for .refine() on an object", () => {
       expect(() =>
-        convert(
-          z.object({ a: z.string() }).refine((o) => o.a.length > 0),
-        ),
+        convert(z.object({ a: z.string() }).refine((o) => o.a.length > 0)),
       ).toThrow(/\.refine\(\) and \.superRefine\(\) are not supported/);
     });
 

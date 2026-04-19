@@ -248,10 +248,7 @@ export function createHandlerWithConfig(
   // __definition for the worker to find (the worker imports the module
   // and accesses the named export, which is this function).
   const factory = (config: unknown): TypedAction =>
-    chain(
-      toAction(all(identity(), constant(config))),
-      toAction(invokeAction),
-    );
+    chain(toAction(all(identity(), constant(config))), toAction(invokeAction));
 
   Object.defineProperty(factory, HANDLER_BRAND, {
     value: true,

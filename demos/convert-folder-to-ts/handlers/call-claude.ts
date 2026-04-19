@@ -65,9 +65,13 @@ export async function callClaude(args: {
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
-        console.error(`[callClaude] timed out after ${CLAUDE_TIMEOUT_MS / 1000}s, killing`);
+        console.error(
+          `[callClaude] timed out after ${CLAUDE_TIMEOUT_MS / 1000}s, killing`,
+        );
         child.kill("SIGTERM");
-        reject(new Error(`Claude CLI timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`));
+        reject(
+          new Error(`Claude CLI timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`),
+        );
       }
     }, CLAUDE_TIMEOUT_MS);
 

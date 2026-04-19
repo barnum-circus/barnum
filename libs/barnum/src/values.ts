@@ -1,10 +1,14 @@
 import type { Result, Option } from "./ast.js";
 
-export function ok<TValue, TError = unknown>(value: TValue): Result<TValue, TError> {
+export function ok<TValue, TError = unknown>(
+  value: TValue,
+): Result<TValue, TError> {
   return { kind: "Result.Ok", value } as Result<TValue, TError>;
 }
 
-export function err<TValue = unknown, TError = never>(error: TError): Result<TValue, TError> {
+export function err<TValue = unknown, TError = never>(
+  error: TError,
+): Result<TValue, TError> {
   return { kind: "Result.Err", value: error } as Result<TValue, TError>;
 }
 

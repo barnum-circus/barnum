@@ -2,7 +2,11 @@
 export { ok, err, some, none } from "./values.js";
 
 // Handler creation
-export { createHandler, createHandlerWithConfig, type Handler } from "./handler.js";
+export {
+  createHandler,
+  createHandlerWithConfig,
+  type Handler,
+} from "./handler.js";
 
 // Schema builders
 export { resultSchema, optionSchema } from "./schemas.js";

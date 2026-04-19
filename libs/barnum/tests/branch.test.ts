@@ -116,10 +116,12 @@ describe("postfix .branch() type safety", () => {
 
 describe("{ kind, value } convention", () => {
   it("ClassifyResult uses { kind, value } form", () => {
-    assertExact<IsExact<
-      Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>,
-      { kind: "ClassifyResult.HasErrors"; value: TypeError[] }
-    >>();
+    assertExact<
+      IsExact<
+        Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>,
+        { kind: "ClassifyResult.HasErrors"; value: TypeError[] }
+      >
+    >();
   });
 
   it("branch auto-unwraps: HasErrors handler receives TypeError[] directly", () => {
@@ -137,10 +139,12 @@ describe("{ kind, value } convention", () => {
 describe("phantom __def on tagged unions", () => {
   it("ClassifyResult variants carry __def phantom field", () => {
     type Def = { HasErrors: TypeError[]; Clean: void };
-    assertExact<IsExact<
-      Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>,
-      { kind: "ClassifyResult.HasErrors"; value: TypeError[]; __def?: Def }
-    >>();
+    assertExact<
+      IsExact<
+        Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>,
+        { kind: "ClassifyResult.HasErrors"; value: TypeError[]; __def?: Def }
+      >
+    >();
   });
 });
 
@@ -214,7 +218,9 @@ describe("branch AST structure", () => {
 describe("branch execution", () => {
   it("branch dispatches on kind string, extracts value, routes to correct case", async () => {
     const action = pipe(
-      constant({ kind: "Left", value: 42 } as { kind: "Left"; value: number } | { kind: "Right"; value: string }),
+      constant({ kind: "Left", value: 42 } as
+        | { kind: "Left"; value: number }
+        | { kind: "Right"; value: string }),
       branch({
         Left: wrapInField("num"),
         Right: wrapInField("str"),
@@ -226,7 +232,9 @@ describe("branch execution", () => {
 
   it("branch selects the other case", async () => {
     const action = pipe(
-      constant({ kind: "Right", value: "hello" } as { kind: "Left"; value: number } | { kind: "Right"; value: string }),
+      constant({ kind: "Right", value: "hello" } as
+        | { kind: "Left"; value: number }
+        | { kind: "Right"; value: string }),
       branch({
         Left: wrapInField("num"),
         Right: wrapInField("str"),
@@ -254,10 +262,7 @@ describe("branch execution", () => {
 
   it("postfix .branch() dispatches correctly on tagged union", async () => {
     type ABDef = { A: number; B: string };
-    const action = pipe(
-      constant(10),
-      tag<"AB", ABDef, "A">("A", "AB"),
-    ).branch({
+    const action = pipe(constant(10), tag<"AB", ABDef, "A">("A", "AB")).branch({
       A: identity(),
       B: drop,
     });
@@ -267,7 +272,10 @@ describe("branch execution", () => {
 
   it("branch extracts value before passing to handler", async () => {
     const action = pipe(
-      constant({ kind: "Item", value: { x: 99 } } as { kind: "Item"; value: { x: number } }),
+      constant({ kind: "Item", value: { x: 99 } } as {
+        kind: "Item";
+        value: { x: number };
+      }),
       branch({
         Item: getField("x"),
       }),

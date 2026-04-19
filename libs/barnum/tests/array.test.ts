@@ -48,7 +48,9 @@ describe("array type tests", () => {
 
   it("getIndex: Tuple -> Option<Tuple[N]>", () => {
     const action = getIndex<[string, number, boolean], 1>(1);
-    assertExact<IsExact<ExtractInput<typeof action>, [string, number, boolean]>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, [string, number, boolean]>
+    >();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
     expect(action.kind).toBe("Invoke");
   });
@@ -56,14 +58,18 @@ describe("array type tests", () => {
   it("splitFirst: T[] -> Option<[T, T[]]>", () => {
     const action = splitFirst<number>();
     assertExact<IsExact<ExtractInput<typeof action>, number[]>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<[number, number[]]>>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<[number, number[]]>>
+    >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("splitLast: T[] -> Option<[T[], T]>", () => {
     const action = splitLast<number>();
     assertExact<IsExact<ExtractInput<typeof action>, number[]>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<[number[], number]>>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<[number[], number]>>
+    >();
     expect(action.kind).toBe("Invoke");
   });
 
@@ -118,9 +124,7 @@ describe("array execution", () => {
 
   // -- flatten --
   it("flatten([[1, 2], [3]]) -> [1, 2, 3]", async () => {
-    const result = await runPipeline(
-      pipe(constant([[1, 2], [3]]), flatten()),
-    );
+    const result = await runPipeline(pipe(constant([[1, 2], [3]]), flatten()));
     expect(result).toEqual([1, 2, 3]);
   });
 
@@ -132,31 +136,23 @@ describe("array execution", () => {
   });
 
   it("flatten([[], [1], []]) -> [1]", async () => {
-    const result = await runPipeline(
-      pipe(constant([[], [1], []]), flatten()),
-    );
+    const result = await runPipeline(pipe(constant([[], [1], []]), flatten()));
     expect(result).toEqual([1]);
   });
 
   // -- getIndex --
   it("getIndex(0) on [10, 20, 30] -> Some(10)", async () => {
-    const result = await runPipeline(
-      pipe(constant([10, 20, 30]), getIndex(0)),
-    );
+    const result = await runPipeline(pipe(constant([10, 20, 30]), getIndex(0)));
     expect(result).toEqual({ kind: "Option.Some", value: 10 });
   });
 
   it("getIndex(2) on [10, 20, 30] -> Some(30)", async () => {
-    const result = await runPipeline(
-      pipe(constant([10, 20, 30]), getIndex(2)),
-    );
+    const result = await runPipeline(pipe(constant([10, 20, 30]), getIndex(2)));
     expect(result).toEqual({ kind: "Option.Some", value: 30 });
   });
 
   it("getIndex(5) on [10, 20, 30] -> None", async () => {
-    const result = await runPipeline(
-      pipe(constant([10, 20, 30]), getIndex(5)),
-    );
+    const result = await runPipeline(pipe(constant([10, 20, 30]), getIndex(5)));
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
@@ -169,16 +165,12 @@ describe("array execution", () => {
 
   // -- splitFirst --
   it("splitFirst on [1, 2, 3] -> Some([1, [2, 3]])", async () => {
-    const result = await runPipeline(
-      pipe(constant([1, 2, 3]), splitFirst()),
-    );
+    const result = await runPipeline(pipe(constant([1, 2, 3]), splitFirst()));
     expect(result).toEqual({ kind: "Option.Some", value: [1, [2, 3]] });
   });
 
   it("splitFirst on [42] -> Some([42, []])", async () => {
-    const result = await runPipeline(
-      pipe(constant([42]), splitFirst()),
-    );
+    const result = await runPipeline(pipe(constant([42]), splitFirst()));
     expect(result).toEqual({ kind: "Option.Some", value: [42, []] });
   });
 
@@ -191,16 +183,12 @@ describe("array execution", () => {
 
   // -- splitLast --
   it("splitLast on [1, 2, 3] -> Some([[1, 2], 3])", async () => {
-    const result = await runPipeline(
-      pipe(constant([1, 2, 3]), splitLast()),
-    );
+    const result = await runPipeline(pipe(constant([1, 2, 3]), splitLast()));
     expect(result).toEqual({ kind: "Option.Some", value: [[1, 2], 3] });
   });
 
   it("splitLast on [42] -> Some([[], 42])", async () => {
-    const result = await runPipeline(
-      pipe(constant([42]), splitLast()),
-    );
+    const result = await runPipeline(pipe(constant([42]), splitLast()));
     expect(result).toEqual({ kind: "Option.Some", value: [[], 42] });
   });
 
@@ -213,31 +201,23 @@ describe("array execution", () => {
 
   // -- first --
   it("first on [10, 20] -> Some(10)", async () => {
-    const result = await runPipeline(
-      pipe(constant([10, 20]), first()),
-    );
+    const result = await runPipeline(pipe(constant([10, 20]), first()));
     expect(result).toEqual({ kind: "Option.Some", value: 10 });
   });
 
   it("first on [] -> None", async () => {
-    const result = await runPipeline(
-      pipe(constant([] as number[]), first()),
-    );
+    const result = await runPipeline(pipe(constant([] as number[]), first()));
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   // -- last --
   it("last on [10, 20] -> Some(20)", async () => {
-    const result = await runPipeline(
-      pipe(constant([10, 20]), last()),
-    );
+    const result = await runPipeline(pipe(constant([10, 20]), last()));
     expect(result).toEqual({ kind: "Option.Some", value: 20 });
   });
 
   it("last on [] -> None", async () => {
-    const result = await runPipeline(
-      pipe(constant([] as number[]), last()),
-    );
+    const result = await runPipeline(pipe(constant([] as number[]), last()));
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 });

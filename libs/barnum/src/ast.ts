@@ -138,7 +138,11 @@ export type BuiltinKind =
  * thread state), produce `any` so the combinator can sit in any
  * pipeline position.
  */
-export type PipeIn<T> = [T] extends [never] ? any : [T] extends [void] ? any : T;
+export type PipeIn<T> = [T] extends [never]
+  ? any
+  : [T] extends [void]
+    ? any
+    : T;
 
 // ---------------------------------------------------------------------------
 // Config
@@ -204,7 +208,11 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
   drop(): TypedAction<In, void>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
-  tag<TEnumName extends string, TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
+  tag<
+    TEnumName extends string,
+    TDef extends Record<string, unknown>,
+    TKind extends keyof TDef & string,
+  >(
     kind: TKind,
     enumName: TEnumName,
   ): TypedAction<In, TaggedUnion<TEnumName, TDef>>;
@@ -227,7 +235,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   wrapInField<TField extends string>(
     field: TField,
   ): TypedAction<In, Record<TField, Out>>;
-/** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
+  /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
   ): TypedAction<In, Pick<Out, TKeys[number]>>;
@@ -325,7 +333,6 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<TValue, TError>>,
     fallback: Pipeable<TError, Result<TValue, TErrorOut>>,
   ): TypedAction<TIn, Result<TValue, TErrorOut>>;
-
 
   /** Convert Ok to Some, Err to None. `Result<T,E> → Option<T>` */
   asOkOption<TIn, TValue, TError>(
@@ -498,7 +505,10 @@ type VoidToNull<T> = 0 extends 1 & T
       ? null
       : T;
 
-export type TaggedUnion<TEnumName extends string, TDef extends Record<string, unknown>> = {
+export type TaggedUnion<
+  TEnumName extends string,
+  TDef extends Record<string, unknown>,
+> = {
   [K in keyof TDef & string]: {
     kind: `${TEnumName}.${K}`;
     value: VoidToNull<TDef[K]>;
@@ -521,7 +531,10 @@ export type Option<T> = TaggedUnion<"Option", OptionDef<T>>;
 // ---------------------------------------------------------------------------
 
 export type ResultDef<TValue, TError> = { Ok: TValue; Err: TError };
-export type Result<TValue, TError> = TaggedUnion<"Result", ResultDef<TValue, TError>>;
+export type Result<TValue, TError> = TaggedUnion<
+  "Result",
+  ResultDef<TValue, TError>
+>;
 
 // ---------------------------------------------------------------------------
 // Iterator<T> — sequence wrapper (single-variant TaggedUnion)
@@ -534,7 +547,9 @@ export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
 type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
 
 /** Strip a `"Prefix."` namespace from a dotted kind string. `"Nat.Zero"` → `"Zero"`. */
-type StripKindPrefix<K extends string> = K extends `${string}.${infer Bare}` ? Bare : K;
+type StripKindPrefix<K extends string> = K extends `${string}.${infer Bare}`
+  ? Bare
+  : K;
 
 /** Extract the `value` field from a `{ kind, value }` variant. Falls back to T if no `value` field. */
 type UnwrapVariant<T> = T extends { value: infer V } ? V : T;
@@ -586,7 +601,11 @@ function dropMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(drop));
 }
 
-function tagMethod(this: TypedAction, kind: string, enumName: string): TypedAction {
+function tagMethod(
+  this: TypedAction,
+  kind: string,
+  enumName: string,
+): TypedAction {
   return chain(toAction(this), toAction(tag(kind, enumName)));
 }
 
@@ -629,124 +648,203 @@ function splitLastMethod(this: TypedAction): TypedAction {
 // --- Shared postfix methods (Option + Result) — dispatch via branchFamily ---
 
 function mapMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Result: branch({
-      Ok: chain(toAction(action), toAction(Result.ok())),
-      Err: Result.err(),
-    }),
-    Option: branch({
-      Some: chain(toAction(action), toAction(Option.some())),
-      None: Option.none(),
-    }),
-    Iterator: IteratorNs.map(action),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Result: branch({
+          Ok: chain(toAction(action), toAction(Result.ok())),
+          Err: Result.err(),
+        }),
+        Option: branch({
+          Some: chain(toAction(action), toAction(Option.some())),
+          None: Option.none(),
+        }),
+        Iterator: IteratorNs.map(action),
+      }),
+    ),
+  );
 }
 
 function unwrapMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
-    Option: branch({ Some: identity(), None: panic("called unwrap on None") }),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
+        Option: branch({
+          Some: identity(),
+          None: panic("called unwrap on None"),
+        }),
+      }),
+    ),
+  );
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Result: branch({ Ok: identity(), Err: defaultAction }),
-    Option: branch({ Some: identity(), None: defaultAction }),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Result: branch({ Ok: identity(), Err: defaultAction }),
+        Option: branch({ Some: identity(), None: defaultAction }),
+      }),
+    ),
+  );
 }
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Result: branch({ Ok: action, Err: Result.err() }),
-    Option: branch({ Some: action, None: Option.none() }),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Result: branch({ Ok: action, Err: Result.err() }),
+        Option: branch({ Some: action, None: Option.none() }),
+      }),
+    ),
+  );
 }
 
 function transposeMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Option: branch({
-      Some: branch({
-        Ok: chain(toAction(Option.some()), toAction(Result.ok())),
-        Err: Result.err(),
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Option: branch({
+          Some: branch({
+            Ok: chain(toAction(Option.some()), toAction(Result.ok())),
+            Err: Result.err(),
+          }),
+          None: chain(
+            toAction(chain(toAction(drop), toAction(Option.none()))),
+            toAction(Result.ok()),
+          ),
+        }),
+        Result: branch({
+          Ok: branch({
+            Some: chain(toAction(Result.ok()), toAction(Option.some())),
+            None: chain(toAction(drop), toAction(Option.none())),
+          }),
+          Err: chain(toAction(Result.err()), toAction(Option.some())),
+        }),
       }),
-      None: chain(toAction(chain(toAction(drop), toAction(Option.none()))), toAction(Result.ok())),
-    }),
-    Result: branch({
-      Ok: branch({
-        Some: chain(toAction(Result.ok()), toAction(Option.some())),
-        None: chain(toAction(drop), toAction(Option.none())),
-      }),
-      Err: chain(toAction(Result.err()), toAction(Option.some())),
-    }),
-  })));
+    ),
+  );
 }
 
 // --- Result-only postfix methods ---
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: Result.ok(),
-    Err: chain(toAction(action), toAction(Result.err())),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Ok: Result.ok(),
+        Err: chain(toAction(action), toAction(Result.err())),
+      }),
+    ),
+  );
 }
 
 function orMethod(this: TypedAction, fallback: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: Result.ok(),
-    Err: fallback,
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Ok: Result.ok(),
+        Err: fallback,
+      }),
+    ),
+  );
 }
 
-
 function asOkOptionMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: Option.some(),
-    Err: chain(toAction(drop), toAction(Option.none())),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Ok: Option.some(),
+        Err: chain(toAction(drop), toAction(Option.none())),
+      }),
+    ),
+  );
 }
 
 function asErrOptionMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: chain(toAction(drop), toAction(Option.none())),
-    Err: Option.some(),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Ok: chain(toAction(drop), toAction(Option.none())),
+        Err: Option.some(),
+      }),
+    ),
+  );
 }
 
 function isOkMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: constant(true), Err: constant(false),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Ok: constant(true),
+        Err: constant(false),
+      }),
+    ),
+  );
 }
 
 function isErrMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: constant(false), Err: constant(true),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Ok: constant(false),
+        Err: constant(true),
+      }),
+    ),
+  );
 }
 
 // --- Option-only postfix methods ---
 
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Option: branch({
-      Some: predicate,
-      None: Option.none(),
-    }),
-    Iterator: IteratorNs.filter(predicate),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Option: branch({
+          Some: predicate,
+          None: Option.none(),
+        }),
+        Iterator: IteratorNs.filter(predicate),
+      }),
+    ),
+  );
 }
 
 function isSomeMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Some: constant(true), None: constant(false),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Some: constant(true),
+        None: constant(false),
+      }),
+    ),
+  );
 }
 
 function isNoneMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Some: constant(false), None: constant(true),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branch({
+        Some: constant(false),
+        None: constant(true),
+      }),
+    ),
+  );
 }
 
 function asOptionMethod(this: TypedAction): TypedAction {
@@ -756,11 +854,16 @@ function asOptionMethod(this: TypedAction): TypedAction {
 // --- Iterator postfix methods ---
 
 function iterateMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Option: IteratorNs.fromOption(),
-    Result: IteratorNs.fromResult(),
-    Array: IteratorNs.fromArray(),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Option: IteratorNs.fromOption(),
+        Result: IteratorNs.fromResult(),
+        Array: IteratorNs.fromArray(),
+      }),
+    ),
+  );
 }
 
 function flatMapMethod(this: TypedAction, action: Action): TypedAction {
@@ -768,10 +871,15 @@ function flatMapMethod(this: TypedAction, action: Action): TypedAction {
 }
 
 function collectMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branchFamily({
-    Array: Option.collect(),
-    Iterator: IteratorNs.collect(),
-  })));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Array: Option.collect(),
+        Iterator: IteratorNs.collect(),
+      }),
+    ),
+  );
 }
 
 function bindMethod(
@@ -901,10 +1009,9 @@ function unwrapBranchCases(
 ): Record<string, Action> {
   const unwrapped: Record<string, Action> = {};
   for (const key of Object.keys(cases)) {
-    unwrapped[key] = toAction(chain(
-      toAction(getField("value")),
-      toAction(cases[key]),
-    ));
+    unwrapped[key] = toAction(
+      chain(toAction(getField("value")), toAction(cases[key])),
+    );
   }
   return unwrapped;
 }
@@ -957,7 +1064,8 @@ type LoopResultDef<TContinue, TBreak> = {
 };
 
 export type LoopResult<TContinue, TBreak> = TaggedUnion<
-  "LoopResult", LoopResultDef<TContinue, TBreak>
+  "LoopResult",
+  LoopResultDef<TContinue, TBreak>
 >;
 
 // ---------------------------------------------------------------------------
@@ -1017,10 +1125,12 @@ export function earlyReturn<TEarlyReturn = void, TIn = any, TOut = any>(
   const restartHandlerId = allocateRestartHandlerId();
 
   const earlyReturnAction = typedAction<TEarlyReturn, never>(
-    toAction(chain(
-      toAction(tag("Break", "LoopResult")),
-      { kind: "RestartPerform", restart_handler_id: restartHandlerId },
-    )),
+    toAction(
+      chain(toAction(tag("Break", "LoopResult")), {
+        kind: "RestartPerform",
+        restart_handler_id: restartHandlerId,
+      }),
+    ),
   );
 
   const body = toAction(bodyFn(earlyReturnAction));
@@ -1048,15 +1158,14 @@ export function buildRestartBranchAction(
   continueArm: Action,
   breakArm: Action,
 ): Action {
-  return toAction(chain(
-    toAction(tag("Continue", "LoopResult")),
-    {
+  return toAction(
+    chain(toAction(tag("Continue", "LoopResult")), {
       kind: "RestartHandle",
       restart_handler_id: restartHandlerId,
       body: toAction(branch({ Continue: continueArm, Break: breakArm })),
       handler: toAction(getIndex(0).unwrap()),
-    },
-  ));
+    }),
+  );
 }
 
 /**

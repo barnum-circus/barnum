@@ -22,11 +22,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  runPipeline,
-  constant,
-  withResource,
-} from "@barnum/barnum/pipeline";
+import { runPipeline, constant, withResource } from "@barnum/barnum/pipeline";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.resolve(__dirname, "src");

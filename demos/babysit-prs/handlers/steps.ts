@@ -25,7 +25,10 @@ export const checkPR = createHandler(
       if (roll < 0.5) {
         const error = ciErrors[Math.floor(Math.random() * ciErrors.length)]!;
         console.error(`[checkPR] PR #${pr}: checks failed — ${error}`);
-        return { kind: "CheckPRResult.ChecksFailed" as const, value: { pr, error } };
+        return {
+          kind: "CheckPRResult.ChecksFailed" as const,
+          value: { pr, error },
+        };
       }
 
       if (roll < 0.8) {
@@ -71,11 +74,17 @@ export const landPR = createHandler(
 export const classifyRemaining = createHandler(
   {
     inputValidator: z.array(z.number()),
-    outputValidator: taggedUnionSchema("ClassifyRemainingResult", { HasPRs: z.array(z.number()), AllDone: z.null() }),
+    outputValidator: taggedUnionSchema("ClassifyRemainingResult", {
+      HasPRs: z.array(z.number()),
+      AllDone: z.null(),
+    }),
     handle: async ({ value }) => {
       if (value.length === 0) {
         console.error("[classifyRemaining] All PRs resolved");
-        return { kind: "ClassifyRemainingResult.AllDone" as const, value: null };
+        return {
+          kind: "ClassifyRemainingResult.AllDone" as const,
+          value: null,
+        };
       }
       console.error(
         `[classifyRemaining] ${value.length} PR(s) still need attention: #${value.join(", #")}`,
@@ -85,4 +94,3 @@ export const classifyRemaining = createHandler(
   },
   "classifyRemaining",
 );
-

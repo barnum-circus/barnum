@@ -13,12 +13,7 @@ import {
   typedAction,
 } from "../src/ast.js";
 import { allocateRestartHandlerId } from "../src/effect-id.js";
-import {
-  constant,
-  drop,
-  identity,
-  tag,
-} from "../src/builtins/index.js";
+import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Result as R } from "../src/result.js";
 import { runPipeline } from "../src/run.js";
 import { setup, deploy } from "./handlers.js";
@@ -40,13 +35,34 @@ function expectedTagAst(kind: string) {
       actions: [
         {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: kind } } },
-          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "kind" } } },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Constant", value: kind },
+            },
+          },
+          rest: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "WrapInField", field: "kind" },
+            },
+          },
         },
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "value" } } },
+        {
+          kind: "Invoke",
+          handler: {
+            kind: "Builtin",
+            builtin: { kind: "WrapInField", field: "value" },
+          },
+        },
       ],
     },
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   };
 }
 
@@ -93,8 +109,12 @@ describe("Result types", () => {
     const action = R.map<string, number, boolean>(
       constant(42) as TypedAction<string, number>,
     );
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, Result<string, boolean>>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Result<number, boolean>>
+    >();
   });
 
   it("Result.mapErr transforms Err type, preserves Ok type", () => {
@@ -102,26 +122,38 @@ describe("Result types", () => {
       constant(true) as TypedAction<number, boolean>,
     );
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, boolean>>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Result<string, boolean>>
+    >();
   });
 
   it("Result.andThen input is Result, output is Result with new Ok type", () => {
     const action = R.andThen<string, number, boolean>(
-      constant({ kind: "Result.Ok" as const, value: 42 }) as TypedAction<string, Result<number, boolean>>,
+      constant({ kind: "Result.Ok" as const, value: 42 }) as TypedAction<
+        string,
+        Result<number, boolean>
+      >,
     );
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, Result<string, boolean>>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Result<number, boolean>>
+    >();
   });
 
   it("Result.or input is Result, output has new Err type", () => {
     const action = R.or<string, number, boolean>(
-      constant({ kind: "Result.Ok" as const, value: "x" }) as TypedAction<number, Result<string, boolean>>,
+      constant({ kind: "Result.Ok" as const, value: "x" }) as TypedAction<
+        number,
+        Result<string, boolean>
+      >,
     );
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, boolean>>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Result<string, boolean>>
+    >();
   });
-
-
 
   it("Result.unwrapOr extracts TValue from Result", () => {
     const action = R.unwrapOr<string, number>(
@@ -145,8 +177,12 @@ describe("Result types", () => {
 
   it("Result.transpose swaps Result/Option nesting", () => {
     const action = R.transpose<string, number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Result<Option<string>, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<Result<string, number>>>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, Result<Option<string>, number>>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<Result<string, number>>>
+    >();
   });
 
   it("Result.isOk returns boolean", () => {
@@ -164,7 +200,9 @@ describe("Result types", () => {
   it("Result branches with Ok/Err cases", () => {
     const action = pipe(
       tag<"Result", ResultDef<string, number>, "Ok">("Ok", "Result"),
-      R.map<string, number, number>(constant(42) as TypedAction<string, number>),
+      R.map<string, number, number>(
+        constant(42) as TypedAction<string, number>,
+      ),
       R.unwrapOr<number, number>(identity()),
     );
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
@@ -182,15 +220,24 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it("Result.unwrapOr accepts throw token with explicit types", () => {
-    const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
+    const throwToken = typedAction<string, never>({
+      kind: "RestartPerform",
+      restart_handler_id: allocateRestartHandlerId(),
+    });
     const action = R.unwrapOr<string, string>(throwToken);
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, string>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
   });
 
   it(".unwrapOr() infers types from this constraint", () => {
-    const resultAction = identity() as TypedAction<string, Result<string, number>>;
-    const throwToken = typedAction<number, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
+    const resultAction = identity() as TypedAction<
+      string,
+      Result<string, number>
+    >;
+    const throwToken = typedAction<number, never>({
+      kind: "RestartPerform",
+      restart_handler_id: allocateRestartHandlerId(),
+    });
     const action = resultAction.unwrapOr(throwToken);
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
@@ -215,10 +262,7 @@ describe("Result.unwrapOr with throw tokens", () => {
       Result<{ verified: boolean }, string>
     >;
     const action = tryCatch(
-      (throwError) => pipe(
-        handler.unwrapOr(throwError),
-        deploy,
-      ),
+      (throwError) => pipe(handler.unwrapOr(throwError), deploy),
       pipe(drop, constant({ deployed: false })),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
@@ -226,8 +270,14 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() produces Chain AST node", () => {
-    const resultAction = identity() as TypedAction<void, Result<string, string>>;
-    const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
+    const resultAction = identity() as TypedAction<
+      void,
+      Result<string, string>
+    >;
+    const throwToken = typedAction<string, never>({
+      kind: "RestartPerform",
+      restart_handler_id: allocateRestartHandlerId(),
+    });
     const action = resultAction.unwrapOr(throwToken);
     expect(action.kind).toBe("Chain");
   });
@@ -250,12 +300,28 @@ describe("Result AST structure", () => {
       cases: {
         Ok: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
-          rest: { kind: "Chain", first: setup, rest: expectedTagAst("Result.Ok") },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "GetField", field: "value" },
+            },
+          },
+          rest: {
+            kind: "Chain",
+            first: setup,
+            rest: expectedTagAst("Result.Ok"),
+          },
         },
         Err: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "GetField", field: "value" },
+            },
+          },
           rest: expectedTagAst("Result.Err"),
         },
       },
@@ -269,20 +335,39 @@ describe("Result AST structure", () => {
       cases: {
         Ok: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "GetField", field: "value" },
+            },
+          },
           rest: expectedTagAst("Result.Ok"),
         },
         Err: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
-          rest: { kind: "Chain", first: setup, rest: expectedTagAst("Result.Err") },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "GetField", field: "value" },
+            },
+          },
+          rest: {
+            kind: "Chain",
+            first: setup,
+            rest: expectedTagAst("Result.Err"),
+          },
         },
       },
     });
   });
 
   it("Result.andThen(action) desugars correctly", () => {
-    const inner = tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result");
+    const inner = tag<"Result", ResultDef<string, string>, "Ok">(
+      "Ok",
+      "Result",
+    );
     const result = R.andThen(inner);
     const branchNode = result as any;
     expect(branchNode.kind).toBe("Branch");
@@ -291,14 +376,16 @@ describe("Result AST structure", () => {
   });
 
   it("Result.or(fallback) desugars correctly", () => {
-    const fallback = tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result");
+    const fallback = tag<"Result", ResultDef<string, string>, "Ok">(
+      "Ok",
+      "Result",
+    );
     const result = R.or(fallback);
     const branchNode = result as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest).toEqual(expectedTagAst("Result.Ok"));
     expect(branchNode.cases.Err.rest).toBe(fallback);
   });
-
 
   it("Result.unwrapOr(default) desugars correctly", () => {
     const fallback = constant("default");
@@ -315,7 +402,9 @@ describe("Result AST structure", () => {
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest).toEqual(expectedTagAst("Option.Some"));
     expect(branchNode.cases.Err.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branchNode.cases.Err.rest.rest).toEqual(expectedTagAst("Option.None"));
+    expect(branchNode.cases.Err.rest.rest).toEqual(
+      expectedTagAst("Option.None"),
+    );
   });
 
   it("Result.asErrOption() desugars correctly", () => {
@@ -323,7 +412,9 @@ describe("Result AST structure", () => {
     const branchNode = action as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branchNode.cases.Ok.rest.rest).toEqual(expectedTagAst("Option.None"));
+    expect(branchNode.cases.Ok.rest.rest).toEqual(
+      expectedTagAst("Option.None"),
+    );
     expect(branchNode.cases.Err.rest).toEqual(expectedTagAst("Option.Some"));
   });
 
@@ -435,7 +526,10 @@ describe("Result execution", () => {
       pipe(
         pipe(constant(42), R.ok<number, string>()),
         R.or<number, string, string>(
-          pipe(constant(99), tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result")),
+          pipe(
+            constant(99),
+            tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
+          ),
         ),
       ),
     );
@@ -447,19 +541,19 @@ describe("Result execution", () => {
       pipe(
         pipe(constant("fail"), R.err<number, string>()),
         R.or<number, string, string>(
-          pipe(constant(99), tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result")),
+          pipe(
+            constant(99),
+            tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
+          ),
         ),
       ),
     );
     expect(result).toEqual({ kind: "Result.Ok", value: 99 });
   });
 
-
   // -- unwrap --
   it("Result.unwrap on Ok extracts value", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).ok(), R.unwrap()),
-    );
+    const result = await runPipeline(pipe(constant(42).ok(), R.unwrap()));
     expect(result).toBe(42);
   });
 
@@ -479,16 +573,17 @@ describe("Result execution", () => {
 
   it("Result.unwrapOr on Err runs fallback", async () => {
     const result = await runPipeline(
-      pipe(pipe(constant("fail"), R.err<number, string>()), R.unwrapOr(constant(0))),
+      pipe(
+        pipe(constant("fail"), R.err<number, string>()),
+        R.unwrapOr(constant(0)),
+      ),
     );
     expect(result).toBe(0);
   });
 
   // -- asOkOption / asErrOption --
   it("Result.asOkOption on Ok -> Some", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).ok(), R.asOkOption()),
-    );
+    const result = await runPipeline(pipe(constant(42).ok(), R.asOkOption()));
     expect(result).toEqual({ kind: "Option.Some", value: 42 });
   });
 
@@ -500,9 +595,7 @@ describe("Result execution", () => {
   });
 
   it("Result.asErrOption on Ok -> None", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).ok(), R.asErrOption()),
-    );
+    const result = await runPipeline(pipe(constant(42).ok(), R.asErrOption()));
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
@@ -585,7 +678,9 @@ describe("Result execution", () => {
   });
 
   it("postfix .unwrapOr on Result output", async () => {
-    const result = await runPipeline(pipe(constant("fail"), R.err<number, string>()).unwrapOr(constant(99)));
+    const result = await runPipeline(
+      pipe(constant("fail"), R.err<number, string>()).unwrapOr(constant(99)),
+    );
     expect(result).toBe(99);
   });
 

@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  pipe,
-} from "../src/ast.js";
+import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
 import { constant, identity, drop, panic } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";

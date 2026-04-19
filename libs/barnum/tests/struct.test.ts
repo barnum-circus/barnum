@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  pipe,
-} from "../src/ast.js";
+import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
 import {
   allObject,
   constant,
@@ -50,13 +46,13 @@ describe("struct type tests", () => {
       "b",
     );
     assertExact<
-      IsExact<
-        ExtractInput<typeof action>,
-        { a: number; b: string; c: boolean }
-      >
+      IsExact<ExtractInput<typeof action>, { a: number; b: string; c: boolean }>
     >();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Pick<{ a: number; b: string; c: boolean }, "a" | "b">>
+      IsExact<
+        ExtractOutput<typeof action>,
+        Pick<{ a: number; b: string; c: boolean }, "a" | "b">
+      >
     >();
   });
 
@@ -100,9 +96,7 @@ describe("struct execution", () => {
   });
 
   it("wrapInField wraps a value in a named field", async () => {
-    const result = await runPipeline(
-      pipe(constant(42), wrapInField("foo")),
-    );
+    const result = await runPipeline(pipe(constant(42), wrapInField("foo")));
     expect(result).toEqual({ foo: 42 });
   });
 
@@ -115,10 +109,7 @@ describe("struct execution", () => {
 
   it("pick selects named fields", async () => {
     const result = await runPipeline(
-      pipe(
-        constant({ a: 1, b: 2, c: 3 }),
-        pick("a", "b"),
-      ),
+      pipe(constant({ a: 1, b: 2, c: 3 }), pick("a", "b")),
     );
     expect(result).toEqual({ a: 1, b: 2 });
   });

@@ -145,13 +145,15 @@ export const Option = {
         Ok: chain(Option.some<TValue>(), Result.ok<OptionT<TValue>, TError>()),
         Err: Result.err<OptionT<TValue>, TError>(),
       }),
-      None: chain(chain(drop, Option.none<TValue>()), Result.ok<OptionT<TValue>, TError>()),
+      None: chain(
+        chain(drop, Option.none<TValue>()),
+        Result.ok<OptionT<TValue>, TError>(),
+      ),
     }) as TypedAction<
       OptionT<ResultT<TValue, TError>>,
       ResultT<OptionT<TValue>, TError>
     >;
   },
-
 } as const;
 
 // ---------------------------------------------------------------------------

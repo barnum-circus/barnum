@@ -37,13 +37,34 @@ function expectedTagAst(kind: string) {
       actions: [
         {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: kind } } },
-          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "kind" } } },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Constant", value: kind },
+            },
+          },
+          rest: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "WrapInField", field: "kind" },
+            },
+          },
         },
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "value" } } },
+        {
+          kind: "Invoke",
+          handler: {
+            kind: "Builtin",
+            builtin: { kind: "WrapInField", field: "value" },
+          },
+        },
       ],
     },
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   };
 }
 
@@ -86,7 +107,11 @@ describe("tagged-union type tests", () => {
 
 describe("tagged-union AST structure", () => {
   it(".tag() produces Chain -> tag composition AST", () => {
-    const action = verify.tag<"VerifyResult", { Ok: { verified: boolean } }, "Ok">("Ok", "VerifyResult");
+    const action = verify.tag<
+      "VerifyResult",
+      { Ok: { verified: boolean } },
+      "Ok"
+    >("Ok", "VerifyResult");
     expect(action.kind).toBe("Chain");
     const chain = action as { kind: "Chain"; first: any; rest: any };
     expect(chain.first.kind).toBe("Invoke");
@@ -94,7 +119,11 @@ describe("tagged-union AST structure", () => {
   });
 
   it("postfix methods are chainable (tag-related)", () => {
-    const action = verify.tag<"VerifyResult", { Ok: { verified: boolean } }, "Ok">("Ok", "VerifyResult");
+    const action = verify.tag<
+      "VerifyResult",
+      { Ok: { verified: boolean } },
+      "Ok"
+    >("Ok", "VerifyResult");
     expect(action.kind).toBe("Chain");
   });
 });
@@ -105,9 +134,7 @@ describe("tagged-union AST structure", () => {
 
 describe("tagged-union execution", () => {
   it("tag('Ok', 'Result')(42) -> {kind: 'Result.Ok', value: 42}", async () => {
-    const result = await runPipeline(
-      pipe(constant(42), tag("Ok", "Result")),
-    );
+    const result = await runPipeline(pipe(constant(42), tag("Ok", "Result")));
     expect(result).toEqual({ kind: "Result.Ok", value: 42 });
   });
 
@@ -127,10 +154,7 @@ describe("tagged-union execution", () => {
 
   it("extractPrefix on Result.Ok -> {kind: 'Result', value: ...}", async () => {
     const result = await runPipeline(
-      pipe(
-        constant({ kind: "Result.Ok", value: 42 }),
-        extractPrefix(),
-      ),
+      pipe(constant({ kind: "Result.Ok", value: 42 }), extractPrefix()),
     );
     expect(result).toEqual({
       kind: "Result",
@@ -140,10 +164,7 @@ describe("tagged-union execution", () => {
 
   it("extractPrefix on kind with no dot -> prefix is entire kind", async () => {
     const result = await runPipeline(
-      pipe(
-        constant({ kind: "NoDot", value: 1 }),
-        extractPrefix(),
-      ),
+      pipe(constant({ kind: "NoDot", value: 1 }), extractPrefix()),
     );
     expect(result).toEqual({
       kind: "NoDot",

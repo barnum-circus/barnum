@@ -8,12 +8,7 @@ import {
   bindInput,
   resetEffectIdCounter,
 } from "../src/ast.js";
-import {
-  constant,
-  drop,
-  getField,
-  identity,
-} from "../src/builtins/index.js";
+import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup, verify } from "./handlers.js";
 
@@ -36,7 +31,10 @@ describe("bind type tests", () => {
   });
 
   it("VarRef output type matches binding output", () => {
-    const computeName = pipe(setup, getField<{ initialized: boolean; project: string }, "project">("project"));
+    const computeName = pipe(
+      setup,
+      getField<{ initialized: boolean; project: string }, "project">("project"),
+    );
 
     bind([computeName], ([name]) => {
       assertExact<IsExact<typeof name, VarRef<string>>>();
@@ -95,8 +93,8 @@ describe("bindInput type tests", () => {
   });
 
   it("output type matches body return type", () => {
-    const action = bindInput<{ artifact: string }, { verified: boolean }>((input) =>
-      pipe(input, verify),
+    const action = bindInput<{ artifact: string }, { verified: boolean }>(
+      (input) => pipe(input, verify),
     );
     assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
   });
@@ -235,19 +233,13 @@ describe("bind execution", () => {
   });
 
   it("bind with single constant binding: body receives value", async () => {
-    const result = await runPipeline(
-      bind([constant(42)], ([n]) =>
-        n,
-      ),
-    );
+    const result = await runPipeline(bind([constant(42)], ([n]) => n));
     expect(result).toBe(42);
   });
 
   it("bind with two bindings: body receives both values", async () => {
     const result = await runPipeline(
-      bind([constant("hello"), constant(99)], ([_s, n]) =>
-        n,
-      ),
+      bind([constant("hello"), constant(99)], ([_s, n]) => n),
     );
     expect(result).toBe(99);
   });
@@ -256,9 +248,7 @@ describe("bind execution", () => {
     const result = await runPipeline(
       pipe(
         constant({ x: 10 }),
-        bind([constant("bound")], ([_s]) =>
-          getField("x"),
-        ),
+        bind([constant("bound")], ([_s]) => getField("x")),
       ),
     );
     expect(result).toBe(10);
@@ -274,9 +264,7 @@ describe("bindInput execution", () => {
     const result = await runPipeline(
       pipe(
         constant(42),
-        bindInput<number, number>((input) =>
-          input,
-        ),
+        bindInput<number, number>((input) => input),
       ),
     );
     expect(result).toBe(42);
@@ -286,9 +274,7 @@ describe("bindInput execution", () => {
     const result = await runPipeline(
       pipe(
         constant({ artifact: "test.build" }),
-        bindInput<{ artifact: string }, { artifact: string }>((input) =>
-          input,
-        ),
+        bindInput<{ artifact: string }, { artifact: string }>((input) => input),
       ),
     );
     expect(result).toEqual({ artifact: "test.build" });

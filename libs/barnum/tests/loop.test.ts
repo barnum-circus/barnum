@@ -10,11 +10,7 @@ import {
   resetEffectIdCounter,
   config,
 } from "../src/ast.js";
-import {
-  constant,
-  drop,
-  splitFirst,
-} from "../src/builtins/index.js";
+import { constant, drop, splitFirst } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import {
   healthCheck,
@@ -43,13 +39,34 @@ function expectedTagAst(kind: string) {
       actions: [
         {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: kind } } },
-          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "kind" } } },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Constant", value: kind },
+            },
+          },
+          rest: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "WrapInField", field: "kind" },
+            },
+          },
         },
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "value" } } },
+        {
+          kind: "Invoke",
+          handler: {
+            kind: "Builtin",
+            builtin: { kind: "WrapInField", field: "value" },
+          },
+        },
       ],
     },
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   };
 }
 
@@ -63,8 +80,8 @@ describe("loop type tests", () => {
   });
 
   it("loop: input matches Continue type, output is Break type", () => {
-    const action = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
-      healthCheck.branch({ Continue: recur, Break: done }),
+    const action = loop<{ stable: true }, { deployed: boolean }>(
+      (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
@@ -73,17 +90,12 @@ describe("loop type tests", () => {
 
   it("loop with branch/recur/done: output is null with void defaults", () => {
     const action = loop((recur, done) =>
-      pipe(
-        typeCheck,
-        classifyErrors,
-      ).branch({
+      pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
         Clean: done,
       }),
     );
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, null>
-    >();
+    assertExact<IsExact<ExtractOutput<typeof action>, null>>();
     expect(action.kind).toBe("Chain");
   });
 
@@ -99,8 +111,8 @@ describe("loop type tests", () => {
   });
 
   it("loop<TBreak, TIn>: both explicit for stateful loops", () => {
-    const action = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
-      healthCheck.branch({ Continue: recur, Break: done }),
+    const action = loop<{ stable: true }, { deployed: boolean }>(
+      (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
@@ -155,8 +167,8 @@ describe("loop type tests", () => {
   });
 
   it("loop with explicit TIn has exact input", () => {
-    const action = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
-      healthCheck.branch({ Continue: recur, Break: done }),
+    const action = loop<{ stable: true }, { deployed: boolean }>(
+      (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
   });
@@ -181,8 +193,8 @@ describe("loop AST structure", () => {
   });
 
   it("loop produces Chain(tag(Continue), RestartHandle(...)) AST", () => {
-    const workflow = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
-      healthCheck.branch({ Continue: recur, Break: done }),
+    const workflow = loop<{ stable: true }, { deployed: boolean }>(
+      (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     expect(workflow.kind).toBe("Chain");
     const chain = workflow as any;
@@ -192,7 +204,10 @@ describe("loop AST structure", () => {
     expect(chain.rest.kind).toBe("RestartHandle");
     expect(typeof chain.rest.restart_handler_id).toBe("number");
     expect(chain.rest.body.kind).toBe("Branch");
-    expect(Object.keys(chain.rest.body.cases).toSorted()).toEqual(["Break", "Continue"]);
+    expect(Object.keys(chain.rest.body.cases).toSorted()).toEqual([
+      "Break",
+      "Continue",
+    ]);
   });
 
   it("loop composes type-check loop with branch", () => {
@@ -202,15 +217,14 @@ describe("loop AST structure", () => {
         setup,
         listFiles,
         forEach(migrate),
-      ).then(loop((recur, done) =>
-        pipe(
-          typeCheck,
-          classifyErrors,
-        ).branch({
-          HasErrors: pipe(forEach(fix).drop(), recur),
-          Clean: done,
-        }),
-      )),
+      ).then(
+        loop((recur, done) =>
+          pipe(typeCheck, classifyErrors).branch({
+            HasErrors: pipe(forEach(fix).drop(), recur),
+            Clean: done,
+          }),
+        ),
+      ),
     );
     expect(cfg.workflow.kind).toBe("Chain");
   });
@@ -227,9 +241,7 @@ describe("loop execution", () => {
 
   it("loop that immediately breaks returns break value", async () => {
     const result = await runPipeline(
-      loop<number>((_, done) =>
-        pipe(constant(42), done),
-      ),
+      loop<number>((_, done) => pipe(constant(42), done)),
     );
     expect(result).toBe(42);
   });
@@ -258,18 +270,14 @@ describe("earlyReturn execution", () => {
 
   it("earlyReturn exits early with value", async () => {
     const result = await runPipeline(
-      earlyReturn<string>((ret) =>
-        pipe(constant("early"), ret),
-      ),
+      earlyReturn<string>((ret) => pipe(constant("early"), ret)),
     );
     expect(result).toBe("early");
   });
 
   it("earlyReturn completes normally without early return", async () => {
     const result = await runPipeline(
-      earlyReturn<string, any, number>((_ret) =>
-        constant(42),
-      ),
+      earlyReturn<string, any, number>((_ret) => constant(42)),
     );
     expect(result).toBe(42);
   });
@@ -298,9 +306,7 @@ describe("recur execution", () => {
 
   it("recur completes immediately without restart", async () => {
     const result = await runPipeline(
-      recur<void, string>((_restart) =>
-        constant("immediate"),
-      ),
+      recur<void, string>((_restart) => constant("immediate")),
     );
     expect(result).toBe("immediate");
   });

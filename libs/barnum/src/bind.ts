@@ -64,10 +64,12 @@ export type InferVarRefs<TBindings extends Action[]> = {
  * Expanded AST: All(Chain(GetIndex(1).unwrap(), GetIndex(n).unwrap()), GetIndex(1).unwrap())
  */
 function readVar(n: number): Action {
-  return toAction(all(
-    chain(toAction(getIndex(1).unwrap()), toAction(getIndex(n).unwrap())),
-    toAction(getIndex(1).unwrap()),
-  ));
+  return toAction(
+    all(
+      chain(toAction(getIndex(1).unwrap()), toAction(getIndex(n).unwrap())),
+      toAction(getIndex(1).unwrap()),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -116,10 +118,12 @@ export function bind<TBindings extends Action[], TOut>(
   // 4. Build nested Handles from inside out.
   //    Innermost: extract pipeline_input (last All element) → user body
   const pipelineInputIndex = bindings.length;
-  let inner: Action = toAction(chain(
-    toAction(getIndex(pipelineInputIndex).unwrap()),
-    toAction(bodyAction),
-  ));
+  let inner: Action = toAction(
+    chain(
+      toAction(getIndex(pipelineInputIndex).unwrap()),
+      toAction(bodyAction),
+    ),
+  );
   for (let i = resumeHandlerIds.length - 1; i >= 0; i--) {
     inner = {
       kind: "ResumeHandle",

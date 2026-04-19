@@ -6,21 +6,10 @@ import {
   branch,
   config,
 } from "../src/ast.js";
-import {
-  constant,
-  drop,
-  getField,
-  identity,
-} from "../src/builtins/index.js";
+import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { chain } from "../src/chain.js";
 import { runPipeline } from "../src/run.js";
-import {
-  setup,
-  build,
-  verify,
-  deploy,
-  classifyErrors,
-} from "./handlers.js";
+import { setup, build, verify, deploy, classifyErrors } from "./handlers.js";
 
 // ---------------------------------------------------------------------------
 // Type assertion helpers (compile-time only)
@@ -71,9 +60,7 @@ describe("pipe type tests", () => {
   });
 
   it("config accepts workflows starting with constant", () => {
-    const cfg = config(
-      pipe(constant({ artifact: "test" }), verify),
-    );
+    const cfg = config(pipe(constant({ artifact: "test" }), verify));
     expect(cfg.workflow.kind).toBe("Chain");
   });
 
@@ -98,13 +85,7 @@ describe("pipe type tests", () => {
 describe("pipe AST structure", () => {
   it("pipe chains setup → build → verify → deploy", () => {
     const cfg = config(
-      pipe(
-        constant({ project: "test" }),
-        setup,
-        build,
-        verify,
-        deploy,
-      ),
+      pipe(constant({ project: "test" }), setup, build, verify, deploy),
     );
     expect(cfg.workflow.kind).toBe("Chain");
   });
@@ -165,32 +146,23 @@ describe("pipe execution", () => {
 
   it("pipe of 4 builtins via postfix chaining", async () => {
     const result = await runPipeline(
-      constant({ x: 42 })
-        .getField("x")
-        .wrapInField("value")
-        .getField("value"),
+      constant({ x: 42 }).getField("x").wrapInField("value").getField("value"),
     );
     expect(result).toBe(42);
   });
 
   it("pipe with identity is passthrough", async () => {
-    const result = await runPipeline(
-      pipe(constant("hello"), identity()),
-    );
+    const result = await runPipeline(pipe(constant("hello"), identity()));
     expect(result).toBe("hello");
   });
 
   it("pipe with drop discards value", async () => {
-    const result = await runPipeline(
-      pipe(constant(42), drop),
-    );
+    const result = await runPipeline(pipe(constant(42), drop));
     expect(result).toBeNull();
   });
 
   it(".then() postfix chains correctly", async () => {
-    const result = await runPipeline(
-      constant({ x: 10 }).then(constant(99)),
-    );
+    const result = await runPipeline(constant({ x: 10 }).then(constant(99)));
     expect(result).toBe(99);
   });
 

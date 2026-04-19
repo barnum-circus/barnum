@@ -41,10 +41,12 @@ export function tryCatch<TIn, TOut, TError>(
   const restartHandlerId = allocateRestartHandlerId();
 
   const throwError = typedAction<TError, never>(
-    toAction(chain(
-      toAction(tag("Break", "LoopResult")),
-      { kind: "RestartPerform", restart_handler_id: restartHandlerId },
-    )),
+    toAction(
+      chain(toAction(tag("Break", "LoopResult")), {
+        kind: "RestartPerform",
+        restart_handler_id: restartHandlerId,
+      }),
+    ),
   );
 
   const bodyAction = toAction(body(throwError));

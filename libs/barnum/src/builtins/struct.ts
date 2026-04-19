@@ -64,8 +64,8 @@ export function pick<
   TObj extends Record<string, unknown>,
   TKeys extends (keyof TObj & string)[],
 >(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>> {
-  const actions = keys.map(
-    (key) => toAction(chain(toAction(getField(key)), toAction(wrapInField(key)))),
+  const actions = keys.map((key) =>
+    toAction(chain(toAction(getField(key)), toAction(wrapInField(key)))),
   );
   const allAction: Action = { kind: "All", actions };
   return chain(toAction(allAction), toAction(merge())) as TypedAction<
@@ -94,13 +94,14 @@ export function pick<
  * `{ key: value }` via `wrapInField`, run concurrently via `All`,
  * then merged into a single object.
  */
-export function allObject<
-  TActions extends Record<string, Pipeable<any, any>>,
->(
+export function allObject<TActions extends Record<string, Pipeable<any, any>>>(
   actions: TActions,
-): TypedAction<any, { [K in keyof TActions & string]: ExtractOutput<TActions[K]> }> {
-  const wrapped = Object.entries(actions).map(
-    ([key, action]) => toAction(chain(action, wrapInField(key))),
+): TypedAction<
+  any,
+  { [K in keyof TActions & string]: ExtractOutput<TActions[K]> }
+> {
+  const wrapped = Object.entries(actions).map(([key, action]) =>
+    toAction(chain(action, wrapInField(key))),
   );
   const allAction: Action = { kind: "All", actions: wrapped };
   return chain(toAction(allAction), toAction(merge())) as TypedAction<

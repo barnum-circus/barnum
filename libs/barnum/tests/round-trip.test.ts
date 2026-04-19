@@ -13,13 +13,7 @@ import {
   resetEffectIdCounter,
   constant,
 } from "../src/index.js";
-import {
-  setup,
-  build,
-  verify,
-  deploy,
-  healthCheck,
-} from "./handlers.js";
+import { setup, build, verify, deploy, healthCheck } from "./handlers.js";
 
 const HERE = import.meta.dirname;
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
@@ -40,16 +34,12 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
   });
 
   it("Invoke", () => {
-    const cfg = config(
-      pipe(constant({ project: "test" }), setup),
-    );
+    const cfg = config(pipe(constant({ project: "test" }), setup));
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Pipe", () => {
-    const cfg = config(
-      pipe(constant({ project: "test" }), setup, build),
-    );
+    const cfg = config(pipe(constant({ project: "test" }), setup, build));
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
@@ -61,9 +51,7 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
   });
 
   it("ForEach", () => {
-    const cfg = config(
-      pipe(constant([{ artifact: "test" }]), forEach(verify)),
-    );
+    const cfg = config(pipe(constant([{ artifact: "test" }]), forEach(verify)));
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
@@ -90,5 +78,4 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
-
 });

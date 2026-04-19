@@ -10,7 +10,6 @@ export {
   getField,
   getIndex,
   identity,
-
   panic,
   pick,
   range,
@@ -31,5 +30,8 @@ export { zodToCheckedJsonSchema } from "./schema.js";
 // shadow the type-only exports from ast's `export *`. Re-declare the generic
 // type aliases here so consumers get both the type and value under one name.
 export type Option<T> = TaggedUnion<"Option", OptionDef<T>>;
-export type Result<TValue, TError> = TaggedUnion<"Result", ResultDef<TValue, TError>>;
+export type Result<TValue, TError> = TaggedUnion<
+  "Result",
+  ResultDef<TValue, TError>
+>;
 export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;

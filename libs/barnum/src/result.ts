@@ -20,7 +20,10 @@ export const Result = {
     return tag<"Result", ResultDef<TValue, TError>, "Ok">("Ok", "Result");
   },
   /** Tag combinator: wrap value as `Result.Err`. `TError → Result<TValue, TError>` */
-  err<TValue = never, TError = unknown>(): TypedAction<TError, ResultT<TValue, TError>> {
+  err<TValue = never, TError = unknown>(): TypedAction<
+    TError,
+    ResultT<TValue, TError>
+  > {
     return tag<"Result", ResultDef<TValue, TError>, "Err">("Err", "Result");
   },
 
@@ -66,7 +69,6 @@ export const Result = {
       Err: fallback,
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>;
   },
-
 
   /**
    * Extract the Ok value or panic. `Result<TValue, TError> → TValue`
@@ -128,10 +130,16 @@ export const Result = {
   > {
     return branch({
       Ok: branch({
-        Some: chain(Result.ok<TValue, TError>(), Option.some<ResultT<TValue, TError>>()),
+        Some: chain(
+          Result.ok<TValue, TError>(),
+          Option.some<ResultT<TValue, TError>>(),
+        ),
         None: chain(drop, Option.none<ResultT<TValue, TError>>()),
       }),
-      Err: chain(Result.err<TValue, TError>(), Option.some<ResultT<TValue, TError>>()),
+      Err: chain(
+        Result.err<TValue, TError>(),
+        Option.some<ResultT<TValue, TError>>(),
+      ),
     }) as TypedAction<
       ResultT<OptionT<TValue>, TError>,
       OptionT<ResultT<TValue, TError>>
@@ -157,5 +165,4 @@ export const Result = {
       Err: constant<boolean>(true),
     }) as TypedAction<ResultT<TValue, TError>, boolean>;
   },
-
 } as const;

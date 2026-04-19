@@ -67,20 +67,24 @@ describe("AsOption execution", () => {
 
   it("asOption + branch dispatches correctly", async () => {
     const result = await runPipeline(
-      constant(true).asOption().branch({
-        Some: constant("was true"),
-        None: constant("was false"),
-      }),
+      constant(true)
+        .asOption()
+        .branch({
+          Some: constant("was true"),
+          None: constant("was false"),
+        }),
     );
     expect(result).toBe("was true");
   });
 
   it("asOption false + branch dispatches to None", async () => {
     const result = await runPipeline(
-      constant(false).asOption().branch({
-        Some: constant("was true"),
-        None: constant("was false"),
-      }),
+      constant(false)
+        .asOption()
+        .branch({
+          Some: constant("was true"),
+          None: constant("was false"),
+        }),
     );
     expect(result).toBe("was false");
   });

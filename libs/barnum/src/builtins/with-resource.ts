@@ -1,8 +1,4 @@
-import {
-  type Pipeable,
-  type TypedAction,
-  toAction,
-} from "../ast.js";
+import { type Pipeable, type TypedAction, toAction } from "../ast.js";
 import { chain } from "../chain.js";
 import { all } from "../all.js";
 import { identity } from "./scalar.js";
@@ -44,7 +40,10 @@ export function withResource<
   dispose: Pipeable<TResource, TDisposeOut>;
 }): TypedAction<TIn, TOut> {
   // Step 1: all(create, identity) → [TResource, TIn] → merge → TResource & TIn
-  const acquireAndMerge = chain(toAction(all(create, identity())), toAction(merge()));
+  const acquireAndMerge = chain(
+    toAction(all(create, identity())),
+    toAction(merge()),
+  );
 
   // Step 2: all(action, identity) → [TOut, TResource & TIn]
   const actionAndKeepMerged = all(toAction(action), toAction(identity()));
@@ -57,10 +56,14 @@ export function withResource<
 
   // Step 4: getIndex(0).unwrap() → TOut
   return chain(
-    toAction(chain(
-      toAction(chain(toAction(acquireAndMerge), toAction(actionAndKeepMerged))),
-      toAction(disposeAndKeepResult),
-    )),
+    toAction(
+      chain(
+        toAction(
+          chain(toAction(acquireAndMerge), toAction(actionAndKeepMerged)),
+        ),
+        toAction(disposeAndKeepResult),
+      ),
+    ),
     toAction(getIndex(0).unwrap()),
   ) as TypedAction<TIn, TOut>;
 }

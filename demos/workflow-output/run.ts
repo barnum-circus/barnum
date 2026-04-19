@@ -24,7 +24,9 @@ async function main() {
 
   // 3. Multi-step pipeline returns the final handler's output
   const labeled = await runPipeline(pipe(constant(5), double, addLabel));
-  console.error(`[assert] pipe(double, addLabel)(5) returned: ${JSON.stringify(labeled)}`);
+  console.error(
+    `[assert] pipe(double, addLabel)(5) returned: ${JSON.stringify(labeled)}`,
+  );
   assert(
     labeled.label === "result-10" && labeled.value === 10,
     `expected {label: "result-10", value: 10}, got ${JSON.stringify(labeled)}`,

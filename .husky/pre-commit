@@ -50,7 +50,7 @@ done
 if [ -n "$TS_FILES" ]; then
     run_quiet "Running oxlint" pnpm --filter @barnum/barnum run lint
 
-    run_quiet "Running prettier --check" pnpm --filter @barnum/barnum exec prettier --check 'src/**/*.ts'
+    run_quiet "Running prettier --check" pnpm --filter @barnum/barnum exec prettier --check 'src/**/*.ts' 'tests/**/*.ts' '../../demos/**/*.ts'
 
     if [ -n "$DOCS_FILES" ]; then
         run_quiet "Running turbo typecheck" pnpm exec turbo run typecheck

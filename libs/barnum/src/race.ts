@@ -21,10 +21,12 @@ import {
  * restarts the body; Branch takes the Break arm (identity), `RestartHandle` exits.
  */
 function breakPerform(restartHandlerId: RestartHandlerId): Action {
-  return toAction(chain(
-    toAction(tag("Break", "LoopResult")),
-    { kind: "RestartPerform", restart_handler_id: restartHandlerId },
-  ));
+  return toAction(
+    chain(toAction(tag("Break", "LoopResult")), {
+      kind: "RestartPerform",
+      restart_handler_id: restartHandlerId,
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -55,8 +57,8 @@ export function race<TIn, TOut>(
   const restartHandlerId = allocateRestartHandlerId();
   const perform = breakPerform(restartHandlerId);
 
-  const branches = actions.map(
-    (action) => toAction(chain(toAction(action), toAction(perform))),
+  const branches = actions.map((action) =>
+    toAction(chain(toAction(action), toAction(perform))),
   );
 
   const allAction: Action = { kind: "All", actions: branches };
@@ -143,16 +145,25 @@ export function withTimeout<TIn, TOut>(
   const perform = breakPerform(restartHandlerId);
 
   // Branch 1: body → Tag("Ok") → Break → RestartPerform
-  const bodyBranch = toAction(chain(
-    toAction(chain(toAction(body), toAction(Result.ok()))),
-    toAction(perform),
-  ));
+  const bodyBranch = toAction(
+    chain(
+      toAction(chain(toAction(body), toAction(Result.ok()))),
+      toAction(perform),
+    ),
+  );
 
   // Branch 2: ms → sleep() → Tag("Err") → Break → RestartPerform
-  const sleepBranch = toAction(chain(
-    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(Result.err()))),
-    toAction(perform),
-  ));
+  const sleepBranch = toAction(
+    chain(
+      toAction(
+        chain(
+          toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))),
+          toAction(Result.err()),
+        ),
+      ),
+      toAction(perform),
+    ),
+  );
 
   const allAction: Action = { kind: "All", actions: [bodyBranch, sleepBranch] };
 

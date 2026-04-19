@@ -8,7 +8,12 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type Action, type Config, type ExtractOutput, toAction } from "./ast.js";
+import {
+  type Action,
+  type Config,
+  type ExtractOutput,
+  toAction,
+} from "./ast.js";
 import { chain } from "./chain.js";
 import { constant } from "./builtins/index.js";
 

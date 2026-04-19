@@ -6,17 +6,9 @@ import {
   all,
   config,
 } from "../src/ast.js";
-import {
-  constant,
-  identity,
-  getField,
-} from "../src/builtins/index.js";
+import { constant, identity, getField } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
-import {
-  setup,
-  build,
-  verify,
-} from "./handlers.js";
+import { setup, build, verify } from "./handlers.js";
 
 // ---------------------------------------------------------------------------
 // Type assertion helpers (compile-time only)
@@ -63,17 +55,10 @@ describe("all AST structure", () => {
 
   it("all composes with pipe", () => {
     const cfg = config(
-      pipe(
-        constant({ project: "test" }),
-        all(
-          setup,
-          pipe(setup, build),
-        ),
-      ),
+      pipe(constant({ project: "test" }), all(setup, pipe(setup, build))),
     );
     expect(cfg.workflow.kind).toBe("Chain");
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -83,20 +68,14 @@ describe("all AST structure", () => {
 describe("all execution", () => {
   it("all runs actions, returns tuple of results", async () => {
     const result = await runPipeline(
-      pipe(
-        constant({ x: 10, y: 20 }),
-        all(getField("x"), getField("y")),
-      ),
+      pipe(constant({ x: 10, y: 20 }), all(getField("x"), getField("y"))),
     );
     expect(result).toEqual([10, 20]);
   });
 
   it("all with identity preserves input alongside other action", async () => {
     const result = await runPipeline(
-      pipe(
-        constant({ x: 42 }),
-        all(identity(), getField("x")),
-      ),
+      pipe(constant({ x: 42 }), all(identity(), getField("x"))),
     );
     expect(result).toEqual([{ x: 42 }, 42]);
   });
@@ -112,10 +91,7 @@ describe("all execution", () => {
   });
 
   it("all with constant actions (independent of input)", async () => {
-    const result = await runPipeline(
-      all(constant("hello"), constant(42)),
-    );
+    const result = await runPipeline(all(constant("hello"), constant(42)));
     expect(result).toEqual(["hello", 42]);
   });
-
 });

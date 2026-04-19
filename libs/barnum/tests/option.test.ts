@@ -9,12 +9,7 @@ import {
   pipe,
   forEach,
 } from "../src/ast.js";
-import {
-  constant,
-  drop,
-  identity,
-  tag,
-} from "../src/builtins/index.js";
+import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Option as O } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
@@ -36,13 +31,34 @@ function expectedTagAst(kind: string) {
       actions: [
         {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: kind } } },
-          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "kind" } } },
+          first: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Constant", value: kind },
+            },
+          },
+          rest: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "WrapInField", field: "kind" },
+            },
+          },
         },
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "WrapInField", field: "value" } } },
+        {
+          kind: "Invoke",
+          handler: {
+            kind: "Builtin",
+            builtin: { kind: "WrapInField", field: "value" },
+          },
+        },
       ],
     },
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   };
 }
 
@@ -82,8 +98,12 @@ describe("Option constructor type info", () => {
 describe("Option namespace types", () => {
   it("Option.map(action): Option<T> -> Option<U>", () => {
     const action = O.map<{ artifact: string }, { verified: boolean }>(verify);
-    assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+    >();
   });
 
   it("Option.map composes in pipe", () => {
@@ -92,24 +112,46 @@ describe("Option namespace types", () => {
       O.map(verify),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+    >();
   });
 
   it("Option.andThen(action): Option<T> -> Option<U>", () => {
     const action = O.andThen<{ artifact: string }, { verified: boolean }>(
-      pipe(verify, tag<"Option", OptionDef<{ verified: boolean }>, "Some">("Some", "Option")),
+      pipe(
+        verify,
+        tag<"Option", OptionDef<{ verified: boolean }>, "Some">(
+          "Some",
+          "Option",
+        ),
+      ),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+    >();
   });
 
   it("Option.andThen composes in pipe for chaining", () => {
     const action = pipe(
       tag<"Option", OptionDef<{ artifact: string }>, "Some">("Some", "Option"),
-      O.andThen(pipe(verify, tag<"Option", OptionDef<{ verified: boolean }>, "Some">("Some", "Option"))),
+      O.andThen(
+        pipe(
+          verify,
+          tag<"Option", OptionDef<{ verified: boolean }>, "Some">(
+            "Some",
+            "Option",
+          ),
+        ),
+      ),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+    >();
   });
 
   it("Option.unwrapOr(defaultAction): Option<T> -> T", () => {
@@ -161,8 +203,12 @@ describe("Option namespace types", () => {
       forEach(O.map<{ artifact: string }, { verified: boolean }>(verify)),
       O.collect<{ verified: boolean }>(),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>[]>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>[]>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>
+    >();
   });
 
   it("Option.unwrap: Option<T> -> T", () => {
@@ -173,8 +219,12 @@ describe("Option namespace types", () => {
 
   it("Option.transpose: Option<Result<T,E>> -> Result<Option<T>,E>", () => {
     const action = O.transpose<string, number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Option<Result<string, number>>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<Option<string>, number>>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, Option<Result<string, number>>>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Result<Option<string>, number>>
+    >();
   });
 });
 
@@ -198,7 +248,15 @@ describe("Option AST structure", () => {
   });
 
   it("Option.andThen() produces Branch with action Some and tag None", () => {
-    const action = O.andThen(pipe(verify, tag<"Option", OptionDef<{ verified: boolean }>, "Some">("Some", "Option")));
+    const action = O.andThen(
+      pipe(
+        verify,
+        tag<"Option", OptionDef<{ verified: boolean }>, "Some">(
+          "Some",
+          "Option",
+        ),
+      ),
+    );
     expect(action.kind).toBe("Branch");
     const branchNode = action as { kind: "Branch"; cases: any };
     expect(Object.keys(branchNode.cases).toSorted()).toEqual(["None", "Some"]);
@@ -221,11 +279,16 @@ describe("Option AST structure", () => {
   });
 
   it("Option.filter() produces Branch with predicate Some and tag None", () => {
-    const predicate = tag<"Option", OptionDef<string>, "Some">("Some", "Option");
+    const predicate = tag<"Option", OptionDef<string>, "Some">(
+      "Some",
+      "Option",
+    );
     const action = O.filter(predicate);
     expect(action.kind).toBe("Branch");
     const branchNode = action as { kind: "Branch"; cases: any };
-    expect(branchNode.cases["Some"].rest).toEqual(expectedTagAst("Option.Some"));
+    expect(branchNode.cases["Some"].rest).toEqual(
+      expectedTagAst("Option.Some"),
+    );
   });
 
   it("Option.collect() produces CollectSome builtin", () => {
@@ -288,7 +351,12 @@ describe("Option execution", () => {
     const result = await runPipeline(
       pipe(
         constant(5).some(),
-        O.andThen<number, number>(pipe(constant(10), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
+        O.andThen<number, number>(
+          pipe(
+            constant(10),
+            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
+          ),
+        ),
       ),
     );
     expect(result).toEqual({ kind: "Option.Some", value: 10 });
@@ -298,7 +366,12 @@ describe("Option execution", () => {
     const result = await runPipeline(
       pipe(
         constant(5).some(),
-        O.andThen<number, number>(pipe(drop, tag<"Option", OptionDef<number>, "None">("None", "Option"))),
+        O.andThen<number, number>(
+          pipe(
+            drop,
+            tag<"Option", OptionDef<number>, "None">("None", "Option"),
+          ),
+        ),
       ),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
@@ -308,7 +381,12 @@ describe("Option execution", () => {
     const result = await runPipeline(
       pipe(
         pipe(constant(null), O.none<number>()),
-        O.andThen<number, number>(pipe(constant(10), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
+        O.andThen<number, number>(
+          pipe(
+            constant(10),
+            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
+          ),
+        ),
       ),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
@@ -316,9 +394,7 @@ describe("Option execution", () => {
 
   // -- unwrap --
   it("Option.unwrap on Some extracts value", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).some(), O.unwrap()),
-    );
+    const result = await runPipeline(pipe(constant(42).some(), O.unwrap()));
     expect(result).toBe(42);
   });
 
@@ -348,7 +424,12 @@ describe("Option execution", () => {
     const result = await runPipeline(
       pipe(
         constant(42).some(),
-        O.filter<number>(pipe(identity(), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
+        O.filter<number>(
+          pipe(
+            identity(),
+            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
+          ),
+        ),
       ),
     );
     expect(result).toEqual({ kind: "Option.Some", value: 42 });
@@ -358,7 +439,12 @@ describe("Option execution", () => {
     const result = await runPipeline(
       pipe(
         constant(42).some(),
-        O.filter<number>(pipe(drop, tag<"Option", OptionDef<number>, "None">("None", "Option"))),
+        O.filter<number>(
+          pipe(
+            drop,
+            tag<"Option", OptionDef<number>, "None">("None", "Option"),
+          ),
+        ),
       ),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
@@ -368,7 +454,12 @@ describe("Option execution", () => {
     const result = await runPipeline(
       pipe(
         pipe(constant(null), O.none<number>()),
-        O.filter<number>(pipe(identity(), tag<"Option", OptionDef<number>, "Some">("Some", "Option"))),
+        O.filter<number>(
+          pipe(
+            identity(),
+            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
+          ),
+        ),
       ),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
@@ -403,7 +494,9 @@ describe("Option execution", () => {
   });
 
   it("Option.isSome on None -> false", async () => {
-    const result = await runPipeline(pipe(pipe(constant(null), O.none<number>()), O.isSome()));
+    const result = await runPipeline(
+      pipe(pipe(constant(null), O.none<number>()), O.isSome()),
+    );
     expect(result).toBe(false);
   });
 
@@ -413,7 +506,9 @@ describe("Option execution", () => {
   });
 
   it("Option.isNone on None -> true", async () => {
-    const result = await runPipeline(pipe(pipe(constant(null), O.none<number>()), O.isNone()));
+    const result = await runPipeline(
+      pipe(pipe(constant(null), O.none<number>()), O.isNone()),
+    );
     expect(result).toBe(true);
   });
 
@@ -466,7 +561,9 @@ describe("Option execution", () => {
   });
 
   it("postfix .unwrapOr on Option output", async () => {
-    const result = await runPipeline(pipe(constant(null), O.none<number>()).unwrapOr(constant(99)));
+    const result = await runPipeline(
+      pipe(constant(null), O.none<number>()).unwrapOr(constant(99)),
+    );
     expect(result).toBe(99);
   });
 

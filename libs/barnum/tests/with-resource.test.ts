@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  pipe,
-} from "../src/ast.js";
+import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
 import {
   constant,
   withResource,
@@ -27,11 +23,7 @@ function assertExact<_T extends true>(): void {}
 
 describe("with-resource type tests", () => {
   it("withResource: TIn -> TOut", () => {
-    const action = withResource<
-      { project: string },
-      { conn: string },
-      number
-    >({
+    const action = withResource<{ project: string }, { conn: string }, number>({
       create: constant({ conn: "db://localhost" }),
       action: constant(42),
       dispose: constant(null),
