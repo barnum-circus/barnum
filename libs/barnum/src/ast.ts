@@ -122,9 +122,9 @@ export type BuiltinKind =
   | { kind: "CollectSome" }
   // TODO: Add WrapInArray builtin (T → [T]). Currently done via all(identity()) which
   // works but routes through the All executor for a trivial operation.
-  // TODO: Add BoolToOption builtin or branchBool primitive ((T, bool) → Option<T>).
-  // Needed for Iterator.filter — currently requires CollectWhere workaround because
-  // branch() only dispatches on tagged union kind fields, not booleans.
+  // TODO: Add AsOption builtin (bool → Option<void>). true → Some(void), false → None.
+  // Enables boolean branching via .asOption().branch({ Some: ..., None: ... }).
+  // Needed for Iterator.filter — currently requires CollectWhere workaround.
   | { kind: "SplitFirst" }
   | { kind: "SplitLast" }
   | { kind: "WrapInField"; field: string }
