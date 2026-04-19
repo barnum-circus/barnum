@@ -1,6 +1,8 @@
 import {
   type Action,
+  type ExtractOutput,
   type MergeTuple,
+  type Pipeable,
   type TypedAction,
   toAction,
   typedAction,
@@ -69,5 +71,40 @@ export function pick<
   return chain(toAction(allAction), toAction(merge())) as TypedAction<
     TObj,
     Pick<TObj, TKeys[number]>
+  >;
+}
+
+// ---------------------------------------------------------------------------
+// AllObject — run named actions concurrently, collect into an object
+// ---------------------------------------------------------------------------
+
+/**
+ * Run named actions concurrently on the same input, collecting results
+ * into an object with matching keys.
+ *
+ * ```ts
+ * allObject({
+ *   files: listFiles,
+ *   config: loadConfig,
+ * })
+ * // TIn → { files: string[], config: Config }
+ * ```
+ *
+ * Each action receives the pipeline input. Results are wrapped in
+ * `{ key: value }` via `wrapInField`, run concurrently via `All`,
+ * then merged into a single object.
+ */
+export function allObject<
+  TActions extends Record<string, Pipeable<any, any>>,
+>(
+  actions: TActions,
+): TypedAction<any, { [K in keyof TActions & string]: ExtractOutput<TActions[K]> }> {
+  const wrapped = Object.entries(actions).map(
+    ([key, action]) => toAction(chain(action, wrapInField(key))),
+  );
+  const allAction: Action = { kind: "All", actions: wrapped };
+  return chain(toAction(allAction), toAction(merge())) as TypedAction<
+    any,
+    { [K in keyof TActions & string]: ExtractOutput<TActions[K]> }
   >;
 }

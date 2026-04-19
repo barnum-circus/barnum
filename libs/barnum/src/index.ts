@@ -2,23 +2,24 @@ import type { TaggedUnion, OptionDef, ResultDef, IteratorDef } from "./ast.js";
 
 export * from "./ast.js";
 export {
+  allObject,
+  asOption,
   constant,
-  identity,
   drop,
-  panic,
-  tag,
-  merge,
   flatten,
   getField,
   getIndex,
+  identity,
+  merge,
+  panic,
   pick,
-  withResource,
   range,
   splitFirst,
   splitLast,
-  wrapInField,
+  tag,
   taggedUnionSchema,
-  asOption,
+  withResource,
+  wrapInField,
 } from "./builtins/index.js";
 export { Option, first, last } from "./option.js";
 export { Result } from "./result.js";

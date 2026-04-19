@@ -5,6 +5,7 @@ import {
   pipe,
 } from "../src/ast.js";
 import {
+  allObject,
   constant,
   getField,
   wrapInField,
@@ -68,6 +69,16 @@ describe("struct type tests", () => {
     >();
     assertExact<
       IsExact<ExtractOutput<typeof action>, Pick<{ a: number; b: string; c: boolean }, "a" | "b">>
+    >();
+  });
+
+  it("allObject: TInput -> { [K]: ExtractOutput<TActions[K]> }", () => {
+    const action = allObject({
+      name: constant("hello"),
+      count: constant(42),
+    });
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, { name: string; count: number }>
     >();
   });
 });
@@ -136,5 +147,26 @@ describe("struct execution", () => {
       ),
     );
     expect(result).toEqual({ a: 1, b: 2 });
+  });
+
+  it("allObject runs actions concurrently and collects into an object", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant({ x: 10 }),
+        allObject({
+          val: getField("x"),
+          wrapped: pipe(getField("x"), wrapInField("inner")),
+          fixed: constant("hello"),
+        }),
+      ),
+    );
+    expect(result).toEqual({ val: 10, wrapped: { inner: 10 }, fixed: "hello" });
+  });
+
+  it("allObject with single action", async () => {
+    const result = await runPipeline(
+      pipe(constant(42), allObject({ answer: constant("yes") })),
+    );
+    expect(result).toEqual({ answer: "yes" });
   });
 });
