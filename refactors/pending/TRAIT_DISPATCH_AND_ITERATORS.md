@@ -2,7 +2,7 @@
 
 ## Context
 
-Dynamic dispatch in barnum uses **prefix-based dispatch** via the `ExtractPrefix` builtin and `branchFamily` combinator (renamed from `branchFamily`). Tagged union values carry namespaced kind strings (`"Option.Some"`, `"Result.Ok"`). `ExtractPrefix` splits on `'.'` to restructure the value so `branch()` can dispatch on the family first, then the variant. No runtime dispatch tables — the AST encodes the dispatch.
+Dynamic dispatch in barnum uses **prefix-based dispatch** via the `ExtractPrefix` builtin and `branchFamily` combinator (renamed from `matchPrefix`). Tagged union values carry namespaced kind strings (`"Option.Some"`, `"Result.Ok"`). `ExtractPrefix` splits on `'.'` to restructure the value so `branch()` can dispatch on the family first, then the variant. No runtime dispatch tables — the AST encodes the dispatch.
 
 Currently, transformation methods like `.map()` and `.andThen()` are postfix methods on TypedAction that use `branchFamily` to dispatch across Option and Result.
 
