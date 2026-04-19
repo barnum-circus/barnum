@@ -58,33 +58,33 @@ describe("Result constructor type info", () => {
   it("Result.ok<T>() retains value type with explicit param", () => {
     const ok = R.ok<string>();
     assertExact<IsExact<ExtractInput<typeof ok>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof ok>, Result<string, unknown>>>();
+    assertExact<IsExact<ExtractOutput<typeof ok>, Result<string, never>>>();
   });
 
   it("Result.err<T>() retains error type with explicit param", () => {
-    const err = R.err<unknown, number>();
+    const err = R.err<never, number>();
     assertExact<IsExact<ExtractInput<typeof err>, number>>();
   });
 
   it("postfix .ok() infers type from output", () => {
     const result = constant("hello").ok();
-    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, unknown>>>();
+    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, never>>>();
   });
 
   it("postfix .err() infers type from output", () => {
     const result = constant(42).err();
-    assertExact<IsExact<ExtractOutput<typeof result>, Result<unknown, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof result>, Result<never, number>>>();
   });
 
   it("pipe(x, Result.ok<T>()) retains type with explicit param", () => {
     const result = pipe(constant("hello"), R.ok<string>());
-    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, unknown>>>();
+    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, never>>>();
   });
 
   it("pipe(x, Result.ok()) does not infer TValue from pipe context", () => {
     const result = pipe(constant("hello"), R.ok());
-    // @ts-expect-error — TValue defaults to unknown; pipe accepts it but output is Result<unknown, unknown>
-    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, unknown>>>();
+    // @ts-expect-error — TValue defaults to unknown; pipe accepts it but output is Result<unknown, never>
+    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, never>>>();
   });
 });
 
@@ -625,7 +625,7 @@ describe("Result execution", () => {
   });
 
   it("postfix .unwrapOr on Result output", async () => {
-    const result = await runPipeline(constant("fail").err().unwrapOr(constant(99)));
+    const result = await runPipeline(pipe(constant("fail"), R.err<number, string>()).unwrapOr(constant(99)));
     expect(result).toBe(99);
   });
 

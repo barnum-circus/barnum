@@ -17,11 +17,11 @@ import { Option } from "./option.js";
 
 export const Result = {
   /** Tag combinator: wrap value as `Result.Ok`. `TValue → Result<TValue, TError>` */
-  ok<TValue, TError = unknown>(): TypedAction<TValue, ResultT<TValue, TError>> {
+  ok<TValue, TError = never>(): TypedAction<TValue, ResultT<TValue, TError>> {
     return tag<"Result", ResultDef<TValue, TError>, "Ok">("Ok", "Result");
   },
   /** Tag combinator: wrap value as `Result.Err`. `TError → Result<TValue, TError>` */
-  err<TValue = unknown, TError = never>(): TypedAction<TError, ResultT<TValue, TError>> {
+  err<TValue = never, TError = unknown>(): TypedAction<TError, ResultT<TValue, TError>> {
     return tag<"Result", ResultDef<TValue, TError>, "Err">("Err", "Result");
   },
 

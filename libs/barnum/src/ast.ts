@@ -209,10 +209,10 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   ): TypedAction<In, TaggedUnion<TEnumName, TDef>>;
   /** Wrap output as `Option.Some`. `T → Option<T>` */
   some(): TypedAction<In, Option<Out>>;
-  /** Wrap output as `Result.Ok`. `T → Result<T, unknown>` */
-  ok(): TypedAction<In, Result<Out, unknown>>;
-  /** Wrap output as `Result.Err`. `T → Result<unknown, T>` */
-  err(): TypedAction<In, Result<unknown, Out>>;
+  /** Wrap output as `Result.Ok`. `T → Result<T, never>` */
+  ok(): TypedAction<In, Result<Out, never>>;
+  /** Wrap output as `Result.Err`. `T → Result<never, T>` */
+  err(): TypedAction<In, Result<never, Out>>;
   /** Extract a field from the output object. `a.getField("name")` ≡ `pipe(a, getField("name"))`. */
   getField<TField extends keyof Out & string>(
     field: TField,
