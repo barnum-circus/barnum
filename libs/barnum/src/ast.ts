@@ -15,6 +15,7 @@ import {
   splitLast,
   tag,
   wrapInField,
+  asOption as asOptionStandalone,
 } from "./builtins/index.js";
 import { Option } from "./option.js";
 import { Result } from "./result.js";
@@ -122,10 +123,7 @@ export type BuiltinKind =
   | { kind: "CollectSome" }
   // TODO: Add WrapInArray builtin (T → [T]). Currently done via all(identity()) which
   // works but routes through the All executor for a trivial operation.
-  // TODO: Add AsOption builtin (bool → Option<void>). true → Some(void), false → None.
-  // Enables boolean branching via .asOption().branch({ Some: ..., None: ... }).
-  // Needed for Iterator.filter — pred returns bool, AsOption converts to Option<T>,
-  // then flatMap normalizes via IntoIterator (Some → keep, None → drop).
+  | { kind: "AsOption" }
   | { kind: "SplitFirst" }
   | { kind: "SplitLast" }
   | { kind: "WrapInField"; field: string }
@@ -343,6 +341,11 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   asErrOption<TIn, TValue, TError>(
     this: TypedAction<TIn, Result<TValue, TError>>,
   ): TypedAction<TIn, Option<TError>>;
+
+  /** Convert boolean to Option<void>. `boolean → Option<void>` */
+  asOption<TIn>(
+    this: TypedAction<TIn, boolean>,
+  ): TypedAction<TIn, Option<void>>;
 
   /** Test if the value is Ok. `Result<T,E> → boolean` */
   isOk<TIn, TValue, TError>(
@@ -695,6 +698,10 @@ function isNoneMethod(this: TypedAction): TypedAction {
   })));
 }
 
+function asOptionMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(asOptionStandalone()));
+}
+
 function collectMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(Option.collect()));
 }
@@ -747,6 +754,7 @@ export function typedAction<In = unknown, Out = unknown>(
       filter: { value: filterMethod, configurable: true },
       isSome: { value: isSomeMethod, configurable: true },
       isNone: { value: isNoneMethod, configurable: true },
+      asOption: { value: asOptionMethod, configurable: true },
       collect: { value: collectMethod, configurable: true },
       or: { value: orMethod, configurable: true },
 

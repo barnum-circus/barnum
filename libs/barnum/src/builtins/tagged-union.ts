@@ -1,4 +1,5 @@
 import {
+  type Option,
   type TaggedUnion,
   type TypedAction,
   toAction,
@@ -53,6 +54,23 @@ export function extractPrefix(): TypedAction {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "ExtractPrefix" } },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// AsOption — convert boolean to Option<void>
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a boolean to `Option<void>`.
+ *
+ * `true`  → `{ kind: "Option.Some", value: null }`
+ * `false` → `{ kind: "Option.None", value: null }`
+ */
+export function asOption(): TypedAction<boolean, Option<void>> {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "AsOption" } },
   });
 }
 

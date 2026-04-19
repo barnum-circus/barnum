@@ -296,6 +296,12 @@ pub enum BuiltinKind {
     ///
     /// If `kind` contains no `'.'`, the entire kind string becomes the prefix.
     ExtractPrefix,
+    /// Convert a boolean to `Option<void>`.
+    ///
+    /// Input: `true` or `false`
+    /// Output: `{ kind: "Option.Some", value: null }` for `true`,
+    ///         `{ kind: "Option.None", value: null }` for `false`.
+    AsOption,
     /// Halt execution with a fatal error. Not caught by tryCatch.
     /// Analogous to Rust's `panic!`.
     Panic {

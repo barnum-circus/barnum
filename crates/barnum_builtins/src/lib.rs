@@ -225,6 +225,19 @@ pub async fn execute_builtin(
             Ok(json!({ "kind": prefix, "value": input }))
         }
 
+        BuiltinKind::AsOption => {
+            let bool_value = input.as_bool().ok_or_else(|| BuiltinError::TypeMismatch {
+                builtin: "AsOption",
+                expected: "boolean",
+                actual: input.clone(),
+            })?;
+            if bool_value {
+                Ok(json!({ "kind": "Option.Some", "value": null }))
+            } else {
+                Ok(json!({ "kind": "Option.None", "value": null }))
+            }
+        }
+
         BuiltinKind::Panic { message } => Err(BuiltinError::Panic {
             message: message.clone(),
         }),
@@ -543,5 +556,29 @@ mod tests {
             result.unwrap(),
             json!({"kind": "Array", "value": []})
         );
+    }
+
+    #[tokio::test]
+    async fn as_option_true() {
+        let result = execute_builtin(&BuiltinKind::AsOption, &json!(true)).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Option.Some", "value": null})
+        );
+    }
+
+    #[tokio::test]
+    async fn as_option_false() {
+        let result = execute_builtin(&BuiltinKind::AsOption, &json!(false)).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Option.None", "value": null})
+        );
+    }
+
+    #[tokio::test]
+    async fn as_option_rejects_non_boolean() {
+        let result = execute_builtin(&BuiltinKind::AsOption, &json!(42)).await;
+        assert!(result.is_err());
     }
 }
