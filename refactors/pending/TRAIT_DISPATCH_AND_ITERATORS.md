@@ -37,7 +37,6 @@ result.iterate().map(transform).first()
 - `.unwrapOr(default)` — exit Option
 - `.unwrap()` — exit Option (panic on None)
 - `.isSome()` / `.isNone()` — query
-- `.filter(pred)` — `Option<T> → Option<T>` (pred: `T → Option<T>`)
 - `.transpose()` — `Option<Result<T,E>> → Result<Option<T>,E>`
 - `.iterate()` — enter Iterator
 
@@ -56,7 +55,6 @@ result.iterate().map(transform).first()
 
 **Array postfix methods:**
 - `.iterate()` — enter Iterator
-- `.forEach(f)` — still works for simple element-wise transforms
 
 **Iterator postfix methods** (new):
 - `.map(f)` — `Iterator<T> → Iterator<U>`
@@ -262,18 +260,15 @@ option.iterate()                             // Iterator<Request>
 
 ## ForEach AST node
 
-`ForEach` is a fundamental AST node — `{ kind: "ForEach", action: Action }` applies an action to every element of an array. It's how the Rust engine does element-wise operations. Currently exposed as:
+`ForEach` is a fundamental AST node — `{ kind: "ForEach", action: Action }` applies an action to every element of an array. It's how the Rust engine does element-wise operations. Exposed as a standalone combinator: `forEach(action)` — `TypedAction<T[], U[]>`. Used internally by Iterator's `.map()`, `.flatMap()`, and `.filter()`.
 
-1. **Standalone combinator:** `forEach(action)` — `TypedAction<T[], U[]>`. Used internally by Iterator's `.map()`.
-2. **Postfix method:** `array.forEach(f)` — sugar for `chain(array, forEach(f))`.
-
-Both forms remain. The standalone combinator is also the implementation mechanism for Iterator's `.map()`.
+The postfix `array.forEach(f)` method is removed — use `array.iterate().map(f).collect()` instead.
 
 ---
 
 ## Demo migration plan
 
-Demos can adopt Iterator incrementally. Existing `forEach` patterns still work — Iterator is an addition, not a replacement.
+Demos adopt Iterator, replacing postfix `.forEach()` with `.iterate().map()`. The standalone `forEach` combinator remains as an internal primitive.
 
 ### `identify-and-address-refactors/run.ts`
 
@@ -347,7 +342,7 @@ forEach(bindInput<number>((prNumber) => prNumber.then(checkPR).branch({
 Option.collect<number>(),
 
 // AFTER:
-Iter.wrap<number>()
+Iterator.wrap<number>()
   .filter(
     bindInput<number>((prNumber) =>
       prNumber.then(checkPR).branch({
@@ -367,7 +362,7 @@ Iter.wrap<number>()
 HasErrors: forEach(fix).drop().then(recur),
 
 // AFTER:
-HasErrors: Iter.wrap<TypeError>().then(Iter.map(fix)).drop().then(recur),
+HasErrors: Iterator.wrap<TypeError>().then(Iterator.map(fix)).drop().then(recur),
 ```
 
 ---
@@ -621,7 +616,7 @@ flatMap<TIn, TElement, TOut>(
   action: Pipeable<TElement, TOut[]>,
 ): TypedAction<TIn, Iterator<TOut>>;
 
-// Iterator .filter (bool predicate, distinct from Option .filter):
+// Iterator .filter (bool predicate, Iterator-only):
 filter<TIn, TElement>(
   this: TypedAction<TIn, Iterator<TElement>>,
   predicate: Pipeable<TElement, boolean>,
@@ -635,7 +630,7 @@ collect<TIn, TElement>(
 
 ##### 5.2: Extend method implementations
 
-Add `Iterator` case to `matchPrefix` in `mapMethod`, `filterMethod`, `collectMethod`. Add new `flatMapMethod` for Iterator:
+Add `Iterator` case to `matchPrefix` in `mapMethod`, `collectMethod`. Add new `flatMapMethod` and `filterMethod` for Iterator:
 
 ```ts
 // mapMethod — add Iterator case:
@@ -655,19 +650,21 @@ function flatMapMethod(this: TypedAction, action: Pipeable): TypedAction {
   })));
 }
 
-// filterMethod — add Iterator case (uses matchPrefix now):
-Iterator: branch({
-  Iterator: chain(
-    toAction(forEach(all(identity(), predicate))),
-    chain(toAction(collectWhere()), toAction(tag("Iterator", "Iterator"))),
-  ),
-}),
+// filterMethod — Iterator-only (Option.filter is removed):
+function filterMethod(this: TypedAction, predicate: Pipeable): TypedAction {
+  return chain(toAction(this), toAction(matchPrefix({
+    Iterator: branch({
+      Iterator: chain(
+        toAction(forEach(all(identity(), predicate))),
+        chain(toAction(collectWhere()), toAction(tag("Iterator", "Iterator"))),
+      ),
+    }),
+  })));
+}
 
 // collectMethod — add Iterator case:
 Iterator: branch({ Iterator: identity() }),
 ```
-
-**Note:** `filterMethod` currently uses direct `branch` (Option-only). Adding Iterator requires wrapping in `matchPrefix`. This changes the AST shape for existing Option.filter calls — they'll now go through `extractPrefix` first. Functionally equivalent but different AST.
 
 ---
 
