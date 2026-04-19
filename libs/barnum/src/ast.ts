@@ -19,6 +19,9 @@ import {
 } from "./builtins/index.js";
 import { Option } from "./option.js";
 import { Result } from "./result.js";
+// Lazy import — iterator.ts imports from ast.ts, but these are only called inside
+// methods (after all modules load), so the circular reference is safe at runtime.
+import { Iterator as IteratorNs } from "./iterator.js";
 // Lazy import — bind.ts imports from ast.ts, but these are only called inside
 // methods (after all modules load), so the circular reference is safe at runtime.
 import {
@@ -365,6 +368,59 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<Option<TValue>, TError>>,
   ): TypedAction<TIn, Option<Result<TValue, TError>>>;
 
+  // --- Iterator methods ---
+
+  /** Enter Iterator from Option. `Option<T> → Iterator<T>` */
+  iterate<TIn, TElement>(
+    this: TypedAction<TIn, Option<TElement>>,
+  ): TypedAction<TIn, Iterator<TElement>>;
+  /** Enter Iterator from Result. `Result<T,E> → Iterator<T>` */
+  iterate<TIn, TElement, TError>(
+    this: TypedAction<TIn, Result<TElement, TError>>,
+  ): TypedAction<TIn, Iterator<TElement>>;
+  /** Enter Iterator from array. `T[] → Iterator<T>` */
+  iterate<TIn, TElement>(
+    this: TypedAction<TIn, TElement[]>,
+  ): TypedAction<TIn, Iterator<TElement>>;
+
+  /** Transform each element in Iterator. `Iterator<T> → Iterator<U>` */
+  map<TIn, TElement, TOut>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    action: Pipeable<TElement, TOut>,
+  ): TypedAction<TIn, Iterator<TOut>>;
+
+  /** Flat-map each element. `f` returns Iterator. `Iterator<T> → Iterator<U>` */
+  flatMap<TIn, TElement, TOut>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    action: Pipeable<TElement, Iterator<TOut>>,
+  ): TypedAction<TIn, Iterator<TOut>>;
+  /** Flat-map each element. `f` returns Option. `Iterator<T> → Iterator<U>` */
+  flatMap<TIn, TElement, TOut>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    action: Pipeable<TElement, Option<TOut>>,
+  ): TypedAction<TIn, Iterator<TOut>>;
+  /** Flat-map each element. `f` returns Result. `Iterator<T> → Iterator<U>` */
+  flatMap<TIn, TElement, TOut, TError>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    action: Pipeable<TElement, Result<TOut, TError>>,
+  ): TypedAction<TIn, Iterator<TOut>>;
+  /** Flat-map each element. `f` returns array. `Iterator<T> → Iterator<U>` */
+  flatMap<TIn, TElement, TOut>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    action: Pipeable<TElement, TOut[]>,
+  ): TypedAction<TIn, Iterator<TOut>>;
+
+  /** Keep elements where predicate returns true. `Iterator<T> → Iterator<T>` */
+  filter<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    predicate: Pipeable<TElement, boolean>,
+  ): TypedAction<TIn, Iterator<TElement>>;
+
+  /** Unwrap Iterator to array. `Iterator<T> → T[]` */
+  collect<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+  ): TypedAction<TIn, TElement[]>;
+
   /** Bind concurrent values as VarRefs available throughout the body. */
   bind<TBindings extends Action[], TOut>(
     bindings: [...TBindings],
@@ -598,6 +654,7 @@ function mapMethod(this: TypedAction, action: Action): TypedAction {
       Some: chain(toAction(action), toAction(Option.some())),
       None: Option.none(),
     }),
+    Iterator: IteratorNs.map(action),
   })));
 }
 
@@ -687,9 +744,12 @@ function isErrMethod(this: TypedAction): TypedAction {
 // --- Option-only postfix methods ---
 
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Some: predicate,
-    None: Option.none(),
+  return chain(toAction(this), toAction(branchFamily({
+    Option: branch({
+      Some: predicate,
+      None: Option.none(),
+    }),
+    Iterator: IteratorNs.filter(predicate),
   })));
 }
 
@@ -709,8 +769,25 @@ function asOptionMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(asOptionStandalone()));
 }
 
+// --- Iterator postfix methods ---
+
+function iterateMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(branchFamily({
+    Option: IteratorNs.fromOption(),
+    Result: IteratorNs.fromResult(),
+    Array: IteratorNs.fromArray(),
+  })));
+}
+
+function flatMapMethod(this: TypedAction, action: Action): TypedAction {
+  return chain(toAction(this), toAction(IteratorNs.flatMap(action)));
+}
+
 function collectMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(Option.collect()));
+  return chain(toAction(this), toAction(branchFamily({
+    Array: Option.collect(),
+    Iterator: IteratorNs.collect(),
+  })));
 }
 
 function bindMethod(
@@ -764,6 +841,8 @@ export function typedAction<In = unknown, Out = unknown>(
       asOption: { value: asOptionMethod, configurable: true },
       collect: { value: collectMethod, configurable: true },
       or: { value: orMethod, configurable: true },
+      iterate: { value: iterateMethod, configurable: true },
+      flatMap: { value: flatMapMethod, configurable: true },
 
       asOkOption: { value: asOkOptionMethod, configurable: true },
       asErrOption: { value: asErrOptionMethod, configurable: true },
