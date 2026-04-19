@@ -116,8 +116,8 @@ Implementation: after calling `f`, normalize the return value via `matchPrefix`:
 // Conceptual implementation of flatMap's inner transform:
 chain(action, matchPrefix({
   Iterator: branch({ Iterator: identity() }),  // unwrap value (auto-unwrap)
-  Option: branch({ Some: all(identity()), None: constant([]) }),
-  Result: branch({ Ok: all(identity()), Err: constant([]) }),
+  Option: branch({ Some: wrapInArray(), None: constant([]) }),
+  Result: branch({ Ok: wrapInArray(), Err: constant([]) }),
   Array: identity(),  // already an array
 }))
 ```
@@ -328,13 +328,22 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 | `Iterator.filter(pred)` | **Yes** | `getField("value")` → `forEach(all(identity(), pred))` → **`CollectWhere`** → `tag("Iterator", "Iterator")` |
 | `.iterate()` postfix | No | `matchPrefix` → branch per family → wrap |
 
+`wrapInArray()` wraps a single value in a one-element array: `T → T[]`. Implemented as `all(identity())` — may warrant a dedicated builtin later if it's a hot path.
+
+```ts
+// T → [T]. Uses all() with a single identity action.
+function wrapInArray<T>(): TypedAction<T, T[]> {
+  return all(identity()) as TypedAction<T, T[]>;
+}
+```
+
 **`intoIteratorNormalize`** is a `matchPrefix` that converts any IntoIterator return to a plain array:
 
 ```ts
 const intoIteratorNormalize = matchPrefix({
   Iterator: branch({ Iterator: identity() }),     // auto-unwrap gives T[]
-  Option: branch({ Some: all(identity()), None: constant([]) }),
-  Result: branch({ Ok: all(identity()), Err: constant([]) }),
+  Option: branch({ Some: wrapInArray(), None: constant([]) }),
+  Result: branch({ Ok: wrapInArray(), Err: constant([]) }),
   Array: identity(),                              // already T[]
 });
 ```
@@ -475,8 +484,8 @@ Where `intoIteratorNormalize` is a module-level constant:
 ```ts
 const intoIteratorNormalize: Action = matchPrefix({
   Iterator: branch({ Iterator: identity() }),
-  Option: branch({ Some: all(identity()), None: constant([]) }),
-  Result: branch({ Ok: all(identity()), Err: constant([]) }),
+  Option: branch({ Some: wrapInArray(), None: constant([]) }),
+  Result: branch({ Ok: wrapInArray(), Err: constant([]) }),
   Array: identity(),
 });
 ```
@@ -511,11 +520,11 @@ iterate<TIn, TElement>(
 function iterateMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
     Option: branch({
-      Some: chain(toAction(all(identity())), toAction(tag("Iterator", "Iterator"))),
+      Some: chain(toAction(wrapInArray()), toAction(tag("Iterator", "Iterator"))),
       None: chain(toAction(constant([])), toAction(tag("Iterator", "Iterator"))),
     }),
     Result: branch({
-      Ok: chain(toAction(all(identity())), toAction(tag("Iterator", "Iterator"))),
+      Ok: chain(toAction(wrapInArray()), toAction(tag("Iterator", "Iterator"))),
       Err: chain(toAction(constant([])), toAction(tag("Iterator", "Iterator"))),
     }),
     Array: tag("Iterator", "Iterator"),
