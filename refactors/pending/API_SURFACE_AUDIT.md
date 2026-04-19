@@ -12,139 +12,141 @@ Complete inventory of everything exposed from the JS library, organized by **sel
 |--------|---------|
 | **exists** | Shipped and working |
 | **remove** | Exists but should be removed |
-| **rename** | Exists but needs a new name |
 | **proposed** | Not yet implemented |
 | **composable** | Can be built from existing primitives (no new engine work) |
 
 ---
 
-## Control Flow (self: determined by context)
+## Signature conventions
+
+Signatures describe the pipeline type transformation: `InputType → OutputType`. When the input is genuinely ignored (the combinator works regardless of what's in the pipeline), `any` is used. Config parameters (passed at AST construction time, not at runtime) are shown in the name: `sleep(ms)`, `constant(v)`, `take(n)`.
+
+---
+
+## Control Flow
+
+These are combinators — they compose actions into larger actions. They don't operate on a specific self type.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `sleep(ms)` | `number → void` | exists | Rust builtin, timing primitive |
-| `pipe` | Variadic sequential (1–11 steps) | exists | |
-| `chain` | `(A→B, B→C) → A→C` | exists | Binary sequential |
-| `all` | Variadic concurrent (0–10 branches) | exists | |
-| `loop` | `(body) → TBreak` | exists | `TBreak=void`, `TRecur=void` defaults |
-| `recur` | `TIn → never` | exists | Loop continue |
-| `earlyReturn` | Scope with early exit token | exists | `TEarlyReturn=void` default |
-| `tryCatch` | `(body, handler) → Out` | exists | Error recovery |
-| `race` | `(...actions) → first-to-complete` | exists | |
-| `withTimeout` | `(ms, body) → Result<Out, void>` | exists | Race body against timer |
-| `bind` | `(bindings, body) → Out` | exists, postfix | Concurrent let-bindings |
-| `bindInput` | `(body) → Out` | exists, postfix | Capture input as VarRef |
-| `defineRecursiveFunctions` | Mutual recursion | exists | |
-| `withResource` | `(create, body, dispose) → Out` | exists | RAII pattern |
+| `pipe(a, b, ...)` | `A → ... → Z` | exists | Variadic sequential (1–11 steps) |
+| `chain(a, b)` | `A → B → C` | exists | Binary sequential |
+| `all(a, b, ...)` | `T → [A, B, ...]` | exists | Variadic concurrent fan-out (0–10 branches) |
+| `forEach(action)` | `T[] → U[]` | exists | Low-level parallel map. **Prefer `.iterate().map(action).collect()`.** |
+| `loop(body)` | `void → TBreak` | exists | `TBreak=void`, `TRecur=void` defaults |
+| `earlyReturn(body)` | `T → T \| TEarlyReturn` | exists | Scope with early exit token |
+| `tryCatch(body, handler)` | `T → TOut` | exists | Error recovery |
+| `race(...actions)` | `T → first-to-complete` | exists | |
+| `withTimeout(ms, body)` | `T → Result<TOut, void>` | exists | Race body against timer |
+| `bind(bindings, body)` | `T → TOut` | exists, postfix | Concurrent let-bindings |
+| `bindInput(body)` | `T → TOut` | exists, postfix | Capture input as VarRef |
+| `defineRecursiveFunctions(bodies)(entry)` | `any → TOut` | exists | Mutual recursion via ResumeHandle |
+| `withResource({create, action, dispose})` | `TIn → TOut` | exists | RAII pattern |
+| `sleep(ms)` | `any → void` | exists | Rust builtin. `ms` is config, input is ignored. |
 
 ### Proposed
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `allObject` | `Record<K, Action> → { [K]: Out }` | composable | wrapInField each key, All, merge internally |
-| `withRetries(n)` | `(action) → action` | composable | Loop + tryCatch + counter |
-| `withTimeout` (curried) | `(ms) → (body) → Result<Out, void>` | exists (refactor) | Curry existing two-arg form |
+| `allObject({k: action, ...})` | `T → {k: TOut, ...}` | composable | `wrapInField` each key → `all` → `merge` |
+| `withRetries(n, action)` | `T → TOut` | composable | `loop` + `tryCatch` + counter |
 
 ---
 
-## Self: `T` (any value)
+## Self: `any` (works on any value)
 
-Operations that work regardless of what's in the pipeline.
-
-| Name | Signature | Notes |
-|------|-----------|-------|
-| `constant(v)` | `any → T` | Fixed value, ignores input |
-| `identity` | `T → T` | Pass through |
-| `drop` | `T → void` | Postfix `.drop()` |
-| `panic(msg)` | `any → never` | Fatal error, not caught by tryCatch. Rust builtin. |
-| `wrapInField(key)` | `T → { K: T }` | Wrap under a key |
+| Name | Signature | Status | Notes |
+|------|-----------|--------|-------|
+| `constant(v)` | `any → TValue` | exists | Fixed value, input ignored |
+| `identity()` | `T → T` | exists | Pass-through |
+| `drop` | `any → void` | exists | Postfix `.drop()`. Discard value. |
+| `panic(msg)` | `any → never` | exists | Fatal, not caught by tryCatch |
+| `wrapInField(key)` | `T → {K: T}` | exists | Postfix `.wrapInField(key)` |
 
 ### Removed
 
 | Name | Reason | Status |
 |------|--------|--------|
 | `tap(action)` | Subsumed by `bind`/`bindInput` | **done** |
-| `merge()` | Internal plumbing for `pick`, `allObject`, `withResource`. Not user-facing. Keep Rust builtin, remove JS export. | pending |
+| `merge()` (public export) | Internal plumbing. Keep Rust builtin, remove JS export. | pending |
 
 ---
 
-## Self: Struct (typed object with known fields)
+## Self: `Struct` (typed object with known fields)
 
-Objects in barnum are **structs** — fields are known at compile time. This is distinct from hashmaps (dynamic string-keyed bags). Struct operations take literal keys as type parameters.
+Struct operations take literal keys as type parameters. Distinct from hashmaps (dynamic string-keyed bags).
 
-| Name | Signature | Notes |
-|------|-----------|-------|
-| `getField(key)` | `Obj → Obj[K]` | Postfix `.getField()`. Struct fields are known at compile time — returning raw value is correct. `Option` semantics belong on HashMap.get, not struct field access. |
-| `pick(...keys)` | `Obj → Pick<Obj, Keys>` | Postfix `.pick()` |
+| Name | Signature | Status | Notes |
+|------|-----------|--------|-------|
+| `getField(key)` | `TObj → TObj[K]` | exists, postfix | |
+| `pick(...keys)` | `TObj → Pick<TObj, Keys>` | exists, postfix | |
 
 ### Proposed
 
-| Name | Signature | Notes |
-|------|-----------|-------|
-| `omit(...keys)` | `T → Omit<T, Keys>` | Complement of pick |
-
-## Self: HashMap (`Record<string, T>`)
-
-Not yet supported. Hashmaps are dynamic string-keyed bags — fundamentally different from structs. When we add them, they get their own self type following Rust's `HashMap` API:
-
-| Name | Signature | Notes |
-|------|-----------|-------|
-| `HashMap.new()` | `any → Record<string, T>` | Constructor (empty map) |
-| `HashMap.fromEntries()` | `{key: string, value: T}[] → Record<string, T>` | Constructor |
-| `get(key)` | `Record<string, T> → Option<T>` | Lookup by key |
-| `insert(key, value)` | `Record<string, T> → Record<string, T>` | Add/overwrite entry |
-| `remove(key)` | `Record<string, T> → Record<string, T>` | Remove entry |
-| `containsKey(key)` | `Record<string, T> → boolean` | |
-| `keys()` | `Record<string, T> → string[]` | |
-| `values()` | `Record<string, T> → T[]` | |
-| `entries()` | `Record<string, T> → {key: string, value: T}[]` | Rust: `iter()` |
-| `len()` | `Record<string, T> → number` | |
-| `isEmpty()` | `Record<string, T> → boolean` | |
-
-Not proposed for the current release. Belongs to a future where barnum has first-class hashmap support with a distinct type (not conflated with structs).
+| Name | Signature | Status | Notes |
+|------|-----------|--------|-------|
+| `omit(...keys)` | `TObj → Omit<TObj, Keys>` | proposed | Complement of pick |
 
 ---
+
+## Self: `HashMap` (`Record<string, T>`)
+
+Not yet supported. Future work — distinct type from structs.
+
+| Name | Signature | Notes |
+|------|-----------|-------|
+| `HashMap.new()` | `void → Record<string, T>` | Constructor (empty map) |
+| `HashMap.fromEntries()` | `{key: string, value: T}[] → Record<string, T>` | Constructor |
+| `HashMap.get(key)` | `Record<string, T> → Option<T>` | Lookup |
+| `HashMap.insert(key, value)` | `Record<string, T> → Record<string, T>` | Add/overwrite |
+| `HashMap.remove(key)` | `Record<string, T> → Record<string, T>` | Remove |
+| `HashMap.containsKey(key)` | `Record<string, T> → boolean` | |
+| `HashMap.keys()` | `Record<string, T> → string[]` | |
+| `HashMap.values()` | `Record<string, T> → T[]` | |
+| `HashMap.entries()` | `Record<string, T> → {key: string, value: T}[]` | |
+| `HashMap.len()` | `Record<string, T> → number` | |
+| `HashMap.isEmpty()` | `Record<string, T> → boolean` | |
 
 ---
 
 ## Self: `T[]` (array)
 
-| Name | Signature | Notes |
-|------|-----------|-------|
-| `range(start, end)` | `any → number[]` | Constant integer array, ignores input |
-| `forEach(action)` | `T[] → U[]` | Postfix. Low-level parallel map over elements. **Prefer `.iterate().map(action).collect()`**. |
-| `getIndex(n)` | `Tuple → Option<Tuple[N]>` | Returns `Option`. Compose `.unwrap()` for known-present. |
-| `flatten()` | `T[][] → T[]` | Postfix `.flatten()`. Array-only builtin. |
-| `splitFirst()` | `T[] → Option<[T, T[]]>` | Postfix. Head/tail decomposition |
-| `splitLast()` | `T[] → Option<[T[], T]>` | Postfix. Init/last decomposition |
-| `first()` | `T[] → Option<T>` | Standalone function (not postfix). Safe first element |
-| `last()` | `T[] → Option<T>` | Standalone function (not postfix). Safe last element |
-| `.iterate()` | `T[] → Iterator<T>` | Postfix. Enter Iterator for `.map()`, `.flatMap()`, `.filter()`, `.collect()`. |
+| Name | Signature | Status | Notes |
+|------|-----------|--------|-------|
+| `range(start, end)` | `any → number[]` | exists | Constant array, input ignored |
+| `forEach(action)` | `T[] → U[]` | exists, postfix | Low-level. **Prefer `.iterate().map(action).collect()`.** |
+| `getIndex(n)` | `T[] → Option<T[N]>` | exists, postfix | Returns `Option`. Compose `.unwrap()` for known-present. |
+| `flatten()` | `T[][] → T[]` | exists, postfix | One level of flattening |
+| `splitFirst()` | `T[] → Option<[T, T[]]>` | exists, postfix | Head/tail decomposition |
+| `splitLast()` | `T[] → Option<[T[], T]>` | exists, postfix | Init/last decomposition |
+| `first()` | `T[] → Option<T>` | exists | Standalone function. Composes `splitFirst` + `Option.map(getIndex(0).unwrap())`. |
+| `last()` | `T[] → Option<T>` | exists | Standalone function. Composes `splitLast` + `Option.map(getIndex(1).unwrap())`. |
+| `.iterate()` | `T[] → Iterator<T>` | exists, postfix | Enter Iterator |
 
 ### Proposed
 
-| Name | Signature | Notes |
-|------|-----------|-------|
-| `Arr.length()` | `T[] → number` | New `ArrayLength` builtin |
-| `Arr.isEmpty()` | `T[] → boolean` | Composable: `Arr.length() → constant(0) → eq` or new builtin |
-| `Arr.join(sep)` | `string[] → string` | New builtin |
-| `Arr.reverse()` | `T[] → T[]` | New `Reverse` builtin |
-| `Arr.take(n)` | `T[] → T[]` | New `Take` builtin |
-| `Arr.skip(n)` | `T[] → T[]` | New `Skip` builtin |
-| `Arr.contains(v)` | `T[] → boolean` | |
-| `Arr.enumerate()` | `T[] → [number, T][]` | New `Enumerate` builtin |
-| `Arr.sortBy(field)` | `T[] → T[]` | New `SortBy` AST node (action arg) |
-| `Arr.unique()` | `T[] → T[]` | |
-| `Arr.zip()` | `[T[], U[]] → [T, U][]` | Binary |
-| `Arr.append()` | `[T[], T[]] → T[]` | Binary concat |
+| Name | Signature | Status | Notes |
+|------|-----------|--------|-------|
+| `Arr.length()` | `T[] → number` | proposed | New `ArrayLength` builtin |
+| `Arr.isEmpty()` | `T[] → boolean` | proposed | |
+| `Arr.join(sep)` | `string[] → string` | proposed | New builtin |
+| `Arr.reverse()` | `T[] → T[]` | proposed | New `Reverse` builtin |
+| `Arr.take(n)` | `T[] → T[]` | proposed | New `Take` builtin |
+| `Arr.skip(n)` | `T[] → T[]` | proposed | New `Skip` builtin |
+| `Arr.contains(v)` | `T[] → boolean` | proposed | |
+| `Arr.enumerate()` | `T[] → [number, T][]` | proposed | New `Enumerate` builtin |
+| `Arr.sortBy(f)` | `T[] → T[]` | proposed | New `SortBy` AST node |
+| `Arr.unique()` | `T[] → T[]` | proposed | |
+| `Arr.zip()` | `[T[], U[]] → [T, U][]` | proposed | Binary |
+| `Arr.append()` | `[T[], T[]] → T[]` | proposed | Binary concat |
 
 ---
 
 ## Self: `Iterator<T>`
 
-`Iterator<T>` is `TaggedUnion<"Iterator", { Iterator: T[] }>`. Runtime representation: `{ kind: "Iterator.Iterator", value: T[] }`.
+`Iterator<T>` is `TaggedUnion<"Iterator", { Iterator: T[] }>`. Runtime: `{ kind: "Iterator.Iterator", value: T[] }`.
 
-Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (parallel). See ITERATOR_METHODS.md for the full method catalog including implementation details.
+Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (parallel). See ITERATOR_METHODS.md for the full method catalog with implementation details.
 
 ### Constructors
 
@@ -153,41 +155,41 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `Iterator.fromArray()` | `T[] → Iterator<T>` | exists | `tag("Iterator", "Iterator")` |
 | `Iterator.fromOption()` | `Option<T> → Iterator<T>` | exists | Some → 1-element, None → empty |
 | `Iterator.fromResult()` | `Result<T, E> → Iterator<T>` | exists | Ok → 1-element, Err → empty |
-| `.iterate()` | `T[] / Option<T> / Result<T,E> → Iterator<T>` | exists, postfix | `branchFamily` dispatch across all three |
+| `.iterate()` | `T[] / Option<T> / Result<T, E> → Iterator<T>` | exists, postfix | `branchFamily` dispatch |
 
 ### Transforming
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
 | `Iterator.map(action)` | `Iterator<T> → Iterator<U>` | exists, postfix | Parallel via `ForEach` |
-| `Iterator.flatMap(action)` | `Iterator<T> → Iterator<U>` | exists, postfix | `action` returns any IntoIterator (Iterator, Option, Result, array). Normalized via `branchFamily`. |
+| `Iterator.flatMap(action)` | `Iterator<T> → Iterator<U>` | exists, postfix | `action` returns any IntoIterator type. Normalized via `branchFamily`. |
 | `Iterator.filter(pred)` | `Iterator<T> → Iterator<T>` | exists, postfix | `pred: T → boolean`. Implemented as flatMap + AsOption + bindInput. |
 | `Iterator.collect()` | `Iterator<T> → T[]` | exists, postfix | `getField("value")` |
 
 ### Postfix dispatch
 
-`.map()`, `.flatMap()`, `.filter()`, and `.collect()` are available as postfix methods. `.map()` additionally dispatches across Option and Result via `branchFamily`. `.collect()` dispatches between `Iterator<T>` (→ `getField("value")`) and `Option<T>[]` (→ `CollectSome` builtin).
+`.map()` dispatches across Option, Result, and Iterator via `branchFamily`. `.collect()` dispatches between `Iterator<T>` (→ `getField("value")`) and `Option<T>[]` (→ `CollectSome` builtin). `.filter()` dispatches between `Iterator<T>` (pred returns `boolean`) and `Option<T>` (pred returns `Option<T>`).
 
-### Proposed (see ITERATOR_METHODS.md for details)
+### Proposed (see ITERATOR_METHODS.md)
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `.filterMap(f)` | `Iterator<T> → Iterator<U>` | composable | `flatMap(f)` where `f: T → Option<U>`. Type-constrained alias. |
+| `.filterMap(f)` | `Iterator<T> → Iterator<U>` | composable | `flatMap(f)` where `f: T → Option<U>` |
 | `.flatten()` | `Iterator<IntoIter<T>> → Iterator<T>` | composable | `flatMap(identity())` |
 | `.enumerate()` | `Iterator<T> → Iterator<[number, T]>` | proposed | New `Enumerate` builtin |
-| `.first()` / `.last()` | `Iterator<T> → Option<T>` | composable | `collect → splitFirst/splitLast → Option.map(getIndex)` |
+| `.first()` / `.last()` | `Iterator<T> → Option<T>` | composable | `collect` → `splitFirst`/`splitLast` → `Option.map(getIndex)` |
 | `.find(pred)` | `Iterator<T> → Option<T>` | composable | `filter(pred).first()` |
-| `.nth(n)` | `Iterator<T> → Option<T>` | composable | `collect → getIndex(n)` |
+| `.nth(n)` | `Iterator<T> → Option<T>` | composable | `collect` → `getIndex(n)` |
 | `.count()` | `Iterator<T> → number` | proposed | New `ArrayLength` builtin |
 | `.any(pred)` | `Iterator<T> → boolean` | composable | `find(pred).isSome()` |
 | `.take(n)` / `.skip(n)` | `Iterator<T> → Iterator<T>` | proposed | New builtins |
 | `.reverse()` | `Iterator<T> → Iterator<T>` | proposed | New `Reverse` builtin |
-| `.chain(other)` | `Iterator<T>, Iterator<T> → Iterator<T>` | composable | Concatenate via `all + flatten + fromArray` |
-| `.collectResult()` | `Iterator<Result<T,E>> → Result<T[],E>` | proposed | New `CollectResult` builtin |
-| `.scan(init, f)` | `Iterator<T> → Iterator<U>` | proposed | **New `Scan` AST node.** Sequential primitive. Unlocks fold, reduce, forEachSync. |
+| `.chain(other)` | `(Iterator<T>, Iterator<T>) → Iterator<T>` | composable | `all` + `flatten` + `fromArray` |
+| `.collectResult()` | `Iterator<Result<T, E>> → Result<T[], E>` | proposed | New `CollectResult` builtin |
+| `.scan(init, f)` | `Iterator<T> → Iterator<U>` | proposed | **New `Scan` AST node.** Sequential primitive. Unlocks fold/reduce/forEachSync. |
 | `.fold(init, f)` | `Iterator<T> → U` | composable (needs scan) | `scan(init, f).last().unwrap()` |
 | `.partition(pred)` | `Iterator<T> → [T[], T[]]` | proposed (needs scan) | |
-| `.zip(other)` | `Iterator<T>, Iterator<U> → Iterator<[T,U]>` | proposed | New `Zip` builtin |
+| `.zip(other)` | `(Iterator<T>, Iterator<U>) → Iterator<[T, U]>` | proposed | New `Zip` builtin |
 | `.sortBy(f)` | `Iterator<T> → Iterator<T>` | proposed | New `SortBy` AST node |
 
 ---
@@ -196,7 +198,7 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `asOption()` | `boolean → Option<void>` | exists, postfix | `AsOption` Rust builtin. `true` → Some, `false` → None. Used internally by `Iterator.filter`. |
+| `asOption()` | `boolean → Option<void>` | exists, postfix | `AsOption` Rust builtin. `true` → Some, `false` → None. |
 
 ---
 
@@ -205,24 +207,24 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
 | `Option.some()` | `T → Option<T>` | exists | Constructor. Postfix `.some()`. |
-| `Option.none()` | `any → Option<T>` | exists | Constructor, ignores input |
-| `Option.map(action)` | `Option<T> → Option<U>` | exists, postfix | Postfix `.map()` dispatches across Option/Result/Iterator |
-| `Option.andThen(action)` | `Option<T> → Option<U>` | exists, postfix | Monadic bind |
-| `Option.unwrap()` | `Option<T> → T` | exists, postfix | Panics on None (fatal, not caught by tryCatch) |
-| `Option.unwrapOr(action)` | `Option<T> → T` | exists, postfix | Postfix `.unwrapOr()` dispatches across Option/Result |
-| `Option.filter(pred)` | `Option<T> → Option<T>` | exists, postfix | `pred: T → Option<T>` (not boolean — returns Some to keep, None to drop) |
+| `Option.none()` | `void → Option<T>` | exists | Constructor |
+| `Option.map(action)` | `Option<T> → Option<U>` | exists, postfix | `.map()` dispatches across Option/Result/Iterator |
+| `Option.andThen(action)` | `Option<T> → Option<U>` | exists, postfix | Monadic bind. `action: T → Option<U>`. |
+| `Option.unwrap()` | `Option<T> → T` | exists, postfix | Panics on None |
+| `Option.unwrapOr(default)` | `Option<T> → T` | exists, postfix | `default: void → T`. `.unwrapOr()` dispatches across Option/Result. |
+| `Option.filter(pred)` | `Option<T> → Option<T>` | exists, postfix | `pred: T → Option<T>` (returns Some to keep, None to drop) |
 | `Option.isSome()` | `Option<T> → boolean` | exists, postfix | |
 | `Option.isNone()` | `Option<T> → boolean` | exists, postfix | |
-| `Option.collect()` | `Option<T>[] → T[]` | exists, postfix | `CollectSome` Rust builtin. Postfix `.collect()` dispatches between `Option<T>[]` and `Iterator<T>`. |
-| `Option.transpose()` | `Option<Result<T,E>> → Result<Option<T>,E>` | exists, postfix | Swaps nesting, changes family to Result |
-| `.iterate()` | `Option<T> → Iterator<T>` | exists, postfix | Some → 1-element Iterator, None → empty |
+| `Option.collect()` | `Option<T>[] → T[]` | exists, postfix | `CollectSome` Rust builtin. `.collect()` dispatches between `Option<T>[]` and `Iterator<T>`. |
+| `Option.transpose()` | `Option<Result<T, E>> → Result<Option<T>, E>` | exists, postfix | |
+| `.iterate()` | `Option<T> → Iterator<T>` | exists, postfix | Some → 1-element, None → empty |
 
 ### Proposed
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
 | `Option.flatten()` | `Option<Option<T>> → Option<T>` | composable | `Option.andThen(identity())` |
-| `Option.okOr(action)` | `Option<T> → Result<T, E>` | composable | Branch → tag |
+| `Option.okOr(err)` | `Option<T> → Result<T, E>` | composable | `err: void → E`. Branch → tag. |
 | `Option.zip` | `(Option<T>, Option<U>) → Option<[T, U]>` | composable | Low priority |
 
 ---
@@ -233,37 +235,47 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 |------|-----------|--------|-------|
 | `Result.ok()` | `T → Result<T, E>` | exists | Constructor. Postfix `.ok()`. |
 | `Result.err()` | `E → Result<T, E>` | exists | Constructor. Postfix `.err()`. |
-| `Result.map(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Postfix `.map()` dispatches across Option/Result/Iterator |
-| `Result.mapErr(action)` | `Result<T, E> → Result<T, F>` | exists, postfix | |
-| `Result.andThen(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Monadic bind |
-| `Result.or(action)` | `Result<T, E> → Result<T, F>` | exists, postfix | Fallback on Err |
-| `Result.unwrap()` | `Result<T, E> → T` | exists, postfix | Panics on Err (fatal, not caught by tryCatch) |
-| `Result.unwrapOr(action)` | `Result<T, E> → T` | exists, postfix | Postfix `.unwrapOr()` dispatches across Option/Result |
-| `Result.asOkOption()` | `Result<T, E> → Option<T>` | exists, postfix | |
-| `Result.asErrOption()` | `Result<T, E> → Option<E>` | exists, postfix | |
+| `Result.map(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | `action: T → U`. `.map()` dispatches across Option/Result/Iterator. |
+| `Result.mapErr(action)` | `Result<T, E> → Result<T, F>` | exists, postfix | `action: E → F` |
+| `Result.andThen(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | `action: T → Result<U, E>` |
+| `Result.or(fallback)` | `Result<T, E> → Result<T, F>` | exists, postfix | `fallback: E → Result<T, F>` |
+| `Result.unwrap()` | `Result<T, E> → T` | exists, postfix | Panics on Err |
+| `Result.unwrapOr(default)` | `Result<T, E> → T` | exists, postfix | `default: E → T`. `.unwrapOr()` dispatches across Option/Result. |
+| `Result.asOkOption()` | `Result<T, E> → Option<T>` | exists, postfix | Ok → Some, Err → None |
+| `Result.asErrOption()` | `Result<T, E> → Option<E>` | exists, postfix | Err → Some, Ok → None |
 | `Result.transpose()` | `Result<Option<T>, E> → Option<Result<T, E>>` | exists, postfix | |
 | `Result.isOk()` | `Result<T, E> → boolean` | exists, postfix | |
 | `Result.isErr()` | `Result<T, E> → boolean` | exists, postfix | |
-| `.iterate()` | `Result<T, E> → Iterator<T>` | exists, postfix | Ok → 1-element Iterator, Err → empty |
+| `.iterate()` | `Result<T, E> → Iterator<T>` | exists, postfix | Ok → 1-element, Err → empty |
 
 ### Proposed
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `Result.flatten()` | `Result<Result<T,E>,E> → Result<T,E>` | composable | `Result.andThen(identity())` |
-| `Result.and(action)` | `Result<T, E> → Result<U, E>` | composable | Replace Ok value regardless. `andThen` where body ignores input. |
+| `Result.flatten()` | `Result<Result<T, E>, E> → Result<T, E>` | composable | `Result.andThen(identity())` |
+| `Result.and(action)` | `Result<T, E> → Result<U, E>` | composable | `andThen` where body ignores input |
 
 ---
 
-## Self: `TaggedUnion<T>` (generic dispatch)
+## Self: `TaggedUnion` (generic dispatch infrastructure)
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `tag(kind, enumName)` | `T → TaggedUnion<TEnumName, {K: T}>` | exists | Constructor — wrap value as namespaced variant |
-| `branch(cases)` | `TaggedUnion<T> → Out` | exists, postfix | Dispatch on discriminant. Auto-unwraps `value`. |
-| `branchFamily(cases)` | `TaggedUnion<T> → Out` | exists | Two-level dispatch: extractPrefix → branch. Used by postfix methods (`.map()`, `.unwrapOr()`, `.iterate()`, etc.) to dispatch across Option/Result/Iterator/Array. |
-| `extractPrefix()` | `{kind: "Prefix.Variant", ...} → {kind: "Prefix", value: original}` | exists | Rust builtin. Splits kind on `'.'`. For bare arrays (no `kind` field), produces `{kind: "Array", value: input}`. Internal — used by `branchFamily`. |
-| `asOption()` | `boolean → Option<void>` | exists, postfix | Rust `AsOption` builtin. `true` → Some, `false` → None. |
+| `tag(kind, enumName)` | `T → TaggedUnion<TEnumName, {K: T}>` | exists | Constructor. Postfix `.tag(kind)` (infers enumName from context). |
+| `branch(cases)` | `TaggedUnion → TOut` | exists, postfix | Dispatch on discriminant. Auto-unwraps `value`. |
+| `branchFamily(cases)` | `TaggedUnion → TOut` | exists | Two-level dispatch: `extractPrefix` → `branch`. Powers `.map()`, `.unwrapOr()`, `.iterate()`, etc. |
+| `extractPrefix()` | `{kind, value} → {kind: prefix, value: original}` | exists | Rust builtin. Splits kind on `'.'`. Bare arrays → `{kind: "Array", value: input}`. Internal. |
+
+---
+
+## Standalone utilities
+
+| Name | Signature | Status | Notes |
+|------|-----------|--------|-------|
+| `taggedUnionSchema(enumName, cases)` | Zod schema constructor | exists | Builds `z.discriminatedUnion` for `TaggedUnion` |
+| `asOption()` | `boolean → Option<void>` | exists | Standalone form of `.asOption()` postfix |
+| `first()` | `T[] → Option<T>` | exists | Standalone. See array section. |
+| `last()` | `T[] → Option<T>` | exists | Standalone. See array section. |
 
 ---
 
@@ -273,9 +285,9 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 
 For Option/Result flattening, use `andThen(identity())`:
 - `Option<Option<T>> → Option<T>`: `Option.andThen(identity())`
-- `Result<Result<T,E>,E> → Result<T,E>`: `Result.andThen(identity())`
+- `Result<Result<T, E>, E> → Result<T, E>`: `Result.andThen(identity())`
 
-These are composable from existing primitives — no dedicated flatten combinator needed.
+These are composable — no dedicated flatten combinator needed.
 
 ---
 
@@ -283,13 +295,13 @@ These are composable from existing primitives — no dedicated flatten combinato
 
 | Name | Reason | Status |
 |------|--------|--------|
-| `tap` | Subsumed by `bind`/`bindInput` | **done** — removed from exports and postfix |
-| `__union` runtime dispatch | Replaced by `branchFamily` + `ExtractPrefix` AST nodes | **done** |
-| `merge` | See below | pending |
+| `tap` | Subsumed by `bind`/`bindInput` | **done** |
+| `__union` runtime dispatch | Replaced by `branchFamily` + `ExtractPrefix` | **done** |
+| `merge` (public export) | Internal plumbing for `tag`, `pick`, `withResource`. Not user-facing. | pending |
 
 ### `merge` → `allObject`
 
-`merge` is internal plumbing used by `tag`, `pick`, `withResource` — all follow `all(...) → merge()`. `allObject` is the canonical abstraction for this pattern. Internal uses of `merge` become implementation details of `allObject`, `tag`, `pick`, `withResource`.
+`merge` is internal plumbing — all uses follow `all(...) → merge()`. `allObject` is the user-facing abstraction. Internal uses of `merge` become implementation details of `allObject`, `tag`, `pick`, `withResource`.
 
 ---
 
@@ -297,7 +309,7 @@ These are composable from existing primitives — no dedicated flatten combinato
 
 ### Error handling
 
-For field/index access, the primitive returns `Option` (safe by default). Compose `.unwrap()` for known-present access. No separate `tryGetField` — `getField` IS the safe version.
+Field/index access returns `Option` (safe by default). Compose `.unwrap()` for known-present access. No separate `tryGetField` — `getField` IS the safe version.
 
 Convention: `try` prefix always means `Result<T, E>`, never `Option<T>`.
 
@@ -316,7 +328,7 @@ Postfix methods like `.map()`, `.unwrapOr()`, `.collect()`, `.iterate()` dispatc
 
 ### Iterator vs forEach
 
-`forEach` is the low-level `ForEach` AST node — parallel map over array elements. `Iterator.map()` wraps this in a typed API with `Iterator<T>` as the self type. User-facing code should use `.iterate().map(f).collect()` instead of `forEach(f)`. `forEach` remains exported for backward compatibility and internal use.
+`forEach` is the low-level `ForEach` AST node — parallel map over array elements. `Iterator.map()` wraps this in a typed API. User-facing code should use `.iterate().map(f).collect()`. `forEach` remains exported for internal use.
 
 ### Thunk builtins
 
@@ -335,8 +347,8 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [x] `.flatten()` — array-only builtin
 - [x] `unwrap` — panicking unwrap for Option and Result
 - [x] `panic(msg)` — Panic builtin (TS + Rust)
-- [x] `__union` dispatch replaced by `branchFamily` + `ExtractPrefix` (see UNION_DISPATCH_AST_NODES in past/)
-- [x] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
+- [x] `__union` dispatch replaced by `branchFamily` + `ExtractPrefix`
+- [x] `getIndex(n)` returns `Option<T[N]>`
 - [x] Iterator Phase 1 — `Iterator<T>` type, fromArray/fromOption/fromResult, map, flatMap, filter, collect
 - [x] `branchFamily` — two-level dispatch via ExtractPrefix + Branch
 - [x] `AsOption` builtin — `boolean → Option<void>`, used by Iterator.filter
@@ -347,42 +359,38 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 ### Pending
 - [ ] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
 
-### Postfix: future
-- [ ] `.omit()` — Struct-only (when implemented)
+### Proposed: control flow
+- [ ] `allObject` — composable from existing primitives
+- [ ] `withRetries(n)` — composable: loop + tryCatch
 
-### New: control flow
-- [ ] `allObject` — `Record<K, Action> → { [K]: Out }` (composable)
-- [ ] `withRetries(n)` — retry on error (composable: loop + tryCatch)
-- [ ] Curry `withTimeout` — `(ms) → (body) → Result<Out, void>`
+### Proposed: struct
+- [ ] `omit(...keys)`
 
-### New: struct
-- [ ] `omit(...keys)` — complement of `pick`
+### Proposed: array
+- [ ] `Arr.length()` — new `ArrayLength` builtin
+- [ ] `Arr.isEmpty()` — new builtin
+- [ ] `Arr.join(sep)` — new builtin
 
-### New: array
-- [ ] `Arr.length()` — `T[] → number` (new `ArrayLength` builtin)
-- [ ] `Arr.isEmpty()` — `T[] → boolean`
-- [ ] `Arr.join(sep)` — `string[] → string`
-
-### New: Iterator (Phase 2 — see ITERATOR_METHODS.md)
-- [ ] `.filterMap(f)` — composable: `flatMap(f)` type alias
+### Proposed: Iterator Phase 2 (see ITERATOR_METHODS.md)
+- [ ] `.filterMap(f)` — composable: type-constrained flatMap
 - [ ] `.flatten()` — composable: `flatMap(identity())`
-- [ ] `.first()` / `.last()` — composable from existing builtins
+- [ ] `.first()` / `.last()` — composable
 - [ ] `.find(pred)` — composable: `filter(pred).first()`
 - [ ] `.enumerate()` — new `Enumerate` builtin
 - [ ] `.count()` — new `ArrayLength` builtin
 - [ ] `.collectResult()` — new `CollectResult` builtin
-- [ ] `.scan(init, f)` — **new `Scan` AST node** (complex, unlocks fold/reduce/forEachSync)
+- [ ] `.scan(init, f)` — **new `Scan` AST node** (unlocks fold/reduce/forEachSync)
 - [ ] `.fold(init, f)` / `.reduce(f)` — composable from scan
 
-### New: Option
-- [ ] `Option.okOr(action)` — `Option<T> → Result<T, E>` (composable)
+### Proposed: Option
+- [ ] `Option.okOr(err)` — composable
 
 ### Resolve: merge → allObject
-- [ ] Implement `allObject` as the canonical abstraction for `all() → merge()`
+- [ ] Implement `allObject`
 - [ ] Refactor `tag`, `pick`, `withResource` to use `allObject` internally
 
-### Lower priority (tier 2)
+### Lower priority
 - [ ] Arr: reverse, take, skip, contains, enumerate, sortBy, unique, zip, append
 - [ ] Iterator: take, skip, reverse, chain, zip, sortBy, partition, takeWhile, skipWhile, chunks, windows
 - [ ] Option: zip
-- [ ] HashMap: first-class support as distinct type from struct
+- [ ] HashMap: first-class support
