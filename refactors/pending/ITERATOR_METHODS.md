@@ -55,6 +55,30 @@ Iterator's `.first()` only returns the first element (discards the rest). It's t
 
 `.splitFirst()` is essential for sequential processing patterns — `loop` + `splitFirst` + `branch` processes one element at a time serially, while `.iterate().map(f)` dispatches all elements in parallel via `forEach`. Use `splitFirst` when ordering matters (e.g., `identify-and-address-refactors` implements one refactor at a time). Use `.iterate().map()` when parallel dispatch is fine.
 
+**Example: sequential processing with `splitFirst` + `loop`**
+
+```ts
+// Process PRs one at a time, recurring with the remainder
+loop<void, void>((recur, done) =>
+  prs
+    .splitFirst()                              // Option<[number, number[]]>
+    .branch({
+      Some: bindInput<[number, number[]]>(([pr, rest]) =>
+        pr
+          .then(checkPR)
+          .branch({
+            ChecksFailed: fixIssues.drop().then(rest).then(recur),
+            ChecksPassed: landPR.drop().then(rest).then(recur),
+            Landed: drop.then(rest).then(recur),
+          }),
+      ),
+      None: done,                              // all PRs processed
+    }),
+)
+```
+
+This processes one PR at a time. Each iteration peels off the first PR, processes it, then recurs with the remainder. Compare with `.iterate().map(process).collect()` which dispatches all PRs in parallel.
+
 ---
 
 ## Aggregation
@@ -77,7 +101,6 @@ These exit Iterator into a specific type.
 |--------|------|-----------|-------|
 | `.collect()` | `collect::<Vec>` | `Iterator<T> → T[]` | **Phase 1.** Default collect to array. |
 | `.collectResult()` | `collect::<Result<Vec,E>>` | `Iterator<Result<T,E>> → Result<T[],E>` | All-or-nothing. First Err short-circuits. Needs `CollectResult` builtin. |
-| `.collectOption()` | `collect::<Option<Vec>>` | `Iterator<Option<T>> → Option<T[]>` | All-or-nothing. First None short-circuits. Needs `CollectOption` builtin. |
 | `.partition(pred)` | `partition` | `Iterator<T> → [T[], T[]]` | Split into two arrays by predicate. Needs builtin. |
 | `.unzip()` | `unzip` | `Iterator<[A, B]> → [A[], B[]]` | Unzip pairs. Needs builtin. |
 
@@ -150,7 +173,7 @@ These Rust Iterator methods don't translate to barnum's eager model:
 - `.filterMap(f)` — very common pattern (filter + transform in one step)
 - `.first()` / `.last()` — exit Iterator to Option
 - `.find(pred)` — searching
-- `.collectResult()` / `.collectOption()` — typed collect for fallible pipelines
+- `.collectResult()` — typed collect for fallible pipelines
 - `.enumerate()` — index tracking
 - `.fold(init, f)` / `.reduce(f)` — accumulation (needs AST design for state threading)
 - `.forEachSync(f)` — serial element processing (built on reduce)

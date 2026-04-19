@@ -208,7 +208,6 @@ Future methods (`.first()`, `.find()`, `.collectResult()`, `.fold()`, `.forEachS
 5. **`collect` destination types**: Rust's `Iterator::collect` is generic over the destination type via `FromIterator`. Barnum uses separate named methods:
    - `.collect()` → `T[]` (default, like `Vec`)
    - `.collectResult()`: `Iterator<Result<T, E>> → Result<T[], E>`
-   - `.collectOption()`: `Iterator<Option<T>> → Option<T[]>`
 
 6. ~~**`chain` naming collision**~~ **Not an issue:** barnum's `chain()` is an internal combinator; users see `.then()`. Iterator can use `.chain()` for concatenation without ambiguity.
 
