@@ -109,9 +109,9 @@ describe("forEach execution", () => {
     expect(result).toEqual([{ n: 10 }, { n: 20 }, { n: 30 }]);
   });
 
-  it("postfix .forEach() chains correctly", async () => {
+  it("forEach via pipe chains correctly", async () => {
     const result = await runPipeline(
-      constant([1, 2, 3]).forEach(constant(99)),
+      pipe(constant([1, 2, 3]), forEach(constant(99))),
     );
     expect(result).toEqual([99, 99, 99]);
   });
