@@ -174,6 +174,7 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `.reverse()` | `Iterator<T> → Iterator<T>` | proposed | New `Reverse` builtin |
 | `.chain(other)` | `(Iterator<T>, Iterator<T>) → Iterator<T>` | composable | `all` + `flatten` + `fromArray` |
 | `.collectResult()` | `Iterator<Result<T, E>> → Result<T[], E>` | proposed | New `CollectResult` builtin |
+| `.collectHashMap()` | `Iterator<{key: string, value: T}> → HashMap<T>` | composable (needs HashMap) | `.collect()` → `HashMap.fromEntries()` |
 | `.scan(init, f)` | `Iterator<T> → Iterator<U>` | proposed | **New `Scan` AST node.** Sequential primitive. Unlocks fold/reduce/forEachSync. |
 | `.fold(init, f)` | `Iterator<T> → U` | composable (needs scan) | `scan(init, f).last().unwrap()` |
 | `.partition(pred)` | `Iterator<T> → [T[], T[]]` | proposed (needs scan) | |
