@@ -35,9 +35,10 @@ import {
 } from "./handlers/steps.js";
 
 runPipeline(
-  listFiles.forEach(
-    refactor.then(typeCheck).then(fix).then(commit).then(createPR),
-  ),
+  listFiles
+    .iterate()
+    .map(refactor.then(typeCheck).then(fix).then(commit).then(createPR))
+    .collect(),
 );`;
 
 const advancedExample = `const refactorWithRetry =
@@ -45,7 +46,7 @@ const advancedExample = `const refactorWithRetry =
     .then(evaluate)
     .then(loop((recur) =>
       typeCheck.then(classifyErrors).branch({
-        HasErrors: forEach(fix).drop().then(recur),
+        HasErrors: Iterator.fromArray<TypeError>().map(fix).drop().then(recur),
         Clean: drop,
       })
     ))
@@ -53,7 +54,7 @@ const advancedExample = `const refactorWithRetry =
     .then(createPR);
 
 runPipeline(
-  listFiles.forEach(refactorWithRetry),
+  listFiles.iterate().map(refactorWithRetry).collect(),
 );`;
 
 function Features() {
@@ -81,9 +82,10 @@ function Features() {
             <h3>🦁 A choreographed show</h3>
             <p>
               Workflows are composed from type-safe primitives:{' '}
-              <code>.then()</code>, <code>loop</code>, <code>branch</code>,{' '}
-              <code>forEach</code>, <code>tryCatch</code>. First-class
-              constructs for orchestration, not prose or ad-hoc scripts.
+              <code>.then()</code>, <code>.iterate()</code>,{' '}
+              <code>.map()</code>, <code>loop</code>, <code>branch</code>,{' '}
+              <code>tryCatch</code>. First-class constructs for orchestration,
+              not prose or ad-hoc scripts.
             </p>
           </div>
           <div className="col col--4">
@@ -138,7 +140,8 @@ function ExampleSection() {
           handlers are either built-in primitives or exported TypeScript async
           functions. (Support for other languages is planned.) You compose
           them into workflows using postfix methods like <code>.then()</code>{' '}
-          (sequential) and <code>.forEach()</code> (fan-out).
+          (sequential) and <code>.iterate()</code> / <code>.map()</code>{' '}
+          (fan-out).
         </p>
         <div className={styles.codeBlockWrap}>
           <CodeBlock language="ts" title="handlers/steps.ts">
@@ -152,13 +155,14 @@ function ExampleSection() {
         </div>
         <p>
           <code>listFiles</code> runs once and returns an array of filenames.{' '}
-          <code>forEach</code> fans out — each filename flows through{' '}
-          <code>refactor → typeCheck → fix → commit → createPR</code>,
-          with each file processed in parallel.
-          Each handler executes in its own isolated subprocess. The Rust
-          runtime manages the state machine: dispatching handlers, collecting
-          results, and advancing the workflow. No handler sees another
-          handler's context.
+          <code>.iterate()</code> enters Iterator, <code>.map()</code> fans
+          out — each filename flows through{' '}
+          <code>refactor → typeCheck → fix → commit → createPR</code>{' '}
+          in parallel. <code>.collect()</code> gathers the results back into
+          an array. Each handler executes in its own isolated subprocess. The
+          Rust runtime manages the state machine: dispatching handlers,
+          collecting results, and advancing the workflow. No handler sees
+          another handler's context.
         </p>
       </div>
     </section>
@@ -195,9 +199,10 @@ function AdvancedSection() {
           that expressing a precise, complicated asynchronous workflow in prose
           or ad-hoc scripts is fragile. A programming language geared towards
           orchestration is what you actually want — one where{' '}
-          <code>loop</code>, <code>branch</code>, <code>tryCatch</code>,{' '}
-          <code>forEach</code>, and <code>.then()</code> are first-class
-          constructs with type-safe composition.
+          <code>.iterate()</code>, <code>.map()</code>, <code>loop</code>,{' '}
+          <code>branch</code>, <code>tryCatch</code>, and{' '}
+          <code>.then()</code> are first-class constructs with type-safe
+          composition.
         </p>
       </div>
     </section>
@@ -238,8 +243,8 @@ function WhyBarnum() {
                 Process steps one after another.
               </li>
               <li>
-                <strong><code>forEach</code></strong>: fan-out to parallel.
-                List 50 files, refactor them all concurrently.
+                <strong><code>.iterate().map()</code></strong>: fan-out to
+                parallel. List 50 files, refactor them all concurrently.
               </li>
               <li>
                 <strong><code>loop</code></strong>: retry and iterate.
