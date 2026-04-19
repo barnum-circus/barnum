@@ -100,8 +100,6 @@ Not yet supported. Future work — distinct type from structs.
 
 | Name | Signature | Notes |
 |------|-----------|-------|
-| `HashMap.len()` | `HashMap<T> → number` | `.iterate().count()` |
-| `HashMap.isEmpty()` | `HashMap<T> → boolean` | `.iterate().count()` + compare to 0 |
 | `HashMap.keys()` | `HashMap<T> → string[]` | `.iterate().map(getField("key")).collect()` |
 | `HashMap.values()` | `HashMap<T> → T[]` | `.iterate().map(getField("value")).collect()` |
 | `HashMap.containsKey(key)` | `HashMap<T> → boolean` | `.get(key).isSome()` |
