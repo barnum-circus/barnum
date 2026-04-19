@@ -102,6 +102,10 @@ Run `pnpm run typecheck --output-logs=errors-only` from the repo root. This type
 
 When Rust crates are added: derive all applicable standard traits: `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`, `PartialOrd`, `Ord`, `Serialize`, `Deserialize`.
 
+## You are the only editor
+
+Every change in this repo was made by you (or a previous session of you). Don't describe issues as "pre-existing" or ask "was this intentional?" — you did it. Own it, fix it, move on.
+
 ## Autonomous operation
 
 - Log external processes to files you can read.
