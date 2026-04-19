@@ -43,12 +43,12 @@ These are combinators — they compose actions into larger actions. They don't o
 | `defineRecursiveFunctions(bodies)(entry)` | `any → TOut` | exists | Mutual recursion via ResumeHandle |
 | `withResource({create, action, dispose})` | `TIn → TOut` | exists | RAII pattern |
 | `sleep(ms)` | `any → void` | exists | Rust builtin. `ms` is config, input is ignored. |
+| `allObject({k: action, ...})` | `T → {k: TOut, ...}` | exists | `wrapInField` each key → `all` → `merge` |
 
 ### Proposed
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `allObject({k: action, ...})` | `T → {k: TOut, ...}` | exists | `wrapInField` each key → `all` → `merge` |
 | `withRetries(n, action)` | `T → TOut` | composable | `loop` + `tryCatch` + counter |
 
 ---
@@ -68,7 +68,7 @@ These are combinators — they compose actions into larger actions. They don't o
 | Name | Reason | Status |
 |------|--------|--------|
 | `tap(action)` | Subsumed by `bind`/`bindInput` | **done** |
-| `merge()` (public export) | Internal plumbing. Keep Rust builtin, remove JS export. | pending |
+| `merge()` (public export) | Internal plumbing. Keep Rust builtin, remove JS export. | **done** |
 
 ---
 
@@ -356,8 +356,8 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [x] `.map()` postfix dispatches Iterator (in addition to Option/Result)
 - [x] `.collect()` postfix dispatches Iterator (in addition to Option[])
 
-### Pending
-- [ ] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
+### Done
+- [x] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
 
 ### Done: control flow
 - [x] `allObject` — implemented as composable from existing primitives
