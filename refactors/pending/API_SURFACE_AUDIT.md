@@ -93,13 +93,13 @@ Not yet supported. Future work — distinct type from structs.
 | `HashMap.fromEntries()` | `{key: string, value: T}[] → HashMap<T>` | Constructor |
 | `HashMap.get(key)` | `HashMap<T> → Option<T>` | Lookup |
 | `HashMap.insert(key, value)` | `HashMap<T> → HashMap<T>` | Add/overwrite |
-| `HashMap.remove(key)` | `HashMap<T> → HashMap<T>` | Remove |
 | `.iterate()` | `HashMap<T> → Iterator<{key: string, value: T}>` | IntoIterator via `branchFamily` dispatch |
 
 ### Composable (no new builtins)
 
 | Name | Signature | Notes |
 |------|-----------|-------|
+| `HashMap.remove(key)` | `HashMap<T> → HashMap<T>` | `omit(key)` — same builtin |
 | `HashMap.keys()` | `HashMap<T> → string[]` | `.iterate().map(getField("key")).collect()` |
 | `HashMap.values()` | `HashMap<T> → T[]` | `.iterate().map(getField("value")).collect()` |
 | `HashMap.containsKey(key)` | `HashMap<T> → boolean` | `.get(key).isSome()` |
