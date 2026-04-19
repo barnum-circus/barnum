@@ -367,11 +367,11 @@ const intoIteratorNormalize = branchFamily({
 
 **File:** `crates/barnum_builtins/src/lib.rs` (in `ExtractPrefix` handler)
 
-Currently, `ExtractPrefix` expects a `kind` field and errors if missing. Add fallback: if no `kind` field, produce `{ kind: "Array", value: input }`.
+Currently, `ExtractPrefix` expects a `kind` field and errors if missing. Add fallback: if no `kind` field **and the input is an array**, produce `{ kind: "Array", value: input }`. If no `kind` field and the input is not an array, error as before.
 
 **File:** `libs/barnum/src/builtins/tagged-union.ts` (TypeScript `extractPrefix`)
 
-Same fallback for the TypeScript runtime.
+Same fallback for the TypeScript runtime. Check `Array.isArray(input)` (TS) / check for JSON array (Rust).
 
 ---
 
