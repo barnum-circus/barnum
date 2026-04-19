@@ -329,12 +329,12 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
 
 
   /** Convert Ok to Some, Err to None. `Result<T,E> → Option<T>` */
-  toOption<TIn, TValue, TError>(
+  asOkOption<TIn, TValue, TError>(
     this: TypedAction<TIn, Result<TValue, TError>>,
   ): TypedAction<TIn, Option<TValue>>;
 
   /** Convert Err to Some, Ok to None. `Result<T,E> → Option<E>` */
-  toOptionErr<TIn, TValue, TError>(
+  asErrOption<TIn, TValue, TError>(
     this: TypedAction<TIn, Result<TValue, TError>>,
   ): TypedAction<TIn, Option<TError>>;
 
@@ -642,14 +642,14 @@ function orMethod(this: TypedAction, fallback: Action): TypedAction {
 }
 
 
-function toOptionMethod(this: TypedAction): TypedAction {
+function asOkOptionMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(branch({
     Ok: Option.some(),
     Err: chain(toAction(drop), toAction(Option.none())),
   })));
 }
 
-function toOptionErrMethod(this: TypedAction): TypedAction {
+function asErrOptionMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(branch({
     Ok: chain(toAction(drop), toAction(Option.none())),
     Err: Option.some(),
@@ -744,8 +744,8 @@ export function typedAction<In = unknown, Out = unknown>(
       collect: { value: collectMethod, configurable: true },
       or: { value: orMethod, configurable: true },
 
-      toOption: { value: toOptionMethod, configurable: true },
-      toOptionErr: { value: toOptionErrMethod, configurable: true },
+      asOkOption: { value: asOkOptionMethod, configurable: true },
+      asErrOption: { value: asErrOptionMethod, configurable: true },
       isOk: { value: isOkMethod, configurable: true },
       isErr: { value: isErrMethod, configurable: true },
       transpose: { value: transposeMethod, configurable: true },

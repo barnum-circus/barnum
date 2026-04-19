@@ -131,14 +131,14 @@ describe("Result types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
   });
 
-  it("Result.toOption converts to Option<TValue>", () => {
-    const action = R.toOption<string, number>();
+  it("Result.asOkOption converts to Option<TValue>", () => {
+    const action = R.asOkOption<string, number>();
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
   });
 
-  it("Result.toOptionErr converts to Option<TError>", () => {
-    const action = R.toOptionErr<string, number>();
+  it("Result.asErrOption converts to Option<TError>", () => {
+    const action = R.asErrOption<string, number>();
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
   });
@@ -309,8 +309,8 @@ describe("Result AST structure", () => {
     expect(branchNode.cases.Err.rest).toBe(fallback);
   });
 
-  it("Result.toOption() desugars correctly", () => {
-    const action = R.toOption();
+  it("Result.asOkOption() desugars correctly", () => {
+    const action = R.asOkOption();
     const branchNode = action as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest).toEqual(expectedTagAst("Option.Some"));
@@ -318,8 +318,8 @@ describe("Result AST structure", () => {
     expect(branchNode.cases.Err.rest.rest).toEqual(expectedTagAst("Option.None"));
   });
 
-  it("Result.toOptionErr() desugars correctly", () => {
-    const action = R.toOptionErr();
+  it("Result.asErrOption() desugars correctly", () => {
+    const action = R.asErrOption();
     const branchNode = action as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest.first.handler.builtin.kind).toBe("Drop");
@@ -484,31 +484,31 @@ describe("Result execution", () => {
     expect(result).toBe(0);
   });
 
-  // -- toOption / toOptionErr --
-  it("Result.toOption on Ok -> Some", async () => {
+  // -- asOkOption / asErrOption --
+  it("Result.asOkOption on Ok -> Some", async () => {
     const result = await runPipeline(
-      pipe(constant(42).ok(), R.toOption()),
+      pipe(constant(42).ok(), R.asOkOption()),
     );
     expect(result).toEqual({ kind: "Option.Some", value: 42 });
   });
 
-  it("Result.toOption on Err -> None", async () => {
+  it("Result.asOkOption on Err -> None", async () => {
     const result = await runPipeline(
-      pipe(constant("fail").err(), R.toOption()),
+      pipe(constant("fail").err(), R.asOkOption()),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
-  it("Result.toOptionErr on Ok -> None", async () => {
+  it("Result.asErrOption on Ok -> None", async () => {
     const result = await runPipeline(
-      pipe(constant(42).ok(), R.toOptionErr()),
+      pipe(constant(42).ok(), R.asErrOption()),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
-  it("Result.toOptionErr on Err -> Some", async () => {
+  it("Result.asErrOption on Err -> Some", async () => {
     const result = await runPipeline(
-      pipe(constant("fail").err(), R.toOptionErr()),
+      pipe(constant("fail").err(), R.asErrOption()),
     );
     expect(result).toEqual({ kind: "Option.Some", value: "fail" });
   });

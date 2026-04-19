@@ -96,7 +96,7 @@ export const Result = {
   /**
    * Convert Ok to Some, Err to None. `Result<TValue, TError> → Option<TValue>`
    */
-  toOption<TValue, TError>(): TypedAction<
+  asOkOption<TValue, TError>(): TypedAction<
     ResultT<TValue, TError>,
     OptionT<TValue>
   > {
@@ -109,7 +109,7 @@ export const Result = {
   /**
    * Convert Err to Some, Ok to None. `Result<TValue, TError> → Option<TError>`
    */
-  toOptionErr<TValue, TError>(): TypedAction<
+  asErrOption<TValue, TError>(): TypedAction<
     ResultT<TValue, TError>,
     OptionT<TError>
   > {
