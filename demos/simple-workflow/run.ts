@@ -15,13 +15,16 @@ import {
 } from "./handlers/steps";
 
 runPipeline(
-  listFiles.forEach(
-    pipe(
-      implementRefactor,
-      typeCheckFiles,
-      fixTypeErrors,
-      commitChanges,
-      createPullRequest,
-    ),
-  ),
+  listFiles
+    .iterate()
+    .map(
+      pipe(
+        implementRefactor,
+        typeCheckFiles,
+        fixTypeErrors,
+        commitChanges,
+        createPullRequest,
+      ),
+    )
+    .collect(),
 );

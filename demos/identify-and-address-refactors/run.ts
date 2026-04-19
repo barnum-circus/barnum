@@ -13,8 +13,8 @@
  *      d. Commit and create a PR
  *   6. Clean up the worktree
  *
- * Demonstrates: withResource, loop, forEach, constant, pipe, bindInput,
- * Option.collect, and postfix operators.
+ * Demonstrates: withResource, loop, Iterator, constant, bindInput,
+ * and postfix operators (.then, .iterate, .flatMap, .map, .collect).
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -24,11 +24,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   runPipeline,
-  pipe,
-  forEach,
   constant,
   withResource,
-  Option,
 } from "@barnum/barnum/pipeline";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -46,23 +43,17 @@ import { deleteWorktree } from "./handlers/git";
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
 runPipeline(
-  pipe(
-    constant({ folder: srcDir }),
-    listTargetFiles,
-
-    // Analyze each file for refactoring opportunities.
-    forEach(analyze).flatten(),
-
-    // Keep only worthwhile refactors (Option.collect filters out Nones).
-    forEach(assessWorthiness).then(Option.collect()),
-
-    // For each refactor: create a worktree, do the work, open a PR, clean up.
-    forEach(
+  constant({ folder: srcDir })
+    .then(listTargetFiles)
+    .iterate()
+    .flatMap(analyze)
+    .flatMap(assessWorthiness)
+    .map(
       withResource({
         create: createBranchWorktree,
         action: implementAndReview,
         dispose: deleteWorktree,
       }),
-    ),
-  ),
+    )
+    .collect(),
 );

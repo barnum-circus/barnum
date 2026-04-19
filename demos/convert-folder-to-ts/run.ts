@@ -7,8 +7,8 @@
  *   3. For each file: migrate to TS and write the output
  *   4. Type-check/fix loop until clean
  *
- * Demonstrates: pipe, forEach, loop, bindInput, all,
- * createHandlerWithConfig, and postfix operators (.get, .pick, .merge, .drop, .then).
+ * Demonstrates: pipe, Iterator, loop, bindInput, all,
+ * createHandlerWithConfig, and postfix operators (.get, .pick, .merge, .drop, .then, .iterate).
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -23,7 +23,9 @@ runPipeline(
   pipe(
     setup,
     listFiles
-      .forEach(migrate({ to: "Typescript" }))
+      .iterate()
+      .map(migrate({ to: "Typescript" }))
+      .collect()
       .drop(),
     typeCheckFix,
   ),

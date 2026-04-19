@@ -4,25 +4,23 @@
  * Pipeline:
  *   1. For each PR: check status (fake GitHub API)
  *   2. Branch on result:
- *      - ChecksFailed → fix issues (side effect), wrap PR as Some
- *      - ChecksPassed → land the PR (side effect), wrap as None (done)
- *      - Landed → already merged, wrap as None (done)
- *   3. Option.collect() gathers remaining PR numbers (the Somes)
+ *      - ChecksFailed → fix issues (side effect), keep PR (true)
+ *      - ChecksPassed → land the PR (side effect), drop PR (false)
+ *      - Landed → already merged, drop PR (false)
+ *   3. Iterator.filter keeps PRs that still need attention
  *   4. If PRs remain, delay 10s then loop back to step 1
  *
- * Demonstrates: loop, forEach, branch, bindInput, Option.some,
- *               Option.collect, drop.
+ * Demonstrates: loop, Iterator.filter, branch, bindInput, constant, drop.
  *
  * Usage: pnpm run demo
  */
 
 import {
   runPipeline,
-  pipe,
-  forEach,
+  Iterator,
+  constant,
   loop,
   drop,
-  Option,
   bindInput,
   sleep,
 } from "@barnum/barnum/pipeline";
@@ -38,27 +36,24 @@ console.error("Monitoring PRs: #101, #102, #103\n");
 
 runPipeline(
   loop<void, number[]>((recur, done) =>
-    pipe(
-      forEach(
+    Iterator.fromArray<number>()
+      .filter(
         bindInput<number>((prNumber) =>
           prNumber.then(checkPR).branch({
-            ChecksFailed: fixIssues
-              .drop()
-              .then(prNumber)
-              .some(),
-            ChecksPassed: landPR.drop().then(Option.none()),
-            Landed: drop.then(Option.none()),
+            ChecksFailed: fixIssues.drop().then(constant(true)),
+            ChecksPassed: landPR.drop().then(constant(false)),
+            Landed: drop.then(constant(false)),
           }),
         ),
-      ),
-      Option.collect<number>(),
-      classifyRemaining.branch({
+      )
+      .collect()
+      .then(classifyRemaining)
+      .branch({
         HasPRs: bindInput<number[], never>((prs) =>
           sleep(10_000).then(prs).then(recur),
         ),
         AllDone: done,
       }),
-    ),
   ),
   [101, 102, 103],
 );

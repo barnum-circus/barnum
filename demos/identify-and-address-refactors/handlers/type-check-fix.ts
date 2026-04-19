@@ -11,7 +11,7 @@ import {
 import {
   bindInput,
   pipe,
-  forEach,
+  Iterator,
   loop,
 } from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
@@ -145,7 +145,7 @@ export const fix = createHandler({
 export const typeCheckFix = bindInput<{ worktreePath: string }>((typeCheckFixParams) =>
   loop<void, void>((recur, done) =>
     typeCheckFixParams.then(pipe(typeCheck, classifyErrors)).branch({
-      HasErrors: forEach(fix).drop().then(recur),
+      HasErrors: Iterator.fromArray<TypeError>().map(fix).drop().then(recur),
       Clean: done,
     }),
   ),
