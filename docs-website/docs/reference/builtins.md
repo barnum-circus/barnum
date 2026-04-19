@@ -474,25 +474,6 @@ analyzeFile.tag("NeedsRefactor")
 
 ---
 
-### `merge()`
-
-Merge a tuple of objects into a single object via intersection.
-
-```ts
-function merge<
-  TObjects extends Record<string, unknown>[],
->(): TypedAction<TObjects, UnionToIntersection<TObjects[number]>>
-```
-
-**Postfix:** Yes — `.merge()`. **Prefer postfix** — it infers the tuple element types from the preceding action's output.
-
-```ts
-all(getUser, getSettings).merge()
-// Output: User & Settings
-```
-
----
-
 ### `flatten()`
 
 Flatten a nested array one level.
@@ -880,7 +861,6 @@ These methods are available on any `TypedAction` via dot-chaining. **Always pref
 | `.branch(cases)` | `chain(a, branch(cases))` | Requires tagged union output |
 | `.drop()` | `chain(a, drop)` | |
 | `.tag(kind)` | `chain(a, tag(kind))` | |
-| `.merge()` | `chain(a, merge())` | Requires tuple-of-objects output |
 | `.flatten()` | `chain(a, flatten())` | Requires nested array output |
 | `.getField(field)` | `chain(a, getField(field))` | |
 | `.getIndex(index)` | `chain(a, getIndex(index))` | Requires tuple output |

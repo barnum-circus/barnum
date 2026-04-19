@@ -7,11 +7,10 @@ Automate the release process: aggregate changelogs from commits, determine the v
 ```ts
 runPipeline(
   listCommitsSinceLastRelease
-    .then(all(
-      iterate().map(classifyCommit).collect().then(determineVersionBump),
-      generateChangelog,
-    ))
-    .merge()
+    .then(allObject({
+      versionBump: iterate().map(classifyCommit).collect().then(determineVersionBump),
+      changelog: generateChangelog,
+    }))
     .then(applyVersionBump)
     .then(tryCatch(
       (throwError) => buildAndTest.unwrapOr(throwError).drop()

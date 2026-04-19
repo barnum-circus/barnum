@@ -6,12 +6,11 @@ Analyze a repository, generate setup guides, and verify the instructions actuall
 
 ```ts
 runPipeline(
-  all(
-    analyzeRepoStructure,
-    analyzeDevDependencies,
-    analyzeBuildSystem,
-  )
-    .merge()
+  allObject({
+    repoStructure: analyzeRepoStructure,
+    devDependencies: analyzeDevDependencies,
+    buildSystem: analyzeBuildSystem,
+  })
     .then(generateSetupGuide)
     .then(loop((recur) =>
       testInCleanEnv.then(classifyResult).branch({

@@ -253,7 +253,6 @@ Each postfix method transforms the type signature in a specific way:
 | `.getField(field)` | preserved | `Out[TField]` | |
 | `.pick(...keys)` | preserved | `Pick<Out, TKeys>` | |
 | `.flatten()` | preserved | `T[][]` → `T[]` | conditional type |
-| `.merge()` | preserved | `MergeTuple<Out>` | |
 | `.augment()` | preserved | `In & Out` | reads `In` from phantom fields |
 | `.mapOption(b)` | re-bound via `this` | `Option<T>` → `Option<U>` | `this` constraint extracts `T` |
 | `.mapErr(b)` | re-bound via `this` | `Result<V, E>` → `Result<V, E2>` | `this` constraint extracts `V`, `E` |

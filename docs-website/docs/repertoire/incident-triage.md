@@ -6,19 +6,17 @@ When an alert fires, automatically collect context from multiple systems in para
 
 ```ts
 runPipeline(
-  all(
-    collectLogs,
-    collectMetrics,
-    collectRecentDeploys,
-    queryBusinessIntelligence,
-  )
-    .merge()
-    .then(all(
-      correlateEvents,
-      classifySeverity,
-      identifyAffectedServices,
-    ))
-    .merge()
+  allObject({
+    logs: collectLogs,
+    metrics: collectMetrics,
+    recentDeploys: collectRecentDeploys,
+    businessIntelligence: queryBusinessIntelligence,
+  })
+    .then(allObject({
+      correlations: correlateEvents,
+      severity: classifySeverity,
+      affectedServices: identifyAffectedServices,
+    }))
     .then(draftTriageDocument),
 );
 ```
@@ -30,7 +28,7 @@ runPipeline(
    - **Metrics** — pull latency, error rate, and throughput from your monitoring system.
    - **Recent deploys** — ask an LLM (or query a deploy tracker) for what shipped in the last 24 hours. If the deploy service has an API, this is deterministic. If not, an agent can query it via CLI or chat.
    - **Business intelligence** — pull relevant data from internal BI tools (revenue impact, affected user count, feature flag states). Crucial for triage but often missed because it lives in a separate system.
-2. **Merge** — combine the four data sources into a single context object.
+2. **Combine** — `allObject` produces a single named-field object from the four data sources.
 3. **Parallel analysis** — three focused agents run concurrently:
    - **Correlate events** — find causal links between deploys, metric changes, and log patterns.
    - **Classify severity** — determine if this is a P0, P1, or P2 based on impact data.
@@ -82,8 +80,8 @@ export const queryBusinessIntelligence = createHandler({
 
 ## Key points
 
-- Two levels of `all`: data collection (I/O-bound, different systems) and analysis (focused LLM calls). Both benefit from parallelism.
-- `merge()` combines tuple outputs into a single object, so downstream steps don't need to destructure tuples.
+- Two levels of `allObject`: data collection (I/O-bound, different systems) and analysis (focused LLM calls). Both benefit from parallelism.
+- `allObject` produces a single named-field object directly, so downstream steps don't need to destructure tuples.
 - The triage document drafter sees the full picture — correlations, severity, affected services, business impact — but never queries any system directly.
 - Each data collector is independent and can fail independently. Wrap individual collectors in `tryCatch` to degrade gracefully if a system is unreachable.
 - Add `withTimeout` around the entire pipeline to ensure triage completes within SLA.
