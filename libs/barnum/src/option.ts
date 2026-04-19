@@ -43,8 +43,8 @@ export const Option = {
   /** Transform the Some value. `Option<T> → Option<U>` */
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
     return branch({
-      Some: chain(toAction(action), toAction(Option.some())),
-      None: Option.none(),
+      Some: chain(action, Option.some<U>()),
+      None: Option.none<U>(),
     }) as TypedAction<OptionT<T>, OptionT<U>>;
   },
 
@@ -57,7 +57,7 @@ export const Option = {
   ): TypedAction<OptionT<T>, OptionT<U>> {
     return branch({
       Some: action,
-      None: Option.none(),
+      None: Option.none<U>(),
     }) as TypedAction<OptionT<T>, OptionT<U>>;
   },
 
@@ -68,7 +68,7 @@ export const Option = {
    */
   unwrap<T>(): TypedAction<OptionT<T>, T> {
     return branch({
-      Some: identity(),
+      Some: identity<T>(),
       None: panic("called unwrap on None"),
     }) as TypedAction<OptionT<T>, T>;
   },
@@ -79,7 +79,7 @@ export const Option = {
    */
   unwrapOr<T>(defaultAction: Pipeable<void, T>): TypedAction<OptionT<T>, T> {
     return branch({
-      Some: identity(),
+      Some: identity<T>(),
       None: defaultAction,
     }) as TypedAction<OptionT<T>, T>;
   },
@@ -93,7 +93,7 @@ export const Option = {
   ): TypedAction<OptionT<T>, OptionT<T>> {
     return branch({
       Some: predicate,
-      None: Option.none(),
+      None: Option.none<T>(),
     }) as TypedAction<OptionT<T>, OptionT<T>>;
   },
 
@@ -113,8 +113,8 @@ export const Option = {
    */
   isSome<T>(): TypedAction<OptionT<T>, boolean> {
     return branch({
-      Some: constant(true),
-      None: constant(false),
+      Some: constant<boolean>(true),
+      None: constant<boolean>(false),
     }) as TypedAction<OptionT<T>, boolean>;
   },
 
@@ -123,8 +123,8 @@ export const Option = {
    */
   isNone<T>(): TypedAction<OptionT<T>, boolean> {
     return branch({
-      Some: constant(false),
-      None: constant(true),
+      Some: constant<boolean>(false),
+      None: constant<boolean>(true),
     }) as TypedAction<OptionT<T>, boolean>;
   },
 
@@ -142,10 +142,10 @@ export const Option = {
   > {
     return branch({
       Some: branch({
-        Ok: chain(toAction(Option.some()), toAction(Result.ok())),
-        Err: Result.err(),
+        Ok: chain(Option.some<TValue>(), Result.ok<OptionT<TValue>, TError>()),
+        Err: Result.err<OptionT<TValue>, TError>(),
       }),
-      None: chain(toAction(chain(toAction(drop), toAction(Option.none()))), toAction(Result.ok())),
+      None: chain(chain(drop, Option.none<TValue>()), Result.ok<OptionT<TValue>, TError>()),
     }) as TypedAction<
       OptionT<ResultT<TValue, TError>>,
       ResultT<OptionT<TValue>, TError>

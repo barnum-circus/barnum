@@ -4,7 +4,6 @@ import {
   type Result as ResultT,
   type ResultDef,
   type TypedAction,
-  toAction,
   branch,
 } from "./ast.js";
 import { chain } from "./chain.js";
@@ -30,8 +29,8 @@ export const Result = {
     action: Pipeable<TValue, TOut>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return branch({
-      Ok: chain(toAction(action), toAction(Result.ok())),
-      Err: Result.err(),
+      Ok: chain(action, Result.ok<TOut, TError>()),
+      Err: Result.err<TOut, TError>(),
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
   },
 
@@ -40,8 +39,8 @@ export const Result = {
     action: Pipeable<TError, TErrorOut>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return branch({
-      Ok: Result.ok(),
-      Err: chain(toAction(action), toAction(Result.err())),
+      Ok: Result.ok<TValue, TErrorOut>(),
+      Err: chain(action, Result.err<TValue, TErrorOut>()),
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>;
   },
 
@@ -54,7 +53,7 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return branch({
       Ok: action,
-      Err: Result.err(),
+      Err: Result.err<TOut, TError>(),
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
   },
 
@@ -63,7 +62,7 @@ export const Result = {
     fallback: Pipeable<TError, ResultT<TValue, TErrorOut>>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
     return branch({
-      Ok: Result.ok(),
+      Ok: Result.ok<TValue, TErrorOut>(),
       Err: fallback,
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>;
   },
@@ -76,7 +75,7 @@ export const Result = {
    */
   unwrap<TValue, TError>(): TypedAction<ResultT<TValue, TError>, TValue> {
     return branch({
-      Ok: identity(),
+      Ok: identity<TValue>(),
       Err: panic("called unwrap on Err"),
     }) as TypedAction<ResultT<TValue, TError>, TValue>;
   },
@@ -88,7 +87,7 @@ export const Result = {
     defaultAction: Pipeable<TError, TValue>,
   ): TypedAction<ResultT<TValue, TError>, TValue> {
     return branch({
-      Ok: identity(),
+      Ok: identity<TValue>(),
       Err: defaultAction,
     }) as TypedAction<ResultT<TValue, TError>, TValue>;
   },
@@ -101,8 +100,8 @@ export const Result = {
     OptionT<TValue>
   > {
     return branch({
-      Ok: Option.some(),
-      Err: chain(toAction(drop), toAction(Option.none())),
+      Ok: Option.some<TValue>(),
+      Err: chain(drop, Option.none<TValue>()),
     }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>;
   },
 
@@ -114,8 +113,8 @@ export const Result = {
     OptionT<TError>
   > {
     return branch({
-      Ok: chain(toAction(drop), toAction(Option.none())),
-      Err: Option.some(),
+      Ok: chain(drop, Option.none<TError>()),
+      Err: Option.some<TError>(),
     }) as TypedAction<ResultT<TValue, TError>, OptionT<TError>>;
   },
 
@@ -129,10 +128,10 @@ export const Result = {
   > {
     return branch({
       Ok: branch({
-        Some: chain(toAction(Result.ok()), toAction(Option.some())),
-        None: chain(toAction(drop), toAction(Option.none())),
+        Some: chain(Result.ok<TValue, TError>(), Option.some<ResultT<TValue, TError>>()),
+        None: chain(drop, Option.none<ResultT<TValue, TError>>()),
       }),
-      Err: chain(toAction(Result.err()), toAction(Option.some())),
+      Err: chain(Result.err<TValue, TError>(), Option.some<ResultT<TValue, TError>>()),
     }) as TypedAction<
       ResultT<OptionT<TValue>, TError>,
       OptionT<ResultT<TValue, TError>>
@@ -144,8 +143,8 @@ export const Result = {
    */
   isOk<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
     return branch({
-      Ok: constant(true),
-      Err: constant(false),
+      Ok: constant<boolean>(true),
+      Err: constant<boolean>(false),
     }) as TypedAction<ResultT<TValue, TError>, boolean>;
   },
 
@@ -154,8 +153,8 @@ export const Result = {
    */
   isErr<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
     return branch({
-      Ok: constant(false),
-      Err: constant(true),
+      Ok: constant<boolean>(false),
+      Err: constant<boolean>(true),
     }) as TypedAction<ResultT<TValue, TError>, boolean>;
   },
 
