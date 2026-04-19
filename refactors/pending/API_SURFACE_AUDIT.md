@@ -48,7 +48,7 @@ These are combinators — they compose actions into larger actions. They don't o
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `allObject({k: action, ...})` | `T → {k: TOut, ...}` | composable | `wrapInField` each key → `all` → `merge` |
+| `allObject({k: action, ...})` | `T → {k: TOut, ...}` | exists | `wrapInField` each key → `all` → `merge` |
 | `withRetries(n, action)` | `T → TOut` | composable | `loop` + `tryCatch` + counter |
 
 ---
@@ -359,8 +359,8 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 ### Pending
 - [ ] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
 
-### Proposed: control flow
-- [ ] `allObject` — composable from existing primitives
+### Done: control flow
+- [x] `allObject` — implemented as composable from existing primitives
 - [ ] `withRetries(n)` — composable: loop + tryCatch
 
 ### Proposed: struct
@@ -386,7 +386,7 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [ ] `Option.okOr(err)` — composable
 
 ### Resolve: merge → allObject
-- [ ] Implement `allObject`
+- [x] Implement `allObject`
 - [ ] Refactor `tag`, `pick`, `withResource` to use `allObject` internally
 
 ### Lower priority
