@@ -2,9 +2,9 @@
 
 ## Context
 
-Dynamic dispatch in barnum uses **prefix-based dispatch** via the `ExtractPrefix` builtin and `matchPrefix` combinator. Tagged union values carry namespaced kind strings (`"Option.Some"`, `"Result.Ok"`). `ExtractPrefix` splits on `'.'` to restructure the value so `branch()` can dispatch on the family first, then the variant. No runtime dispatch tables — the AST encodes the dispatch.
+Dynamic dispatch in barnum uses **prefix-based dispatch** via the `ExtractPrefix` builtin and `branchFamily` combinator (renamed from `branchFamily`). Tagged union values carry namespaced kind strings (`"Option.Some"`, `"Result.Ok"`). `ExtractPrefix` splits on `'.'` to restructure the value so `branch()` can dispatch on the family first, then the variant. No runtime dispatch tables — the AST encodes the dispatch.
 
-Currently, transformation methods like `.map()` and `.andThen()` are postfix methods on TypedAction that use `matchPrefix` to dispatch across Option and Result.
+Currently, transformation methods like `.map()` and `.andThen()` are postfix methods on TypedAction that use `branchFamily` to dispatch across Option and Result.
 
 **This doc introduces Iterator as an additional transformation interface.** Option and Result keep their existing `.map()`, `.andThen()`, etc. methods. Iterator adds sequence-oriented methods (map, flatMap, filter, collect) that don't belong on Option/Result. Option, Result, and arrays gain `.iterate()` postfix to enter Iterator.
 
@@ -12,7 +12,7 @@ Currently, transformation methods like `.map()` and `.andThen()` are postfix met
 
 ## Design: Iterator alongside Option/Result
 
-**Option/Result keep their existing methods.** `.map()`, `.andThen()`, `.unwrapOr()`, etc. remain as postfix methods dispatching via `matchPrefix`. They are the primary API for working with Option and Result values.
+**Option/Result keep their existing methods.** `.map()`, `.andThen()`, `.unwrapOr()`, etc. remain as postfix methods dispatching via `branchFamily`. They are the primary API for working with Option and Result values.
 
 **Iterator adds sequence operations.** Methods like `.filter()` and `.collect()` only make sense on sequences. Iterator is the interface for these.
 
@@ -98,7 +98,7 @@ The wrap/unwrap overhead is real but small — it's a Rust builtin (WrapInField/
 | `Result<T, E>` | `.iterate()` | `Iterator.fromResult()` | Branch: Ok → `[value]`, Err → `[]`, then wrap |
 | `T[]` | `.iterate()` | `Iterator.fromArray()` | Wrap in `{ kind: "Iterator.Iterator", value: array }` |
 
-`.iterate()` is a postfix method that uses `matchPrefix` for all three families. The standalone constructors (`Iterator.fromArray()`, `Iterator.fromOption()`, `Iterator.fromResult()`) are also available when you need to construct an Iterator without a preceding chain. For arrays, `ExtractPrefix` produces `{ kind: "Array", value: array }` as a fallback when the input has no `kind` field (see Task 1.6).
+`.iterate()` is a postfix method that uses `branchFamily` for all three families. The standalone constructors (`Iterator.fromArray()`, `Iterator.fromOption()`, `Iterator.fromResult()`) are also available when you need to construct an Iterator without a preceding chain. For arrays, `ExtractPrefix` produces `{ kind: "Array", value: array }` as a fallback when the input has no `kind` field (see Task 1).
 
 ### IntoIterator for `.flatMap()` return types
 
@@ -110,11 +110,11 @@ Supported return types for `f`:
 - `Result<U, E>` — Ok → `[value]`, Err → `[]`
 - `U[]` — identity (via Array ExtractPrefix fallback)
 
-Implementation: after calling `f`, normalize the return value via `matchPrefix`:
+Implementation: after calling `f`, normalize the return value via `branchFamily`:
 
 ```ts
 // Conceptual implementation of flatMap's inner transform:
-chain(action, matchPrefix({
+chain(action, branchFamily({
   Iterator: branch({ Iterator: identity() }),  // unwrap value (auto-unwrap)
   Option: branch({ Some: wrapInArray(), None: constant([]) }),
   Result: branch({ Ok: wrapInArray(), Err: constant([]) }),
@@ -192,7 +192,7 @@ Future methods are cataloged in `ITERATOR_METHODS.md`.
 
 1. ~~**Naming**~~ **Decided:** `.iterate()`.
 
-2. ~~**Array → Iterator**~~ **Decided:** Postfix `.iterate()` works on all three families (Option, Result, arrays). `ExtractPrefix` is extended to produce `{ kind: "Array", value: input }` when the input has no `kind` field. This lets `matchPrefix` dispatch arrays to an `Array` case alongside Option/Result.
+2. ~~**Array → Iterator**~~ **Decided:** Postfix `.iterate()` works on all three families (Option, Result, arrays). `ExtractPrefix` is extended to produce `{ kind: "Array", value: input }` when the input has no `kind` field. This lets `branchFamily` dispatch arrays to an `Array` case alongside Option/Result. **Future direction:** arrays may become a proper tagged union (`{ kind: "Array.Array", value: rawArray }`) — same pattern as Iterator.Iterator. This would eliminate the ExtractPrefix fallback since arrays would have `kind` fields natively.
 
 3. ~~**`filter` predicate type**~~ **Decided:** `T → bool`. Implemented as `flatMap` + `AsOption` — no new builtin needed for filter itself. Consistent with Rust's `Iterator::filter`.
 
@@ -327,18 +327,18 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 | `Iterator.flatMap(f)` | `getField("value")` → `forEach(chain(f, intoIteratorNormalize))` → `flatten()` → `tag("Iterator", "Iterator")` |
 | `Iterator.filter(pred)` | Implemented as `flatMap` — converts bool to `Option<T>` via `AsOption`, flatMap normalizes Option via IntoIterator. |
 | `AsOption` | **New builtin.** `bool → Option<void>`. `true` → Some, `false` → None. |
-| `.iterate()` postfix | `matchPrefix` → branch per family → wrap |
+| `.iterate()` postfix | `branchFamily` → branch per family → wrap |
 
 **`wrapInArray()`**: `T → T[]`. Implemented as `all(identity())` — may warrant a dedicated builtin later.
 
-**`intoIteratorNormalize`**: `matchPrefix` that converts any IntoIterator return to a plain array. Used inside `.flatMap()`.
+**`intoIteratorNormalize`**: `branchFamily` that converts any IntoIterator return to a plain array. Used inside `.flatMap()`.
 
 ```ts
 function wrapInArray<T>(): TypedAction<T, T[]> {
   return all(identity()) as TypedAction<T, T[]>;
 }
 
-const intoIteratorNormalize = matchPrefix({
+const intoIteratorNormalize = branchFamily({
   Iterator: branch({ Iterator: identity() }),     // unwrap → T[]
   Option: branch({ Some: wrapInArray(), None: constant([]) }),
   Result: branch({ Ok: wrapInArray(), Err: constant([]) }),
@@ -350,9 +350,20 @@ const intoIteratorNormalize = matchPrefix({
 
 ### Phase 1: Iterator foundation
 
+#### Task 0: Rename `matchPrefix` → `branchFamily`
+
+**Goal:** Rename the `matchPrefix` combinator to `branchFamily` throughout the codebase. The new name better describes the operation: branch on the tagged union family (Option, Result, Iterator, Array).
+
+**Files:**
+- `libs/barnum/src/ast.ts` — rename function declaration and all call sites
+- `libs/barnum/src/builtins/tagged-union.ts` — rename export
+- All files referencing `matchPrefix`
+
+---
+
 #### Task 1: ExtractPrefix Array fallback
 
-**Goal:** `ExtractPrefix` produces `{ kind: "Array", value: input }` when the input has no `kind` field. This enables `matchPrefix` to dispatch arrays alongside Option/Result/Iterator.
+**Goal:** `ExtractPrefix` produces `{ kind: "Array", value: input }` when the input has no `kind` field. This enables `branchFamily` to dispatch arrays alongside Option/Result/Iterator.
 
 **File:** `crates/barnum_builtins/src/lib.rs` (in `ExtractPrefix` handler)
 
@@ -454,7 +465,7 @@ export const Iterator = {
 Where `intoIteratorNormalize` is a module-level constant:
 
 ```ts
-const intoIteratorNormalize: Action = matchPrefix({
+const intoIteratorNormalize: Action = branchFamily({
   Iterator: branch({ Iterator: identity() }),
   Option: branch({ Some: wrapInArray(), None: constant([]) }),
   Result: branch({ Ok: wrapInArray(), Err: constant([]) }),
@@ -490,7 +501,7 @@ iterate<TIn, TElement>(
 
 ```ts
 function iterateMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
+  return chain(toAction(this), toAction(branchFamily({
     Option: branch({
       Some: chain(toAction(wrapInArray()), toAction(tag("Iterator", "Iterator"))),
       None: chain(toAction(constant([])), toAction(tag("Iterator", "Iterator"))),
@@ -555,7 +566,7 @@ collect<TIn, TElement>(
 
 ##### 5.2: Extend method implementations
 
-Add `Iterator` case to `matchPrefix` in `mapMethod`, `collectMethod`. Add new `flatMapMethod` and `filterMethod` for Iterator:
+Add `Iterator` case to `branchFamily` in `mapMethod`, `collectMethod`. Add new `flatMapMethod` and `filterMethod` for Iterator:
 
 ```ts
 // mapMethod — add Iterator case:
@@ -565,7 +576,7 @@ Iterator: branch({
 
 // flatMapMethod — new method, Iterator-only:
 function flatMapMethod(this: TypedAction, action: Pipeable): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
+  return chain(toAction(this), toAction(branchFamily({
     Iterator: branch({
       Iterator: chain(
         toAction(forEach(chain(toAction(action), toAction(intoIteratorNormalize)))),

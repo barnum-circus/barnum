@@ -23,7 +23,7 @@ In Rust, a newtype is `struct Foo(Bar)` — a wrapper that gives `Bar` a distinc
 
 In barnum, newtypes serve purposes 1 and 2. The inner value needs to be wrapped so that:
 - The type system (TypeScript) can distinguish `Iterator<T>` from `T[]`
-- Postfix methods (via `matchPrefix`) can dispatch to the right implementation
+- Postfix methods (via `branchFamily`) can dispatch to the right implementation
 - The Rust engine can treat it as a tagged value uniformly
 
 ---
@@ -46,9 +46,9 @@ This works but has quirks:
 
 2. **`branch()` on a single variant is ceremony.** `branch({ Iterator: handler })` always matches. It's just an unwrap with extra steps.
 
-3. **`matchPrefix` does two levels of dispatch for one.** `ExtractPrefix` splits `"Iterator.Iterator"` into `{ kind: "Iterator", value: original }`, then the outer branch matches `"Iterator"` and unwraps. The inner value is `{ kind: "Iterator.Iterator", value: T[] }` — still wrapped. For multi-variant enums, a second `branch` dispatches on the variant. For newtypes, you skip that and `getField("value")` directly.
+3. **`branchFamily` does two levels of dispatch for one.** `ExtractPrefix` splits `"Iterator.Iterator"` into `{ kind: "Iterator", value: original }`, then the outer branch matches `"Iterator"` and unwraps. The inner value is `{ kind: "Iterator.Iterator", value: T[] }` — still wrapped. For multi-variant enums, a second `branch` dispatches on the variant. For newtypes, you skip that and `getField("value")` directly.
 
-4. **Consistency is the upside.** The Rust engine, `branch()`, `matchPrefix`, `tag()`, and all the tagged union machinery work on newtypes without special cases. A newtype is just an enum that happens to have one variant.
+4. **Consistency is the upside.** The Rust engine, `branch()`, `branchFamily`, `tag()`, and all the tagged union machinery work on newtypes without special cases. A newtype is just an enum that happens to have one variant.
 
 ---
 
@@ -70,7 +70,7 @@ No dot in the kind string. `ExtractPrefix` wouldn't split anything (no `.` to sp
 
 **Cons:**
 - New concept in the type system — newtypes are no longer "just enums"
-- `matchPrefix` wouldn't match them the same way as multi-variant enums. A `matchPrefix({ Iterator: ..., Option: ... })` call would need to handle both dotted kinds (`"Option.Some"`) and un-dotted kinds (`"Iterator"`) in the same dispatch.
+- `branchFamily` wouldn't match them the same way as multi-variant enums. A `branchFamily({ Iterator: ..., Option: ... })` call would need to handle both dotted kinds (`"Option.Some"`) and un-dotted kinds (`"Iterator"`) in the same dispatch.
 - `tag()` constructor would need a different form
 - The Rust engine would need to know about the distinction
 
@@ -80,9 +80,9 @@ No dot in the kind string. `ExtractPrefix` wouldn't split anything (no `.` to sp
 
 The current `TaggedUnion` representation is the right call. The redundancy is cosmetic, and the benefits of uniformity are real:
 
-1. **One representation for all tagged types.** The engine, `branch()`, `matchPrefix`, `tag()`, serialization — all of it works on `{ kind: string, value: T }` with dot-separated namespacing. No special cases.
+1. **One representation for all tagged types.** The engine, `branch()`, `branchFamily`, `tag()`, serialization — all of it works on `{ kind: string, value: T }` with dot-separated namespacing. No special cases.
 
-2. **`matchPrefix` just works.** `matchPrefix({ Iterator: ..., Option: ..., Result: ... })` dispatches uniformly. The Iterator case handler receives the tagged value after outer unwrap and does `getField("value")` to extract the inner `T[]`. The fact that there's no inner `branch` for Iterator is fine — it's just a simpler case handler, not a different mechanism.
+2. **`branchFamily` just works.** `branchFamily({ Iterator: ..., Option: ..., Result: ... })` dispatches uniformly. The Iterator case handler receives the tagged value after outer unwrap and does `getField("value")` to extract the inner `T[]`. The fact that there's no inner `branch` for Iterator is fine — it's just a simpler case handler, not a different mechanism.
 
 3. **Future-proofing.** A newtype today could gain variants tomorrow. `Iterator` might grow a `Lazy` variant. HashMap might distinguish `Empty` from `NonEmpty`. Keeping them as enums means this is a non-breaking extension.
 
@@ -113,7 +113,7 @@ No new types, no new builtins, no new engine support. Just a pattern.
 
 ### Iterator<T> (see TRAIT_DISPATCH_AND_ITERATORS.md)
 
-Wraps `T[]`. Entry via `.iterate()`. Exit via `.collect()`, `.first()`, `.last()`, etc. Transformation methods (map, filter, find) operate on the sequence. Participates in `matchPrefix` dispatch alongside Option and Result.
+Wraps `T[]`. Entry via `.iterate()`. Exit via `.collect()`, `.first()`, `.last()`, etc. Transformation methods (map, filter, find) operate on the sequence. Participates in `branchFamily` dispatch alongside Option and Result.
 
 ### HashMap<T> (see API_SURFACE_AUDIT.md)
 
@@ -124,10 +124,20 @@ HashMap needs the newtype wrapper because:
 - `HashMap.get(key)` is a runtime operation — the key is a string value, the entry might not exist. It returns `Option<T>`.
 - Without distinct types, the engine can't tell whether `getField("name")` means "access the struct field `name`" or "look up the key `"name"` in a hashmap."
 
+### Array<T> (future)
+
+Wraps raw `T[]` as `{ kind: "Array.Array", value: T[] }`. Currently, arrays are bare (no `kind` field), and `ExtractPrefix` has a special fallback to produce `{ kind: "Array", value: input }` for dispatch. Making Array a proper newtype would:
+- Eliminate the ExtractPrefix fallback — arrays would have `kind` fields natively like everything else
+- Make `branchFamily` dispatch fully uniform — no special case for bare values
+- Let arrays participate in the tagged union system as first-class citizens
+
+This is the natural end state: every value in a barnum pipeline is a tagged union. Bare arrays are the current exception.
+
 ### Potential future newtypes
 
 | Type | Wraps | Why newtype |
 |------|-------|-------------|
+| `Array<T>` | `T[]` | Eliminates ExtractPrefix fallback; uniform dispatch |
 | `Set<T>` | `T[]` (deduplicated) | Distinct from array — different methods (contains, union, intersection) |
 | `NonEmpty<T>` | `T[]` (guaranteed non-empty) | `.first()` returns `T` not `Option<T>` |
 | `Sorted<T>` | `T[]` (sorted) | Enables binary search, merge operations |
@@ -161,7 +171,7 @@ const Foo = {
 };
 ```
 
-For postfix dispatch via `matchPrefix`, the newtype's case handler is always: `getField("value")` → operation → `tag(Name, Name)`. No inner branch.
+For postfix dispatch via `branchFamily`, the newtype's case handler is always: `getField("value")` → operation → `tag(Name, Name)`. No inner branch.
 
 ---
 
@@ -169,4 +179,4 @@ For postfix dispatch via `matchPrefix`, the newtype's case handler is always: `g
 
 1. **Should newtypes have a type-level marker?** E.g., a `Newtype<TName, TInner>` alias that's sugar for `TaggedUnion<TName, { [TName]: TInner }>`. This would make the single-variant pattern explicit in the type system without changing runtime behavior.
 
-2. **`branch()` vs `getField("value")` for unwrapping:** When a postfix method dispatches via `matchPrefix` and the newtype case needs to unwrap, is `getField("value")` or `branch({ Foo: handler })` preferred? Both work. `getField("value")` is more direct. `branch({ Foo: handler })` is more self-documenting and auto-unwraps. Either way, it's the case handler inside `matchPrefix`, not a top-level concern.
+2. **`branch()` vs `getField("value")` for unwrapping:** When a postfix method dispatches via `branchFamily` and the newtype case needs to unwrap, is `getField("value")` or `branch({ Foo: handler })` preferred? Both work. `getField("value")` is more direct. `branch({ Foo: handler })` is more self-documenting and auto-unwraps. Either way, it's the case handler inside `branchFamily`, not a top-level concern.
