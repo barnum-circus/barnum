@@ -8,7 +8,7 @@ Automate the release process: aggregate changelogs from commits, determine the v
 runPipeline(
   listCommitsSinceLastRelease
     .then(all(
-      forEach(classifyCommit).then(determineVersionBump),
+      iterate().map(classifyCommit).collect().then(determineVersionBump),
       generateChangelog,
     ))
     .merge()
@@ -34,6 +34,6 @@ runPipeline(
 ## Key points
 
 - `all` runs version analysis and changelog generation concurrently — they don't depend on each other.
-- Commit classification is per-commit via `forEach`, so the agent sees one commit at a time.
+- Commit classification is per-commit via `.iterate().map()`, so the agent sees one commit at a time.
 - The changelog agent sees all commits but doesn't classify them — it writes prose.
 - `tryCatch` ensures a failed publish doesn't leave the repo in a half-released state.

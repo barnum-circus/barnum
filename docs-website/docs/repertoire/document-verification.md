@@ -9,7 +9,7 @@ Extract verifiable claims from a document, then fact-check each one independentl
 ## Pattern
 
 ```ts
-extractClaims.then(forEach(verifyClaim))
+extractClaims.then(iterate().map(verifyClaim).collect())
 ```
 
 ## Example
@@ -51,7 +51,7 @@ export const verifyClaim = createHandler({
 
 ```ts
 runPipeline(
-  extractClaims.then(forEach(verifyClaim)),
+  extractClaims.then(iterate().map(verifyClaim).collect()),
 );
 ```
 
@@ -59,5 +59,5 @@ runPipeline(
 
 - The extraction agent focuses only on finding claims — it doesn't evaluate truth.
 - Each verification agent evaluates a single claim with focused context.
-- `forEach` processes all claims in parallel, so verification scales with the number of claims.
+- `.iterate().map()` processes all claims in parallel, so verification scales with the number of claims.
 - Add an adversarial variant by replacing `verifyClaim` with a `loop` + `branch` pattern where two agents debate and a judge decides.

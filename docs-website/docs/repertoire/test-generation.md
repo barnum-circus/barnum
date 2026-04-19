@@ -7,7 +7,7 @@ Analyze source files, generate test suites, run them, and iterate on failures un
 ```ts
 runPipeline(
   listSourceFiles.then(
-    forEach(
+    iterate().map(
       analyzeForTestability.then(generateTests).then(
         loop((recur) =>
           runTests.then(classifyResults).branch({
@@ -16,7 +16,7 @@ runPipeline(
           })
         ),
       )
-    ),
+    ).collect(),
   ),
 );
 ```
@@ -34,5 +34,5 @@ runPipeline(
 - The analysis agent focuses purely on identifying what to test — it doesn't write tests.
 - The test-writing agent receives the analysis output, not the analysis instructions. Focused context.
 - The fix-and-retry loop is the same `loop` + `branch` pattern used in [type-check/fix](./codebase-migration.md).
-- `forEach` processes all files concurrently, so test generation scales with the codebase.
+- `.iterate().map()` processes all files concurrently, so test generation scales with the codebase.
 - Consider adding `withTimeout` to cap how long the fix loop runs per file.

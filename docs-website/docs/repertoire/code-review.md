@@ -9,9 +9,10 @@ Review changed files in parallel with multiple checks per file: coding standards
 ## Pattern
 
 ```ts
-listChangedFiles.forEach(
-  all(checkStandards, checkSecurity, checkPerformance)
-)
+listChangedFiles
+  .then(iterate().map(
+    all(checkStandards, checkSecurity, checkPerformance)
+  ).collect())
 ```
 
 ## Example
@@ -53,15 +54,16 @@ export const checkSecurity = createHandler({
 
 ```ts
 runPipeline(
-  listChangedFiles.forEach(
-    all(checkStandards, checkSecurity),
-  ),
+  listChangedFiles
+    .then(iterate().map(
+      all(checkStandards, checkSecurity),
+    ).collect()),
 );
 ```
 
 ## Key points
 
 - `all` runs multiple checks on the same input concurrently. Each check is independent.
-- `forEach` + `all` gives you parallelism at two levels: across files and across check types.
+- `.iterate().map()` + `all` gives you parallelism at two levels: across files and across check types.
 - Each reviewer has narrow, focused instructions. The security reviewer doesn't see the standards criteria and vice versa.
 - Add more checks by adding more arguments to `all` — no structural changes needed.

@@ -7,10 +7,10 @@ Extract user-facing strings from a codebase, translate them into target language
 ```ts
 runPipeline(
   extractStrings
-    .then(forEach(
+    .then(iterate().map(
       all(...targetLanguages.map(lang => translateTo(lang)))
-        .then(forEach(verifyInContext)),
-    ))
+        .then(iterate().map(verifyInContext).collect()),
+    ).collect())
     .then(flattenResults)
     .then(writeLocaleFiles),
 );
@@ -29,4 +29,4 @@ runPipeline(
 - Translation into different languages is embarrassingly parallel — `all` runs them concurrently.
 - The verification agent sees the translation, the original text, and the UI context — but not other translations.
 - The extraction step is deterministic (AST parsing or regex), not an LLM.
-- `forEach` processes all strings concurrently, so the workflow scales with the number of strings.
+- `.iterate().map()` processes all strings concurrently, so the workflow scales with the number of strings.

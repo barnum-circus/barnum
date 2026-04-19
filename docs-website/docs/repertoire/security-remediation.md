@@ -7,8 +7,8 @@ Scan a codebase for security vulnerabilities, classify their severity, generate 
 ```ts
 runPipeline(
   runSecurityScan
-    .then(forEach(classifySeverity))
-    .then(forEach(
+    .then(iterate().map(classifySeverity).collect())
+    .then(iterate().map(
       generatePatch.then(
         tryCatch(
           (throwError) => applyPatch
@@ -17,7 +17,7 @@ runPipeline(
           rollbackPatch,
         ),
       )
-    )),
+    ).collect()),
 );
 ```
 

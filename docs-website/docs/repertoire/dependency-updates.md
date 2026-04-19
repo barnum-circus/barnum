@@ -7,7 +7,7 @@ Bump dependencies across a project (or multiple projects), fix breaking API chan
 ```ts
 runPipeline(
   listOutdatedDeps.then(
-    forEach(
+    iterate().map(
       withResource({
         create: createUpdateBranch,
         action: bumpDependency.then(
@@ -19,7 +19,7 @@ runPipeline(
         ).then(createPR),
         dispose: cleanupBranch,
       }),
-    ),
+    ).collect(),
   ),
 );
 ```

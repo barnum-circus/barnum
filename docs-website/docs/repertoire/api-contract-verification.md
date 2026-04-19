@@ -8,9 +8,9 @@ Compare an API specification (OpenAPI, GraphQL schema, protobuf) against the act
 runPipeline(
   all(parseAPISpec, analyzeImplementation)
     .then(compareContracts)
-    .then(forEach(classifyDrift))
+    .then(iterate().map(classifyDrift).collect())
     .then(branch({
-      Breaking: forEach(generateFix),
+      Breaking: iterate().map(generateFix).collect(),
       NonBreaking: drop,
     })),
 );
@@ -27,5 +27,5 @@ runPipeline(
 
 - The spec parser is deterministic (no LLM) — it reads the OpenAPI/protobuf file and outputs structured data.
 - The implementation analyzer uses an LLM to read route handlers and extract the actual request/response shapes.
-- `forEach` processes all discrepancies concurrently.
+- `.iterate().map()` processes all discrepancies concurrently.
 - The fix generator sees one discrepancy at a time with focused context.
