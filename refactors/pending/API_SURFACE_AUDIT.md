@@ -98,6 +98,7 @@ Not yet supported. Future work — distinct type from structs.
 | `HashMap.entries()` | `Record<string, T> → {key: string, value: T}[]` | |
 | `HashMap.len()` | `Record<string, T> → number` | |
 | `HashMap.isEmpty()` | `Record<string, T> → boolean` | |
+| `.iterate()` | `Record<string, T> → Iterator<{key: string, value: T}>` | Implements IntoIterator via `branchFamily` dispatch |
 
 ---
 
