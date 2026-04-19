@@ -450,14 +450,14 @@ export const Iterator = {
   ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
     // Implemented as flatMap where f returns Option<T>.
     // pred → asOption → branch to Option<T> → flatMap normalizes via IntoIterator.
-    return Iterator.flatMap(
+    return Iterator.flatMap<TElement, TElement>(
       bindInput((element) =>
         element.then(predicate).asOption().branch({
           Some: element.some(),
           None: Option.none(),
         })
       ),
-    ) as TypedAction<IteratorT<TElement>, IteratorT<TElement>>;
+    );
   },
 } as const;
 ```
