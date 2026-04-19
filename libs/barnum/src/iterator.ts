@@ -58,24 +58,18 @@ export const Iterator = {
 
   /** Wrap an Option as Iterator. `Option<T> → Iterator<T>` */
   fromOption<TElement>(): TypedAction<OptionT<TElement>, IteratorT<TElement>> {
-    return chain(
-      toAction(branch({
-        Some: chain(toAction(wrapInArray<TElement>()), toAction(Iterator.fromArray<TElement>())),
-        None: chain(toAction(constant([] as TElement[])), toAction(Iterator.fromArray<TElement>())),
-      })),
-      toAction(identity()),
-    ) as TypedAction<OptionT<TElement>, IteratorT<TElement>>;
+    return branch({
+      Some: chain(wrapInArray<TElement>(), Iterator.fromArray<TElement>()),
+      None: chain(constant<TElement[]>([]), Iterator.fromArray<TElement>()),
+    }) as TypedAction<OptionT<TElement>, IteratorT<TElement>>;
   },
 
   /** Wrap a Result as Iterator (Ok kept, Err dropped). `Result<T, E> → Iterator<T>` */
   fromResult<TElement, TError>(): TypedAction<ResultT<TElement, TError>, IteratorT<TElement>> {
-    return chain(
-      toAction(branch({
-        Ok: chain(toAction(wrapInArray<TElement>()), toAction(Iterator.fromArray<TElement>())),
-        Err: chain(toAction(constant([] as TElement[])), toAction(Iterator.fromArray<TElement>())),
-      })),
-      toAction(identity()),
-    ) as TypedAction<ResultT<TElement, TError>, IteratorT<TElement>>;
+    return branch({
+      Ok: chain(wrapInArray<TElement>(), Iterator.fromArray<TElement>()),
+      Err: chain(constant<TElement[]>([]), Iterator.fromArray<TElement>()),
+    }) as TypedAction<ResultT<TElement, TError>, IteratorT<TElement>>;
   },
 
   /** Unwrap Iterator to array. `Iterator<T> → T[]` */
@@ -87,10 +81,7 @@ export const Iterator = {
   map<TIn, TOut>(action: Pipeable<TIn, TOut>): TypedAction<IteratorT<TIn>, IteratorT<TOut>> {
     return chain(
       toAction(getField("value")),
-      chain(
-        toAction(forEach(action)),
-        toAction(Iterator.fromArray<TOut>()),
-      ),
+      chain(toAction(forEach(action)), Iterator.fromArray<TOut>()),
     ) as TypedAction<IteratorT<TIn>, IteratorT<TOut>>;
   },
 
@@ -101,11 +92,8 @@ export const Iterator = {
     return chain(
       toAction(getField("value")),
       chain(
-        toAction(forEach(chain(toAction(action), toAction(intoIteratorNormalize)))),
-        chain(
-          toAction(flatten()),
-          toAction(Iterator.fromArray<TOut>()),
-        ),
+        toAction(forEach(chain(action, intoIteratorNormalize))),
+        chain(toAction(flatten()), Iterator.fromArray<TOut>()),
       ),
     ) as TypedAction<IteratorT<TIn>, IteratorT<TOut>>;
   },
@@ -118,7 +106,7 @@ export const Iterator = {
       bindInput<TElement>((element) =>
         element.then(predicate).asOption().branch({
           Some: element.some(),
-          None: chain(toAction(drop), toAction(Option.none<TElement>())),
+          None: chain(drop, Option.none<TElement>()),
         }),
       ),
     );

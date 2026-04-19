@@ -576,7 +576,7 @@ function thenMethod<TIn, TOut, TNext>(
   this: TypedAction<TIn, TOut>,
   next: Pipeable<TOut, TNext>,
 ): TypedAction<TIn, TNext> {
-  return chain(this, next) as TypedAction<TIn, TNext>;
+  return chain(this, next);
 }
 
 function forEachMethod(this: TypedAction, action: Action): TypedAction {
