@@ -22,7 +22,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  typescript:
+  typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -37,9 +37,6 @@ jobs:
       - name: TypeScript type-check (barnum)
         run: pnpm exec tsc --noEmit
         working-directory: libs/barnum
-      - name: Run tests (barnum)
-        run: pnpm exec vitest run
-        working-directory: libs/barnum
       - name: Build barnum (emit .d.ts for demo type-checking)
         run: pnpm run build
         working-directory: libs/barnum
@@ -52,8 +49,33 @@ jobs:
             fi
           done
 
+  vitest:
+    needs: build-linux-x64
+    if: needs.build-linux-x64.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: barnum-linux-x64
+          path: target/debug
+      - name: Make binary executable
+        run: chmod +x target/debug/barnum
+      - name: Install dependencies (barnum)
+        run: pnpm install --frozen-lockfile
+        working-directory: libs/barnum
+      - name: Run tests (barnum)
+        run: pnpm exec vitest run
+        working-directory: libs/barnum
+
   demo-tests:
-    needs: typescript
+    needs: [typecheck, build-linux-x64]
+    if: needs.build-linux-x64.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -62,13 +84,15 @@ jobs:
         with:
           node-version: '22'
       - uses: pnpm/action-setup@v4
-      - uses: dtolnay/rust-toolchain@1.93.1
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: barnum-linux-x64
+          path: target/debug
+      - name: Make binary executable
+        run: chmod +x target/debug/barnum
       - name: Install library dependencies
         run: pnpm install --frozen-lockfile
         working-directory: libs/barnum
-      - name: Build barnum binary
-        run: cargo build --locked -p barnum_cli
       - name: Run simple-workflow demo
         run: pnpm install --frozen-lockfile && pnpm run demo
         working-directory: demos/simple-workflow
@@ -232,7 +256,7 @@ jobs:
         run: cargo test --locked --workspace -- --test-threads=1
 
   build-macos-x64:
-    needs: [gate-rust, typescript, test]
+    needs: [gate-rust, typecheck, vitest, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: macos-latest
     timeout-minutes: 5
@@ -271,7 +295,7 @@ jobs:
           path: target/x86_64-apple-darwin/release/barnum
 
   build-macos-arm64:
-    needs: [gate-rust, typescript, test]
+    needs: [gate-rust, typecheck, vitest, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: macos-latest
     timeout-minutes: 5
@@ -310,7 +334,7 @@ jobs:
           path: target/aarch64-apple-darwin/release/barnum
 
   build-linux-x64:
-    needs: [gate-rust, typescript]
+    needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -352,7 +376,7 @@ jobs:
           path: target/x86_64-unknown-linux-musl/release/barnum
 
   build-linux-arm64:
-    needs: [gate-rust, typescript, test]
+    needs: [gate-rust, typecheck, vitest, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -394,7 +418,7 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/barnum
 
   build-windows-x64:
-    needs: [gate-rust, typescript, test]
+    needs: [gate-rust, typecheck, vitest, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: windows-latest
     timeout-minutes: 5
@@ -493,7 +517,7 @@ jobs:
 
   publish:
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [gate-rust, typescript, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
+    needs: [gate-rust, typecheck, vitest, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
