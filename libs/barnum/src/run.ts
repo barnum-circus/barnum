@@ -114,8 +114,11 @@ function resolveWorker(): string {
   return path.resolve(__dirname, "../src/worker.ts");
 }
 
-/** Build the barnum binary if using the local dev path. */
-function buildBinary(): void {
+/** Build the barnum binary if using the local dev path. Skips if binary already exists. */
+function buildBinaryIfNeeded(binaryPath: string): void {
+  if (existsSync(binaryPath)) {
+    return;
+  }
   const repoRoot = path.resolve(__dirname, "../../..");
   // eslint-disable-next-line no-console
   console.error("[barnum] building CLI binary (cargo build -p barnum_cli)...");
@@ -142,7 +145,7 @@ export function runPipeline<TPipeline extends Action>(
 function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
   const binaryResolution = resolveBinary();
   if (binaryResolution.kind === "Local") {
-    buildBinary();
+    buildBinaryIfNeeded(binaryResolution.path);
   }
   const executor = resolveExecutor();
   const worker = resolveWorker();
