@@ -317,56 +317,32 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 
 ### What needs new builtins vs what composes from existing primitives
 
-**One new builtin needed: `AsOption` (bool → Option<void>).** Everything else composes from existing primitives.
+**No new builtins needed for Phase 1 except `AsOption` (bool → Option<void>), which is a prerequisite for `filter` but defined separately.**
 
-| Method | Needs builtin? | Implementation |
-|--------|---------------|----------------|
-| `Iterator.fromArray()` | No | `tag("Iterator", "Iterator")` — reuses existing `tag` |
-| `Iterator.collect()` | No | `getField("value")` — reuses existing `getField` |
-| `Iterator.map(f)` | No | `getField("value")` → `forEach(f)` → `tag("Iterator", "Iterator")` |
-| `Iterator.flatMap(f)` | No | `getField("value")` → `forEach(chain(f, intoIteratorNormalize))` → `flatten()` → `tag("Iterator", "Iterator")` |
-| `Iterator.filter(pred)` | **Yes** (`AsOption`) | `getField("value")` → `forEach(boolFilterToOption(pred))` → `CollectSome` → `tag("Iterator", "Iterator")` |
-| `.iterate()` postfix | No | `matchPrefix` → branch per family → wrap |
+| Method | Implementation |
+|--------|----------------|
+| `Iterator.fromArray()` | `tag("Iterator", "Iterator")` — reuses existing `tag` |
+| `Iterator.collect()` | `getField("value")` — reuses existing `getField` |
+| `Iterator.map(f)` | `getField("value")` → `forEach(f)` → `tag("Iterator", "Iterator")` |
+| `Iterator.flatMap(f)` | `getField("value")` → `forEach(chain(f, intoIteratorNormalize))` → `flatten()` → `tag("Iterator", "Iterator")` |
+| `Iterator.filter(pred)` | Implemented as `flatMap` — converts bool to `Option<T>` via `AsOption`, flatMap normalizes Option via IntoIterator. |
+| `.iterate()` postfix | `matchPrefix` → branch per family → wrap |
 
-`wrapInArray()` wraps a single value in a one-element array: `T → T[]`. Implemented as `all(identity())` — may warrant a dedicated builtin later if it's a hot path.
+**`wrapInArray()`**: `T → T[]`. Implemented as `all(identity())` — may warrant a dedicated builtin later.
+
+**`intoIteratorNormalize`**: `matchPrefix` that converts any IntoIterator return to a plain array. Used inside `.flatMap()`.
 
 ```ts
-// T → [T]. Uses all() with a single identity action.
 function wrapInArray<T>(): TypedAction<T, T[]> {
   return all(identity()) as TypedAction<T, T[]>;
 }
-```
 
-**`intoIteratorNormalize`** is a `matchPrefix` that converts any IntoIterator return to a plain array:
-
-```ts
 const intoIteratorNormalize = matchPrefix({
-  Iterator: branch({ Iterator: identity() }),     // auto-unwrap gives T[]
+  Iterator: branch({ Iterator: identity() }),     // unwrap → T[]
   Option: branch({ Some: wrapInArray(), None: constant([]) }),
   Result: branch({ Ok: wrapInArray(), Err: constant([]) }),
   Array: identity(),                              // already T[]
 });
-```
-
-**`filter` uses `AsOption` + existing `CollectSome`.** `AsOption` is a new builtin: `bool → Option<void>`. `true` → `Some(void)`, `false` → `None`. This enables boolean branching via `.asOption().branch({ Some: ..., None: ... })`.
-
-Filter implementation:
-1. For each element, run `pred` to get a bool
-2. `.asOption()` converts bool → `Option<void>`
-3. `.branch({ Some: original.some(), None: Option.none() })` → `Option<T>`
-4. `CollectSome` (existing builtin) keeps the Some values → `T[]`
-
-```ts
-// Conceptual filter(pred) inner transform using bindInput:
-forEach(
-  bindInput((element) =>
-    element.then(pred).asOption().branch({
-      Some: element.some(),
-      None: Option.none(),
-    })
-  )
-)
-// → Option<T>[], then CollectSome → T[]
 ```
 
 ---
@@ -387,59 +363,7 @@ Same fallback for the TypeScript runtime.
 
 ---
 
-#### Task 2: Add `AsOption` builtin (Rust + TypeScript)
-
-**Goal:** New builtin: `bool → Option<void>`. `true` → `{ kind: "Option.Some", value: null }`, `false` → `{ kind: "Option.None", value: null }`. Enables boolean branching via `.asOption().branch({ Some: ..., None: ... })`.
-
-##### 2.1: Add variant to `BuiltinKind`
-
-**File:** `crates/barnum_ast/src/lib.rs`
-
-```rust
-/// Convert a boolean to Option<void>. true → Some(null), false → None(null).
-AsOption,
-```
-
-##### 2.2: Add execution match arm
-
-**File:** `crates/barnum_builtins/src/lib.rs`
-
-```rust
-BuiltinKind::AsOption => {
-    let Value::Bool(b) = input else {
-        return Err(BuiltinError::TypeMismatch {
-            builtin: "AsOption",
-            expected: "bool",
-            actual: input.clone(),
-        });
-    };
-    if *b {
-        Ok(Value::Object(BTreeMap::from([
-            ("kind".into(), Value::String("Option.Some".into())),
-            ("value".into(), Value::Null),
-        ])))
-    } else {
-        Ok(Value::Object(BTreeMap::from([
-            ("kind".into(), Value::String("Option.None".into())),
-            ("value".into(), Value::Null),
-        ])))
-    }
-}
-```
-
-##### 2.3: Add TypeScript BuiltinKind variant, standalone function, postfix method
-
-```ts
-// Standalone
-function asOption(): TypedAction<boolean, Option<void>> { ... }
-
-// Postfix on boolean-producing actions
-asOption<TIn>(this: TypedAction<TIn, boolean>): TypedAction<TIn, Option<void>>;
-```
-
----
-
-#### Task 3: Add `Iterator` types and namespace (TypeScript)
+#### Task 2: Add `Iterator` types and namespace (TypeScript)
 
 **Goal:** Define types and the `Iterator` namespace with standalone combinators.
 
@@ -486,26 +410,14 @@ export const Iterator = {
   filter<TElement>(
     predicate: Pipeable<TElement, boolean>,
   ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
-    // forEach: for each element, run pred → asOption → branch to Option<T>
-    // then CollectSome to keep Some values
-    return chain(
-      toAction(getField("value")),
-      chain(
-        toAction(forEach(
-          bindInput((element) =>
-            chain(toAction(element), chain(
-              toAction(predicate),
-              toAction(chain(
-                toAction(asOption()),
-                toAction(branch({
-                  Some: chain(toAction(element), toAction(Option.some())),
-                  None: Option.none(),
-                })),
-              )),
-            )),
-          ),
-        )),
-        chain(toAction(collectSome()), toAction(tag("Iterator", "Iterator"))),
+    // Implemented as flatMap where f returns Option<T>.
+    // pred → asOption → branch to Option<T> → flatMap normalizes via IntoIterator.
+    return Iterator.flatMap(
+      bindInput((element) =>
+        element.then(predicate).asOption().branch({
+          Some: element.some(),
+          None: Option.none(),
+        })
       ),
     ) as TypedAction<IteratorT<TElement>, IteratorT<TElement>>;
   },
@@ -527,7 +439,7 @@ const intoIteratorNormalize: Action = matchPrefix({
 
 ---
 
-#### Task 4: Add `.iterate()` postfix method (TypeScript)
+#### Task 3: Add `.iterate()` postfix method (TypeScript)
 
 **Goal:** Postfix `.iterate()` on Option, Result, and arrays.
 
@@ -569,7 +481,7 @@ function iterateMethod(this: TypedAction): TypedAction {
 
 ---
 
-#### Task 5: Add Iterator postfix methods (TypeScript)
+#### Task 4: Add Iterator postfix methods (TypeScript)
 
 **Goal:** `.map()`, `.flatMap()`, `.filter()`, `.collect()` as postfix methods when output is `Iterator<T>`.
 
@@ -636,30 +548,9 @@ function flatMapMethod(this: TypedAction, action: Pipeable): TypedAction {
   })));
 }
 
-// filterMethod — Iterator-only:
-// pred produces bool per element → asOption → branch to Option<T> → CollectSome
+// filterMethod — implemented as flatMap with bool → Option<T> conversion:
 function filterMethod(this: TypedAction, predicate: Pipeable): TypedAction {
-  return chain(toAction(this), toAction(matchPrefix({
-    Iterator: branch({
-      Iterator: chain(
-        toAction(forEach(
-          bindInput((element) =>
-            chain(toAction(element), chain(
-              toAction(predicate),
-              toAction(chain(
-                toAction(asOption()),
-                toAction(branch({
-                  Some: chain(toAction(element), toAction(Option.some())),
-                  None: Option.none(),
-                })),
-              )),
-            )),
-          ),
-        )),
-        chain(toAction(collectSome()), toAction(tag("Iterator", "Iterator"))),
-      ),
-    }),
-  })));
+  return chain(toAction(this), toAction(Iterator.filter(predicate)));
 }
 
 // collectMethod — add Iterator case:
@@ -668,7 +559,7 @@ Iterator: branch({ Iterator: identity() }),
 
 ---
 
-#### Task 6: Tests
+#### Task 5: Tests
 
 **File:** `libs/barnum/tests/iterator.test.ts` (new file)
 
