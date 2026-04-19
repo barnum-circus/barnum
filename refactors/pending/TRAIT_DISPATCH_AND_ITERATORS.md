@@ -317,7 +317,7 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 
 ### What needs new builtins vs what composes from existing primitives
 
-**No new builtins needed for Phase 1 except `AsOption` (bool → Option<void>), which is a prerequisite for `filter` but defined separately.**
+**One new builtin needed: `AsOption` (bool → Option<void>).** Prerequisite for `filter`. See Task 2.
 
 | Method | Implementation |
 |--------|----------------|
@@ -326,6 +326,7 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 | `Iterator.map(f)` | `getField("value")` → `forEach(f)` → `tag("Iterator", "Iterator")` |
 | `Iterator.flatMap(f)` | `getField("value")` → `forEach(chain(f, intoIteratorNormalize))` → `flatten()` → `tag("Iterator", "Iterator")` |
 | `Iterator.filter(pred)` | Implemented as `flatMap` — converts bool to `Option<T>` via `AsOption`, flatMap normalizes Option via IntoIterator. |
+| `AsOption` | **New builtin.** `bool → Option<void>`. `true` → Some, `false` → None. |
 | `.iterate()` postfix | `matchPrefix` → branch per family → wrap |
 
 **`wrapInArray()`**: `T → T[]`. Implemented as `all(identity())` — may warrant a dedicated builtin later.
@@ -363,18 +364,44 @@ Same fallback for the TypeScript runtime.
 
 ---
 
-#### Task 2: Add `Iterator` types and namespace (TypeScript)
+#### Task 2: `AsOption` builtin (bool → Option<void>)
+
+**Goal:** New builtin that converts `true` → `Some(void)`, `false` → `None`. Prerequisite for `Iterator.filter()`.
+
+**Rust:** `crates/barnum_builtins/src/lib.rs`
+
+Add `AsOption` variant to `BuiltinKind`. Handler: if input is `true`, produce `{ kind: "Option.Some", value: null }`. If `false`, produce `{ kind: "Option.None", value: null }`.
+
+**TypeScript:** `libs/barnum/src/builtins/tagged-union.ts`
+
+Same logic for the TypeScript runtime.
+
+**AST:** `libs/barnum/src/ast.ts`
+
+Add `| { kind: "AsOption" }` to `BuiltinKind`. Add `asOption()` standalone combinator and `.asOption()` postfix on `TypedAction<TIn, boolean>`.
+
+```ts
+// Standalone:
+export function asOption(): TypedAction<boolean, Option<void>> { ... }
+
+// Postfix:
+asOption<TIn>(this: TypedAction<TIn, boolean>): TypedAction<TIn, Option<void>>;
+```
+
+---
+
+#### Task 3: Add `Iterator` types and namespace (TypeScript)
 
 **Goal:** Define types and the `Iterator` namespace with standalone combinators.
 
-##### 2.1: Add types to `ast.ts`
+##### 3.1: Add types to `ast.ts`
 
 ```ts
 export type IteratorDef<TElement> = { Iterator: TElement[] };
 export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
 ```
 
-##### 2.2: Create `iterator.ts`
+##### 3.2: Create `iterator.ts`
 
 The `Iterator` namespace with standalone combinators: `fromArray`, `fromOption`, `fromResult`, `collect`, `map`, `flatMap`, `filter`.
 
@@ -435,15 +462,15 @@ const intoIteratorNormalize: Action = matchPrefix({
 });
 ```
 
-##### 2.3: Export from `index.ts`
+##### 3.3: Export from `index.ts`
 
 ---
 
-#### Task 3: Add `.iterate()` postfix method (TypeScript)
+#### Task 4: Add `.iterate()` postfix method (TypeScript)
 
 **Goal:** Postfix `.iterate()` on Option, Result, and arrays.
 
-##### 3.1: Add type signatures to `TypedAction`
+##### 4.1: Add type signatures to `TypedAction`
 
 Three overloads:
 
@@ -459,7 +486,7 @@ iterate<TIn, TElement>(
 ): TypedAction<TIn, Iterator<TElement>>;
 ```
 
-##### 3.2: Add method implementation
+##### 4.2: Add method implementation
 
 ```ts
 function iterateMethod(this: TypedAction): TypedAction {
@@ -477,15 +504,15 @@ function iterateMethod(this: TypedAction): TypedAction {
 }
 ```
 
-##### 3.3: Register in `typedAction()`
+##### 4.3: Register in `typedAction()`
 
 ---
 
-#### Task 4: Add Iterator postfix methods (TypeScript)
+#### Task 5: Add Iterator postfix methods (TypeScript)
 
 **Goal:** `.map()`, `.flatMap()`, `.filter()`, `.collect()` as postfix methods when output is `Iterator<T>`.
 
-##### 4.1: Add type signatures
+##### 5.1: Add type signatures
 
 Add Iterator overload to existing `.map()`, and add new `.flatMap()` method (Iterator-only):
 
@@ -526,7 +553,7 @@ collect<TIn, TElement>(
 ): TypedAction<TIn, TElement[]>;
 ```
 
-##### 4.2: Extend method implementations
+##### 5.2: Extend method implementations
 
 Add `Iterator` case to `matchPrefix` in `mapMethod`, `collectMethod`. Add new `flatMapMethod` and `filterMethod` for Iterator:
 
@@ -559,9 +586,22 @@ Iterator: branch({ Iterator: identity() }),
 
 ---
 
-#### Task 5: Tests
+#### Task 6: Tests
 
-**File:** `libs/barnum/tests/iterator.test.ts` (new file)
+**AsOption tests** — `libs/barnum/tests/as-option.test.ts` (new file):
+
+**Type tests:**
+- `asOption()` standalone — input `boolean`, output `Option<void>`
+- `.asOption()` postfix — input `TypedAction<TIn, boolean>`, output `TypedAction<TIn, Option<void>>`
+
+**Execution tests:**
+- `true` → `{ kind: "Option.Some", value: null }`
+- `false` → `{ kind: "Option.None", value: null }`
+- Postfix chain: `constant(true).asOption()` → Some
+- Postfix chain: `constant(false).asOption()` → None
+- Combined with branch: `constant(true).asOption().branch({ Some: ..., None: ... })`
+
+**Iterator tests** — `libs/barnum/tests/iterator.test.ts` (new file):
 
 **Type tests:**
 - `Iterator.fromArray()` — input `T[]`, output `Iterator<T>`
