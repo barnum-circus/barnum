@@ -121,13 +121,7 @@ describe("Result types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, Result<string, boolean>>>();
   });
 
-  it("Result.and replaces Ok type, preserves Err type", () => {
-    const action = R.and<string, number, boolean>(
-      constant({ kind: "Result.Ok" as const, value: 42 }) as TypedAction<void, Result<number, boolean>>,
-    );
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
-  });
+
 
   it("Result.unwrapOr extracts TValue from Result", () => {
     const action = R.unwrapOr<string, number>(
@@ -305,16 +299,6 @@ describe("Result AST structure", () => {
     expect(branchNode.cases.Err.rest).toBe(fallback);
   });
 
-  it("Result.and(other) desugars correctly", () => {
-    const other = pipe(constant("replacement"), tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result"));
-    const result = R.and(other);
-    const branchNode = result as any;
-    expect(branchNode.kind).toBe("Branch");
-    const okBody = branchNode.cases.Ok.rest;
-    expect(okBody.kind).toBe("Chain");
-    expect(okBody.first.handler.builtin.kind).toBe("Drop");
-    expect(okBody.rest).toBe(other);
-  });
 
   it("Result.unwrapOr(default) desugars correctly", () => {
     const fallback = constant("default");
@@ -470,30 +454,6 @@ describe("Result execution", () => {
     expect(result).toEqual({ kind: "Result.Ok", value: 99 });
   });
 
-  // -- and --
-  it("Result.and on Ok replaces with other", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant(42), R.ok<number, string>()),
-        R.and<number, string, string>(
-          pipe(constant("replaced"), tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result")),
-        ),
-      ),
-    );
-    expect(result).toEqual({ kind: "Result.Ok", value: "replaced" });
-  });
-
-  it("Result.and on Err stays Err", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant("fail"), R.err<number, string>()),
-        R.and<number, string, string>(
-          pipe(constant("replaced"), tag<"Result", ResultDef<string, string>, "Ok">("Ok", "Result")),
-        ),
-      ),
-    );
-    expect(result).toEqual({ kind: "Result.Err", value: "fail" });
-  });
 
   // -- unwrap --
   it("Result.unwrap on Ok extracts value", async () => {

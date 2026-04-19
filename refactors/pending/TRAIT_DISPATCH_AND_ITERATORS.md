@@ -47,7 +47,6 @@ result.iterate().map(transform).first()
 - `.unwrap()` — exit Result (panic on Err)
 - `.mapErr(f)` — transform error variant
 - `.or(fallback)` — recover from Err
-- `.and(other)` — chain on Ok
 - `.isOk()` / `.isErr()` — query
 - `.toOption()` / `.toOptionErr()` — convert
 - `.transpose()` — `Result<Option<T>,E> → Option<Result<T,E>>`

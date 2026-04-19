@@ -68,15 +68,6 @@ export const Result = {
     }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>;
   },
 
-  /** Replace Ok value with another Result. If Ok, discard value and return other. */
-  and<TValue, TOut, TError>(
-    other: Pipeable<void, ResultT<TOut, TError>>,
-  ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
-    return branch({
-      Ok: chain(drop, other),
-      Err: Result.err(),
-    }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>;
-  },
 
   /**
    * Extract the Ok value or panic. `Result<TValue, TError> → TValue`

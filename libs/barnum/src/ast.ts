@@ -327,11 +327,6 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     fallback: Pipeable<TError, Result<TValue, TErrorOut>>,
   ): TypedAction<TIn, Result<TValue, TErrorOut>>;
 
-  /** Replace Ok value with another Result. `Result<T,E> → Result<U,E>` */
-  and<TIn, TValue, TOut, TError>(
-    this: TypedAction<TIn, Result<TValue, TError>>,
-    other: Pipeable<void, Result<TOut, TError>>,
-  ): TypedAction<TIn, Result<TOut, TError>>;
 
   /** Convert Ok to Some, Err to None. `Result<T,E> → Option<T>` */
   toOption<TIn, TValue, TError>(
@@ -646,12 +641,6 @@ function orMethod(this: TypedAction, fallback: Action): TypedAction {
   })));
 }
 
-function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: chain(toAction(drop), toAction(other)),
-    Err: Result.err(),
-  })));
-}
 
 function toOptionMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(branch({
@@ -754,7 +743,7 @@ export function typedAction<In = unknown, Out = unknown>(
       isNone: { value: isNoneMethod, configurable: true },
       collect: { value: collectMethod, configurable: true },
       or: { value: orMethod, configurable: true },
-      and: { value: andPostfixMethod, configurable: true },
+
       toOption: { value: toOptionMethod, configurable: true },
       toOptionErr: { value: toOptionErrMethod, configurable: true },
       isOk: { value: isOkMethod, configurable: true },
