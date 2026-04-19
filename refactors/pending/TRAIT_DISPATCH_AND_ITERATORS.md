@@ -48,7 +48,6 @@ result.iterate().map(transform).first()
 - `.mapErr(f)` — transform error variant
 - `.or(fallback)` — recover from Err
 - `.isOk()` / `.isErr()` — query
-- `.toOption()` / `.toOptionErr()` — convert
 - `.transpose()` — `Result<Option<T>,E> → Option<Result<T,E>>`
 - `.iterate()` — enter Iterator
 
@@ -79,7 +78,7 @@ type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
 ```
 
 This means:
-- `Iterator.wrap()` wraps the array: `[1, 2, 3]` → `{ kind: "Iterator.Iterator", value: [1, 2, 3] }`
+- `Iterator.fromArray()` wraps the array: `[1, 2, 3]` → `{ kind: "Iterator.Iterator", value: [1, 2, 3] }`
 - Iterator methods operate on `.value` (the inner array), then re-wrap
 - `.collect()` unwraps: `{ kind: "Iterator.Iterator", value: [1, 2, 3] }` → `[1, 2, 3]`
 
@@ -95,13 +94,13 @@ The wrap/unwrap overhead is real but small — it's a Rust builtin (WrapInField/
 
 ### IntoIterator — conversion to Iterator
 
-| Self type | Conversion | Runtime behavior |
-|-----------|------------|------------------|
-| `Option<T>` | `.iterate()` postfix | Branch: Some → `[value]`, None → `[]`, then wrap |
-| `Result<T, E>` | `.iterate()` postfix | Branch: Ok → `[value]`, Err → `[]`, then wrap |
-| `T[]` | `.iterate()` postfix | Wrap in `{ kind: "Iterator.Iterator", value: array }` |
+| Self type | Postfix | Standalone | Runtime behavior |
+|-----------|---------|------------|------------------|
+| `Option<T>` | `.iterate()` | `Iterator.fromOption()` | Branch: Some → `[value]`, None → `[]`, then wrap |
+| `Result<T, E>` | `.iterate()` | `Iterator.fromResult()` | Branch: Ok → `[value]`, Err → `[]`, then wrap |
+| `T[]` | `.iterate()` | `Iterator.fromArray()` | Wrap in `{ kind: "Iterator.Iterator", value: array }` |
 
-`.iterate()` is a postfix method that uses `matchPrefix` for all three families. For arrays, `ExtractPrefix` produces `{ kind: "Array", value: array }` as a fallback when the input has no `kind` field (see Task 1.6).
+`.iterate()` is a postfix method that uses `matchPrefix` for all three families. The standalone constructors (`Iterator.fromArray()`, `Iterator.fromOption()`, `Iterator.fromResult()`) are also available when you need to construct an Iterator without a preceding chain. For arrays, `ExtractPrefix` produces `{ kind: "Array", value: array }` as a fallback when the input has no `kind` field (see Task 1.6).
 
 ### IntoIterator for `.flatMap()` return types
 
@@ -138,7 +137,7 @@ flatMap<TIn, T, U>(this: TypedAction<TIn, Iterator<T>>, action: Pipeable<T, U[]>
 
 ## Iterator methods
 
-All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap (for methods that stay in Iterator) or exit (for methods that produce Option, Result, or plain values). The pattern is: `getField("value")` → array operation → `Iterator.wrap()`.
+All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap (for methods that stay in Iterator) or exit (for methods that produce Option, Result, or plain values). The pattern is: `getField("value")` → array operation → `Iterator.fromArray()`.
 
 ### Phase 1 — implement now (used in demos)
 
@@ -341,7 +340,7 @@ forEach(bindInput<number>((prNumber) => prNumber.then(checkPR).branch({
 Option.collect<number>(),
 
 // AFTER:
-Iterator.wrap<number>()
+Iterator.fromArray<number>()
   .filter(
     bindInput<number>((prNumber) =>
       prNumber.then(checkPR).branch({
@@ -361,7 +360,7 @@ Iterator.wrap<number>()
 HasErrors: forEach(fix).drop().then(recur),
 
 // AFTER:
-HasErrors: Iterator.wrap<TypeError>().then(Iterator.map(fix)).drop().then(recur),
+HasErrors: Iterator.fromArray<TypeError>().then(Iterator.map(fix)).drop().then(recur),
 ```
 
 ---
@@ -376,7 +375,7 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 
 | Method | Needs builtin? | Implementation |
 |--------|---------------|----------------|
-| `Iterator.wrap()` | No | `tag("Iterator", "Iterator")` — reuses existing `tag` |
+| `Iterator.fromArray()` | No | `tag("Iterator", "Iterator")` — reuses existing `tag` |
 | `Iterator.collect()` | No | `getField("value")` — reuses existing `getField` |
 | `Iterator.map(f)` | No | `getField("value")` → `forEach(f)` → `tag("Iterator", "Iterator")` |
 | `Iterator.flatMap(f)` | No | `getField("value")` → `forEach(chain(f, intoIteratorNormalize))` → `flatten()` → `tag("Iterator", "Iterator")` |
@@ -480,11 +479,11 @@ export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
 
 ##### 3.2: Create `iterator.ts`
 
-The `Iterator` namespace with standalone combinators: `wrap`, `collect`, `map`, `flatMap`, `filter`.
+The `Iterator` namespace with standalone combinators: `fromArray`, `fromOption`, `fromResult`, `collect`, `map`, `flatMap`, `filter`.
 
 ```ts
 export const Iterator = {
-  wrap<TElement>(): TypedAction<TElement[], IteratorT<TElement>> {
+  fromArray<TElement>(): TypedAction<TElement[], IteratorT<TElement>> {
     return tag<"Iterator", IteratorDef<TElement>, "Iterator">("Iterator", "Iterator");
   },
 
@@ -672,7 +671,7 @@ Iterator: branch({ Iterator: identity() }),
 **File:** `libs/barnum/tests/iterator.test.ts` (new file)
 
 **Type tests:**
-- `Iterator.wrap()` — input `T[]`, output `Iterator<T>`
+- `Iterator.fromArray()` — input `T[]`, output `Iterator<T>`
 - `Iterator.collect()` — input `Iterator<T>`, output `T[]`
 - `Iterator.map(f)` — input `Iterator<T>`, output `Iterator<U>`
 - `Iterator.flatMap(f)` — input `Iterator<T>`, output `Iterator<U>` for each IntoIterator return type
@@ -681,9 +680,9 @@ Iterator: branch({ Iterator: identity() }),
 - Postfix `.map(f)`, `.flatMap(f)`, `.filter(pred)`, `.collect()` on Iterator output
 
 **Execution tests:**
-- `Iterator.wrap()` wraps array
+- `Iterator.fromArray()` wraps array
 - `Iterator.collect()` unwraps
-- Round-trip: `pipe(constant([1,2,3]), Iterator.wrap(), Iterator.collect())` → `[1,2,3]`
+- Round-trip: `pipe(constant([1,2,3]), Iterator.fromArray(), Iterator.collect())` → `[1,2,3]`
 - `Iterator.map(f)` transforms each element
 - `Iterator.flatMap(f)` where f returns Iterator — flat-maps
 - `Iterator.flatMap(f)` where f returns Option — Some kept, None dropped
