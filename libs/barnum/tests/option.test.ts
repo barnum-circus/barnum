@@ -59,6 +59,28 @@ function optionNone<T>(): TypedAction<any, Option<T>> {
 // Type tests
 // ---------------------------------------------------------------------------
 
+describe("Option constructor type info", () => {
+  it("Option.some() retains element type", () => {
+    // @ts-expect-error — some is currently a value, not a function
+    const some = O.some<number>();
+    assertExact<IsExact<ExtractInput<typeof some>, number>>();
+    assertExact<IsExact<ExtractOutput<typeof some>, Option<number>>>();
+  });
+
+  it("Option.none() retains element type", () => {
+    // @ts-expect-error — none is currently a value, not a function
+    const none = O.none<string>();
+    assertExact<IsExact<ExtractOutput<typeof none>, Option<string>>>();
+  });
+
+  it("Option.some() infers type from chain context", () => {
+    // @ts-expect-error — some is currently a value, not a function
+    const result = constant(42).then(O.some());
+    // @ts-expect-error — result is any until constructors are functions
+    assertExact<IsExact<ExtractOutput<typeof result>, Option<number>>>();
+  });
+});
+
 describe("Option namespace types", () => {
   it("Option.map(action): Option<T> -> Option<U>", () => {
     const action = O.map<{ artifact: string }, { verified: boolean }>(verify);
