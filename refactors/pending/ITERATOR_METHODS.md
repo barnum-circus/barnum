@@ -17,8 +17,6 @@ All barnum Iterators are **eager** (backed by `T[]`), not lazy. This means:
 | `.flatten()` | `flatten` | `Iterator<IntoIterator<T>> → Iterator<T>` | Flattens one level of nesting. Each element is normalized via IntoIterator (same as `.flatMap`'s inner normalization). |
 | `.enumerate()` | `enumerate` | `Iterator<T> → Iterator<[number, T]>` | Pairs each element with its index. |
 | `.scan(init, f)` | `scan` | `Iterator<T> → Iterator<U>` | Stateful map. `f: (state, T) → Option<U>`. State threads through. None stops emission for that element. Needs design — state threading in AST. |
-| `.inspect(f)` | `inspect` | `Iterator<T> → Iterator<T>` | Side-effect on each element, passes through unchanged. Equivalent to `.map(tap(f))`. |
-| `.intersperse(sep)` | `intersperse` | `Iterator<T> → Iterator<T>` | Inserts separator between elements. |
 
 ---
 
@@ -55,7 +53,7 @@ All of these exit Iterator and produce `Option<T>`.
 
 Iterator's `.first()` only returns the first element (discards the rest). It's the simpler form — equivalent to Rust's `.next()`.
 
-In `babysit-prs`, the current loop uses `splitFirst` to peel off one PR at a time. With Iterator, this becomes `.iterate().map(process).collect()` — no manual peeling needed. `.splitFirst()` remains useful for recursive array processing outside of Iterator (e.g., in `loop` + `branch` patterns).
+`.splitFirst()` is essential for sequential processing patterns — `loop` + `splitFirst` + `branch` processes one element at a time serially, while `.iterate().map(f)` dispatches all elements in parallel via `forEach`. Use `splitFirst` when ordering matters (e.g., `identify-and-address-refactors` implements one refactor at a time). Use `.iterate().map()` when parallel dispatch is fine.
 
 ---
 
@@ -68,12 +66,6 @@ These exit Iterator and produce a scalar.
 | `.count()` | `count` | `Iterator<T> → number` | Number of elements. Needs `ArrayLength` builtin. |
 | `.any(pred)` | `any` | `Iterator<T> → boolean` | True if any element matches. `.find(pred).isSome()`. |
 | `.all(pred)` | `all` | `Iterator<T> → boolean` | True if all elements match. Name collision with `all()` combinator — needs resolution. |
-| `.sum()` | `sum` | `Iterator<number> → number` | Sum of elements. Needs `Sum` builtin. |
-| `.product()` | `product` | `Iterator<number> → number` | Product of elements. Needs `Product` builtin. |
-| `.min()` | `min` | `Iterator<number> → Option<number>` | Minimum element. Needs builtin. |
-| `.max()` | `max` | `Iterator<number> → Option<number>` | Maximum element. Needs builtin. |
-| `.minBy(f)` | `min_by_key` | `Iterator<T> → Option<T>` | Min by key function. Needs builtin. |
-| `.maxBy(f)` | `max_by_key` | `Iterator<T> → Option<T>` | Max by key function. Needs builtin. |
 
 ---
 
@@ -176,12 +168,8 @@ These Rust Iterator methods don't translate to barnum's eager model:
 **Low — add when a demo or user needs them:**
 - `.zip(other)` — pairing
 - `.unzip()` — unpairing
-- `.sum()` / `.product()` — numeric aggregation
-- `.min()` / `.max()` / `.minBy()` / `.maxBy()` — extrema
 - `.sortBy(f)` — sorting
 - `.scan(init, f)` — stateful transform
-- `.inspect(f)` — debugging (`.map(tap(f))` works today)
-- `.intersperse(sep)` — separator insertion
 - `.takeWhile(pred)` / `.skipWhile(pred)` — conditional slicing
 - `.stepBy(n)` — strided access
 - `.chunks(n)` / `.windows(n)` — grouping

@@ -148,49 +148,7 @@ All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → oper
 | `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | New `Filter` builtin | pred: `T → bool`. New Rust builtin. |
 | `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
 
-### Future — add when needed
-
-| Method | Rust equivalent | Signature | Implementation | Notes |
-|--------|----------------|-----------|----------------|-------|
-| `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Independent impl, not built on splitFirst | Exit Iterator, enter Option |
-| `.find(pred)` | `Iterator::find` | `Iterator<T> → Option<T>` | `filter(pred).first()` or dedicated builtin | Exits Iterator, enters Option. Not short-circuiting |
-| `.collectResult()` | `collect::<Result<Vec,E>>` | `Iterator<Result<T,E>> → Result<T[],E>` | Unwrap → fold with short-circuit on Err | Exit Iterator, enter Result |
-| `.collectOption()` | `collect::<Option<Vec>>` | `Iterator<Option<T>> → Option<T[]>` | Unwrap → fold with short-circuit on None | Exit Iterator, enter Option |
-| `.last()` | `Iterator::last` | `Iterator<T> → Option<T>` | Unwrap → splitLast → Option wrap | Exit Iterator, enter Option |
-| `.count()` | `Iterator::count` | `Iterator<T> → number` | Unwrap → Arr.length | Needs builtin |
-| `.any(pred)` | `Iterator::any` | `Iterator<T> → boolean` | `find(pred).isSome()` | Not short-circuiting |
-| `.all(pred)` | `Iterator::all` | `Iterator<T> → boolean` | Needs design | Name collision with `all()` combinator |
-
-### Needs new builtins
-
-| Method | Rust equivalent | Signature | Notes |
-|--------|----------------|-----------|-------|
-| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | `Filter` builtin. pred: `T → bool`. Phase 1. |
-| `.take(n)` | `Iterator::take` | `Iterator<T> → Iterator<T>` | New Rust builtin |
-| `.skip(n)` | `Iterator::skip` | `Iterator<T> → Iterator<T>` | New Rust builtin |
-| `.reverse()` | `Iterator::rev` | `Iterator<T> → Iterator<T>` | Always available on our eager arrays |
-| `.join(sep)` | `slice::join` | `Iterator<string> → string` | Not on Iterator trait in Rust. Include for ergonomics |
-| `.zip(other)` | `Iterator::zip` | Needs design | |
-| `.chain(other)` | `Iterator::chain` | `Iterator<T> → Iterator<T>` | No naming collision — barnum's `chain()` is internal, users see `.then()` |
-| `.nth(n)` | `Iterator::nth` | `Iterator<T> → Option<T>` | Trivial: unwrap → getIndex → Option wrap |
-
-### Family transitions
-
-| Method | Returns | Next family |
-|--------|---------|-------------|
-| `.map(f)` | `Iterator<U>` | Iterator (stay) |
-| `.flatMap(f)` | `Iterator<U>` | Iterator (stay) |
-| `.filter(pred)` | `Iterator<T>` | Iterator (stay) |
-| `.collect()` | `T[]` | none (exit) |
-| `.collectResult()` | `Result<T[],E>` | Result |
-| `.collectOption()` | `Option<T[]>` | Option |
-| `.first()` | `Option<T>` | Option |
-| `.last()` | `Option<T>` | Option |
-| `.find(pred)` | `Option<T>` | Option |
-| `.nth(n)` | `Option<T>` | Option |
-| `.count()` | `number` | none (exit) |
-| `.any(pred)` | `boolean` | none (exit) |
-| `.all(pred)` | `boolean` | none (exit) |
+Future Iterator methods are cataloged in `ITERATOR_METHODS.md`.
 
 ---
 
@@ -227,13 +185,13 @@ option.iterate()                             // Iterator<Request>
 
 ## What Iterator adds
 
-1. **Sequence operations.** `.filter()`, `.find()`, `.first()`, `.last()`, `.count()` — methods that only make sense on sequences. These don't belong on Option/Result.
+1. **Sequence operations.** Methods like `.filter()` that only make sense on sequences. These don't belong on Option/Result.
 
-2. **Typed collect.** `.collectResult()` and `.collectOption()` provide type-directed collection — the Rust `collect::<Result<Vec<T>,E>>()` pattern.
+2. **IntoIterator for `.flatMap()`.** The callback can return Option, Result, array, or Iterator — all normalized to Iterator. Mirrors Rust's `flat_map` with `impl IntoIterator`.
 
-3. **IntoIterator for `.flatMap()`.** The callback can return Option, Result, array, or Iterator — all normalized to Iterator. Mirrors Rust's `flat_map` with `impl IntoIterator`.
+3. **Uniform entry point.** `.iterate()` on Option, Result, and arrays. One method to enter the sequence world from any starting type.
 
-4. **Uniform entry point.** `.iterate()` on Option, Result, and arrays. One method to enter the sequence world from any starting type.
+Future methods (`.first()`, `.find()`, `.collectResult()`, `.fold()`, `.forEachSync()`, etc.) are cataloged in `ITERATOR_METHODS.md`.
 
 ---
 
@@ -703,27 +661,3 @@ Iterator: branch({ Iterator: identity() }),
 ### Phase 2: Demo migration (optional, incremental)
 
 Demos can adopt Iterator patterns at their own pace. No methods are removed from Option/Result, so existing code continues to work.
-
----
-
-### Phase 3: Iterator expansion (future — not part of this implementation)
-
-Methods to add when needed. All compose from existing builtins + Phase 1 Iterator infrastructure unless noted.
-
-| Method | Needs builtin? | Implementation |
-|--------|---------------|----------------|
-| `.first()` | No | `getField("value")` → `splitFirst()` → `Option.map(getIndex(0).unwrap())` |
-| `.last()` | No | `getField("value")` → `splitLast()` → `Option.map(getIndex(1).unwrap())` |
-| `.find(pred)` | No | `Iterator.filter(pred)` → `Iterator.first()` |
-| `.collectResult()` | **Yes** | New `CollectResult` builtin: fold array, short-circuit on Err |
-| `.collectOption()` | **Yes** | New `CollectOption` builtin: fold array, short-circuit on None |
-| `.count()` | **Yes** | New `ArrayLength` builtin: `getField("value")` → length |
-| `.nth(n)` | No | `getField("value")` → `getIndex(n)` (already returns `Option<T>`) |
-| `.any(pred)` | No | `Iterator.find(pred)` → `Option.isSome()` |
-| `.all(pred)` | Needs design | Name collision with `all()` combinator |
-| `.take(n)` | **Yes** | New `Take` builtin |
-| `.skip(n)` | **Yes** | New `Skip` builtin |
-| `.reverse()` | **Yes** | New `Reverse` builtin |
-| `.join(sep)` | **Yes** | New `Join` builtin |
-| `.chain(other)` | No | Unwrap both → concat (flatten) → rewrap |
-| `.zip(other)` | **Yes** | New `Zip` builtin |
