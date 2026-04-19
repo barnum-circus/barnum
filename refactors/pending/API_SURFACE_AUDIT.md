@@ -11,7 +11,6 @@ Complete inventory of everything exposed from the JS library, organized by **sel
 | Status | Meaning |
 |--------|---------|
 | **exists** | Shipped and working |
-| **remove** | Exists but should be removed |
 | **proposed** | Not yet implemented |
 | **composable** | Can be built from existing primitives (no new engine work) |
 
@@ -32,18 +31,18 @@ These are combinators — they compose actions into larger actions. They don't o
 | `pipe(a, b, ...)` | `A → ... → Z` | exists | Variadic sequential (1–11 steps) |
 | `chain(a, b)` | `A → B → C` | exists | Binary sequential |
 | `all(a, b, ...)` | `T → [A, B, ...]` | exists | Variadic concurrent fan-out (0–10 branches) |
-| `forEach(action)` | `T[] → U[]` | exists | Low-level parallel map. **Prefer `.iterate().map(action).collect()`.** |
-| `loop(body)` | `void → TBreak` | exists | `TBreak=void`, `TRecur=void` defaults |
-| `earlyReturn(body)` | `T → T \| TEarlyReturn` | exists | Scope with early exit token |
-| `tryCatch(body, handler)` | `T → TOut` | exists | Error recovery |
-| `race(...actions)` | `T → first-to-complete` | exists | |
-| `withTimeout(ms, body)` | `T → Result<TOut, void>` | exists | Race body against timer |
+| `allObject({k: action, ...})` | `T → {k: TOut, ...}` | exists | Named concurrent fan-out. `wrapInField` each key → `all` → `merge`. |
+| `loop(body)` | `TRecur → TBreak` | exists | HOAS. `TBreak=void`, `TRecur=void` defaults. `VoidToNull` applied to output. |
+| `recur(body)` | `TIn → TOut` | exists | Simple restart-based recursion. Body receives `restart` token. |
+| `earlyReturn(body)` | `TIn → TOut \| TEarlyReturn` | exists | Scope with early exit token |
+| `tryCatch(body, handler)` | `TIn → TOut` | exists | Error recovery. Type-level errors only (not JS exceptions). |
+| `race(...actions)` | `T → TOut` | exists | First branch to complete wins, losers cancelled |
+| `withTimeout(ms, body)` | `TIn → Result<TOut, void>` | exists | Race body against timer |
 | `bind(bindings, body)` | `T → TOut` | exists, postfix | Concurrent let-bindings |
 | `bindInput(body)` | `T → TOut` | exists, postfix | Capture input as VarRef |
 | `defineRecursiveFunctions(bodies)(entry)` | `any → TOut` | exists | Mutual recursion via ResumeHandle |
 | `withResource({create, action, dispose})` | `TIn → TOut` | exists | RAII pattern |
 | `sleep(ms)` | `any → void` | exists | Rust builtin. `ms` is config, input is ignored. |
-| `allObject({k: action, ...})` | `T → {k: TOut, ...}` | exists | `wrapInField` each key → `all` → `merge` |
 
 ### Proposed
 
@@ -62,13 +61,6 @@ These are combinators — they compose actions into larger actions. They don't o
 | `drop` | `any → void` | exists | Postfix `.drop()`. Discard value. |
 | `panic(msg)` | `any → never` | exists | Fatal, not caught by tryCatch |
 | `wrapInField(key)` | `T → {K: T}` | exists | Postfix `.wrapInField(key)` |
-
-### Removed
-
-| Name | Reason | Status |
-|------|--------|--------|
-| `tap(action)` | Subsumed by `bind`/`bindInput` | **done** |
-| `merge()` (public export) | Internal plumbing. Keep Rust builtin, remove JS export. | **done** |
 
 ---
 
@@ -114,13 +106,13 @@ Not yet supported. Future work — distinct type from structs.
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
 | `range(start, end)` | `any → number[]` | exists | Constant array, input ignored |
-| `forEach(action)` | `T[] → U[]` | exists, postfix | Low-level. **Prefer `.iterate().map(action).collect()`.** |
+| `forEach(action)` | `T[] → U[]` | exists, postfix | Low-level parallel map. **Prefer `.iterate().map(action).collect()`.** |
 | `getIndex(n)` | `T[] → Option<T[N]>` | exists, postfix | Returns `Option`. Compose `.unwrap()` for known-present. |
 | `flatten()` | `T[][] → T[]` | exists, postfix | One level of flattening |
 | `splitFirst()` | `T[] → Option<[T, T[]]>` | exists, postfix | Head/tail decomposition |
 | `splitLast()` | `T[] → Option<[T[], T]>` | exists, postfix | Init/last decomposition |
-| `first()` | `T[] → Option<T>` | exists | Standalone function. Composes `splitFirst` + `Option.map(getIndex(0).unwrap())`. |
-| `last()` | `T[] → Option<T>` | exists | Standalone function. Composes `splitLast` + `Option.map(getIndex(1).unwrap())`. |
+| `first()` | `T[] → Option<T>` | exists | Standalone. Composes `splitFirst` + `Option.map(getIndex(0).unwrap())`. |
+| `last()` | `T[] → Option<T>` | exists | Standalone. Composes `splitLast` + `Option.map(getIndex(1).unwrap())`. |
 | `.iterate()` | `T[] → Iterator<T>` | exists, postfix | Enter Iterator |
 
 ### Proposed
@@ -206,7 +198,7 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `Option.andThen(action)` | `Option<T> → Option<U>` | exists, postfix | Monadic bind. `action: T → Option<U>`. |
 | `Option.unwrap()` | `Option<T> → T` | exists, postfix | Panics on None |
 | `Option.unwrapOr(default)` | `Option<T> → T` | exists, postfix | `default: void → T`. `.unwrapOr()` dispatches across Option/Result. |
-| `Option.filter(pred)` | `Option<T> → Option<T>` | exists, postfix | `pred: T → Option<T>` (returns Some to keep, None to drop) |
+| `Option.filter(pred)` | `Option<T> → Option<T>` | exists, postfix | `pred: T → Option<T>`. Returns Some to keep, None to drop. `.filter()` dispatches: Option takes `T → Option<T>`, Iterator takes `T → boolean`. |
 | `Option.isSome()` | `Option<T> → boolean` | exists, postfix | |
 | `Option.isNone()` | `Option<T> → boolean` | exists, postfix | |
 | `Option.collect()` | `Option<T>[] → T[]` | exists, postfix | `CollectSome` Rust builtin. `.collect()` dispatches between `Option<T>[]` and `Iterator<T>`. |
@@ -219,7 +211,6 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 |------|-----------|--------|-------|
 | `Option.flatten()` | `Option<Option<T>> → Option<T>` | composable | `Option.andThen(identity())` |
 | `Option.okOr(err)` | `Option<T> → Result<T, E>` | composable | `err: void → E`. Branch → tag. |
-| `Option.zip` | `(Option<T>, Option<U>) → Option<[T, U]>` | composable | Low priority |
 
 ---
 
@@ -267,8 +258,11 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 |------|-----------|--------|-------|
 | `taggedUnionSchema(enumName, cases)` | Zod schema constructor | exists | Builds `z.discriminatedUnion` for `TaggedUnion` |
 | `asOption()` | `boolean → Option<void>` | exists | Standalone form of `.asOption()` postfix |
-| `first()` | `T[] → Option<T>` | exists | Standalone. See array section. |
-| `last()` | `T[] → Option<T>` | exists | Standalone. See array section. |
+| `first()` | `T[] → Option<T>` | exists | See array section |
+| `last()` | `T[] → Option<T>` | exists | See array section |
+| `runPipeline(pipeline, input?)` | `Action → Promise<TOut>` | exists | Execute a pipeline via the Rust runtime |
+| `zodToCheckedJsonSchema(schema)` | Zod schema → JSON Schema | exists | Validates and converts Zod schemas for handler definitions |
+| `config(workflow)` | `Action → Config` | exists | Wraps a pipeline for `runPipeline` |
 
 ---
 
@@ -284,17 +278,17 @@ These are composable — no dedicated flatten combinator needed.
 
 ---
 
-## Removals
+## Internal (not user-facing)
 
-| Name | Reason | Status |
-|------|--------|--------|
-| `tap` | Subsumed by `bind`/`bindInput` | **done** |
-| `__union` runtime dispatch | Replaced by `branchFamily` + `ExtractPrefix` | **done** |
-| `merge` (public export) | Internal plumbing for `tag`, `pick`, `withResource`. Not user-facing. | pending |
+These exist in the codebase but are not part of the public API. Kept for reference.
 
-### `merge` → `allObject`
-
-`merge` is internal plumbing — all uses follow `all(...) → merge()`. `allObject` is the user-facing abstraction. Internal uses of `merge` become implementation details of `allObject`, `tag`, `pick`, `withResource`.
+| Name | Notes |
+|------|-------|
+| `merge()` | Rust builtin. Merges a tuple of objects. Used internally by `pick`, `allObject`, `tag`, `withResource`. |
+| `toAction()` | Strips phantom types from Pipeable → Action. |
+| `typedAction()` | Attaches postfix methods to a plain Action. |
+| `resetEffectIdCounter()` | Testing utility. Resets gensym counters. |
+| `buildRestartBranchAction()` | Infrastructure for restart-based combinators (loop, earlyReturn, race, tryCatch). |
 
 ---
 
@@ -348,21 +342,17 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [x] `.iterate()` postfix — dispatches across Option/Result/Array via branchFamily
 - [x] `.map()` postfix dispatches Iterator (in addition to Option/Result)
 - [x] `.collect()` postfix dispatches Iterator (in addition to Option[])
-
-### Done
+- [x] `allObject` — composable from existing primitives
 - [x] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
+- [x] Remove `tap`, `__union` dispatch
 
-### Done: control flow
-- [x] `allObject` — implemented as composable from existing primitives
+### Proposed
 - [ ] `withRetries(n)` — composable: loop + tryCatch
-
-### Proposed: struct
-- [ ] `omit(...keys)`
-
-### Proposed: array
+- [ ] `omit(...keys)` — struct operation
 - [ ] `Arr.length()` — new `ArrayLength` builtin
 - [ ] `Arr.isEmpty()` — new builtin
 - [ ] `Arr.join(sep)` — new builtin
+- [ ] `Option.okOr(err)` — composable
 
 ### Proposed: Iterator Phase 2 (see ITERATOR_METHODS.md)
 - [ ] `.filterMap(f)` — composable: type-constrained flatMap
@@ -375,15 +365,8 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [ ] `.scan(init, f)` — **new `Scan` AST node** (unlocks fold/reduce/forEachSync)
 - [ ] `.fold(init, f)` / `.reduce(f)` — composable from scan
 
-### Proposed: Option
-- [ ] `Option.okOr(err)` — composable
-
-### Resolve: merge → allObject
-- [x] Implement `allObject`
-- [ ] Refactor `tag`, `pick`, `withResource` to use `allObject` internally
-
 ### Lower priority
-- [ ] Arr: length, isEmpty, join
 - [ ] Iterator: take, skip, reverse, chain, zip, sortBy, unique, partition, takeWhile, skipWhile, chunks, windows, contains/any, append/concat
-- [ ] Option: zip
+- [ ] Arr: length, isEmpty, join
+- [ ] Option: flatten, okOr
 - [ ] HashMap: first-class support
