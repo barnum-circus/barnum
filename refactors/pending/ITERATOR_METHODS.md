@@ -16,7 +16,7 @@ All barnum Iterators are **eager** (backed by `T[]`), not lazy. This means:
 | `.filterMap(f)` | `filter_map` | `Iterator<T> → Iterator<U>` | `f: T → Option<U>`. Keep Some values, drop None. Combines filter + map. |
 | `.flatten()` | `flatten` | `Iterator<IntoIterator<T>> → Iterator<T>` | Flattens one level of nesting. Each element is normalized via IntoIterator (same as `.flatMap`'s inner normalization). |
 | `.enumerate()` | `enumerate` | `Iterator<T> → Iterator<[number, T]>` | Pairs each element with its index. |
-| `.scan(init, f)` | `scan` | `Iterator<T> → Iterator<U>` | Stateful map. `f: (state, T) → Option<U>`. State threads through. None stops emission for that element. Needs design — state threading in AST. |
+| `.scan(init, f)` | `scan` | `Iterator<T> → Iterator<U>` | **Primitive.** Stateful map: `f: (acc, T) → U`, emits each intermediate accumulator. See Folding section. |
 
 ---
 
@@ -128,11 +128,12 @@ These exit Iterator into a specific type.
 
 | Method | Rust | Signature | Notes |
 |--------|------|-----------|-------|
-| `.fold(init, f)` | `fold` | `Iterator<T> → U` | Accumulate with initial value. `f: (acc, T) → U`. Needs design — how to express accumulator threading in AST. |
-| `.reduce(f)` | `reduce` | `Iterator<T> → Option<T>` | Fold without initial value. First element is initial accumulator. Returns None on empty. |
-| `.forEachSync(f)` | `for_each` | `Iterator<T> → Iterator<U>` | Sequential (non-parallel) element processing. Wrapper around reduce that ensures each item is fully processed before the next starts. `forEach` dispatches all elements in parallel — `forEachSync` is the serial alternative. |
+| `.scan(init, f)` | `scan` | `Iterator<T> → Iterator<U>` | **Primitive.** Stateful map: `f: (acc, T) → U`, emits each intermediate accumulator. Needs AST design for state threading. |
+| `.fold(init, f)` | `fold` | `Iterator<T> → U` | `.scan(init, f).last()`. Not a primitive. |
+| `.reduce(f)` | `reduce` | `Iterator<T> → Option<T>` | Fold without initial value. First element is initial accumulator. `.splitFirst()` + `.scan()` + `.last()`. |
+| `.forEachSync(f)` | `for_each` | `Iterator<T> → Iterator<U>` | Sequential (non-parallel) element processing. Scan where the accumulator is the growing output array. `forEach` dispatches in parallel — `forEachSync` is the serial alternative. |
 
-Fold/reduce need significant design work — accumulator state threading doesn't have an obvious AST representation yet. `.forEachSync` is a natural first consumer of that mechanism: it's reduce where the accumulator is the output array being built up one element at a time.
+Scan is the primitive — fold, reduce, and forEachSync all compose from it. The core design work is accumulator state threading in the AST.
 
 ---
 
@@ -175,8 +176,8 @@ These Rust Iterator methods don't translate to barnum's eager model:
 - `.find(pred)` — searching
 - `.collectResult()` — typed collect for fallible pipelines
 - `.enumerate()` — index tracking
-- `.fold(init, f)` / `.reduce(f)` — accumulation (needs AST design for state threading)
-- `.forEachSync(f)` — serial element processing (built on reduce)
+- `.scan(init, f)` — **primitive** for accumulator state threading (fold, reduce, forEachSync all derive from this)
+- `.fold(init, f)` / `.reduce(f)` / `.forEachSync(f)` — derived from scan
 
 **Medium — useful but not blocking:**
 - `.flatten()` — nested IntoIterator flattening
@@ -192,7 +193,6 @@ These Rust Iterator methods don't translate to barnum's eager model:
 - `.zip(other)` — pairing
 - `.unzip()` — unpairing
 - `.sortBy(f)` — sorting
-- `.scan(init, f)` — stateful transform
 - `.takeWhile(pred)` / `.skipWhile(pred)` — conditional slicing
 - `.stepBy(n)` — strided access
 - `.chunks(n)` / `.windows(n)` — grouping
