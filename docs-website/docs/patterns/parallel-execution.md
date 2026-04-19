@@ -1,6 +1,6 @@
 # Parallel Execution
 
-Barnum has three ways to run work concurrently: `all` for a fixed set of tasks, `forEach` for dynamic fan-out over arrays, and `forEach` + `.then()` for fan-out with a follow-up aggregation step.
+Barnum has three ways to run work concurrently: `all` for a fixed set of tasks, `Iterator.map` for dynamic fan-out over arrays, and `Iterator.flatMap` for fan-out with flattening.
 
 ## all — fixed parallel tasks
 
@@ -17,38 +17,43 @@ runPipeline(
 
 All three analyzers receive `"source/index.ts"` as input and run in parallel. The output is a tuple `[ResultA, ResultB, ResultC]`.
 
-## forEach — dynamic fan-out
+## Iterator.map — dynamic fan-out
 
-`forEach` maps an action over each element of an array, processing all elements concurrently.
+`.iterate()` wraps an array as an Iterator. `.map(action)` applies an action to each element concurrently. `.collect()` gathers results back into an array.
 
 From [`demos/simple-workflow/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/simple-workflow/run.ts):
 
 ```ts
 runPipeline(
-  listFiles.forEach(
-    implementRefactor
-      .then(typeCheckFiles)
-      .then(fixTypeErrors)
-      .then(commitChanges)
-      .then(createPullRequest),
-  ),
+  listFiles
+    .iterate()
+    .map(
+      implementRefactor
+        .then(typeCheckFiles)
+        .then(fixTypeErrors)
+        .then(commitChanges)
+        .then(createPullRequest),
+    )
+    .collect(),
 );
 ```
 
-`listFiles` returns `string[]`. Each filename flows through the full pipeline independently and concurrently.
+`listFiles` returns `string[]`. `.iterate()` enters Iterator, `.map()` fans out — each filename flows through the full pipeline independently and concurrently. `.collect()` gathers results.
 
 ## Fan-out with aggregation
 
-Chain `forEach` into a follow-up step to aggregate results after parallel work completes.
+Chain `.collect()` into a follow-up step to aggregate results after parallel work completes.
 
 From [`demos/convert-folder-to-ts/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/convert-folder-to-ts/run.ts):
 
 ```ts
 runPipeline(
   setup
-    .then(listFiles.forEach(migrate({ to: "Typescript" })).drop())
+    .then(
+      listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
+    )
     .then(typeCheckFix),
 );
 ```
 
-All files are migrated in parallel. After every migration finishes, `.drop()` clears the array and `typeCheckFix` runs once — a single type-check pass over the entire project, not per file.
+All files are migrated in parallel. After every migration finishes, `.collect()` gathers results, `.drop()` discards them, and `typeCheckFix` runs once — a single type-check pass over the entire project, not per file.

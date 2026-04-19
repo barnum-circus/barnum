@@ -10,23 +10,25 @@ From [`demos/identify-and-address-refactors/run.ts`](https://github.com/barnum-c
 runPipeline(
   constant({ folder: srcDir })
     .then(listTargetFiles)
-    .then(forEach(analyze).flatten())
-    .then(forEach(assessWorthiness).then(Option.collect()))
-    .then(forEach(
+    .iterate()
+    .flatMap(analyze)
+    .flatMap(assessWorthiness)
+    .map(
       withResource({
         create: createBranchWorktree,
         action: implementAndReview,
         dispose: deleteWorktree,
       }),
-    )),
+    )
+    .collect(),
 );
 ```
 
 ## Stages
 
 1. **List files** — find all files in the target directory.
-2. **Analyze** — for each file, identify refactoring opportunities. `flatten()` merges the per-file arrays into a single list.
-3. **Filter** — an LLM assesses whether each refactor is worth doing. `Option.collect()` filters out the `None` values.
+2. **Analyze** — `.flatMap(analyze)` calls analyze on each file (returns `Refactor[]`), and flattens into a single list.
+3. **Filter** — `.flatMap(assessWorthiness)` keeps refactors that the LLM deems worthwhile (returns `Option<Refactor>` — `Some` kept, `None` dropped).
 4. **Implement in worktrees** — each surviving refactor gets its own git worktree via `withResource`. The worktree is created before work starts and cleaned up after, regardless of success or failure.
 
 ## The implementation loop

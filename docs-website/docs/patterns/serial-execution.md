@@ -8,17 +8,20 @@ From [`demos/simple-workflow/run.ts`](https://github.com/barnum-circus/barnum/tr
 
 ```ts
 runPipeline(
-  listFiles.forEach(
-    implementRefactor
-      .then(typeCheckFiles)
-      .then(fixTypeErrors)
-      .then(commitChanges)
-      .then(createPullRequest),
-  ),
+  listFiles
+    .iterate()
+    .map(
+      implementRefactor
+        .then(typeCheckFiles)
+        .then(fixTypeErrors)
+        .then(commitChanges)
+        .then(createPullRequest),
+    )
+    .collect(),
 );
 ```
 
-Five steps in strict order: refactor → type-check → fix → commit → PR. Each handler receives the previous handler's output. `.forEach()` runs this pipeline per file in parallel, but within each file the steps are serial.
+Five steps in strict order: refactor → type-check → fix → commit → PR. Each handler receives the previous handler's output. `.iterate().map()` runs this pipeline per file in parallel, but within each file the steps are serial.
 
 ## Data transformation chain
 
@@ -39,7 +42,9 @@ From [`demos/convert-folder-to-ts/run.ts`](https://github.com/barnum-circus/barn
 ```ts
 runPipeline(
   setup
-    .then(listFiles.forEach(migrate({ to: "Typescript" })).drop())
+    .then(
+      listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
+    )
     .then(typeCheckFix),
 );
 ```

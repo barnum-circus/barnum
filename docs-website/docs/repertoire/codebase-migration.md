@@ -9,9 +9,9 @@ From [`demos/convert-folder-to-ts`](https://github.com/barnum-circus/barnum/tree
 ```ts
 runPipeline(
   setup
-    .then(listFiles
-      .forEach(migrate({ to: "Typescript" }))
-      .drop())
+    .then(
+      listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
+    )
     .then(typeCheckFix),
 );
 ```
@@ -20,13 +20,13 @@ runPipeline(
 
 1. **Setup** — determine input and output directories.
 2. **List files** — find all files to migrate.
-3. **Migrate each file** — `forEach` processes every file concurrently. Each migration agent receives a single file and the target format — it doesn't know about other files.
+3. **Migrate each file** — `.iterate().map()` processes every file concurrently. Each migration agent receives a single file and the target format — it doesn't know about other files.
 4. **Type-check/fix loop** — after all files are migrated, run the compiler and fix errors in a loop:
 
 ```ts
 export const typeCheckFix = loop((recur) =>
   typeCheck.then(classifyErrors).branch({
-    HasErrors: forEach(fix).drop().then(recur),
+    HasErrors: Iterator.fromArray<TypeError>().map(fix).drop().then(recur),
     Clean: drop,
   }),
 );

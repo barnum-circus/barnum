@@ -9,13 +9,13 @@ From [`demos/convert-folder-to-ts/handlers/type-check-fix.ts`](https://github.co
 ```ts
 export const typeCheckFix = loop((recur) =>
   typeCheck.then(classifyErrors).branch({
-    HasErrors: forEach(fix).drop().then(recur),
+    HasErrors: Iterator.fromArray<TypeError>().map(fix).drop().then(recur),
     Clean: drop,
   }),
 );
 ```
 
-`classifyErrors` returns a tagged union — either `{ kind: "HasErrors", value: string[] }` or `{ kind: "Clean", value: void }`. The `HasErrors` handler receives the `string[]` of errors directly; the `Clean` handler receives `void`.
+`classifyErrors` returns a tagged union — either `{ kind: "HasErrors", value: TypeError[] }` or `{ kind: "Clean", value: void }`. The `HasErrors` handler receives the `TypeError[]` of errors directly; the `Clean` handler receives `void`.
 
 ## Branching with Result types
 

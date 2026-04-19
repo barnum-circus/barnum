@@ -56,11 +56,11 @@ import { runPipeline } from "@barnum/barnum/pipeline";
 import { listFiles, migrateComponent } from "./handlers/steps.js";
 
 runPipeline(
-  listFiles.forEach(migrateComponent),
+  listFiles.iterate().map(migrateComponent).collect(),
 );
 ```
 
-`listFiles` returns an array of file paths. `forEach` fans out — each file flows through `migrateComponent` in parallel.
+`listFiles` returns an array of file paths. `.iterate()` enters Iterator, `.map()` fans out — each file flows through `migrateComponent` in parallel. `.collect()` gathers the results back into an array.
 
 ## Run it
 

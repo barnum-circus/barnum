@@ -9,15 +9,15 @@ From [`demos/convert-folder-to-ts/handlers/type-check-fix.ts`](https://github.co
 ```ts
 export const typeCheckFix = loop((recur) =>
   typeCheck.then(classifyErrors).branch({
-    HasErrors: forEach(fix).drop().then(recur),
+    HasErrors: Iterator.fromArray<TypeError>().map(fix).drop().then(recur),
     Clean: drop,
   }),
 );
 ```
 
 1. `typeCheck` runs the TypeScript compiler.
-2. `classifyErrors` returns `{ kind: "HasErrors", value: string[] }` or `{ kind: "Clean" }`.
-3. On `HasErrors`: fix each error in parallel, then `recur` to type-check again.
+2. `classifyErrors` returns `{ kind: "HasErrors", value: TypeError[] }` or `{ kind: "Clean" }`.
+3. On `HasErrors`: wrap errors as Iterator, fix each in parallel, then `recur` to type-check again.
 4. On `Clean`: `drop` exits the loop.
 
 ## Loop with retry
