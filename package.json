@@ -4,7 +4,8 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "turbo": "^2.9.4",
