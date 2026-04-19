@@ -143,7 +143,7 @@ All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → oper
 |--------|----------------|-----------|----------------|-------|
 | `.map(f)` | `Iterator::map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
 | `.flatMap(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(chain(f, intoIteratorNormalize))` → flatten → rewrap | `f` returns any IntoIterator type |
-| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | New `Filter` builtin | pred: `T → bool`. New Rust builtin. |
+| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | `flatMap` + `AsOption` | pred: `T → bool`. AsOption converts bool to Option, flatMap normalizes via IntoIterator. |
 | `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator |
 
 Future Iterator methods are cataloged in `ITERATOR_METHODS.md`.
@@ -194,7 +194,7 @@ Future methods are cataloged in `ITERATOR_METHODS.md`.
 
 2. ~~**Array → Iterator**~~ **Decided:** Postfix `.iterate()` works on all three families (Option, Result, arrays). `ExtractPrefix` is extended to produce `{ kind: "Array", value: input }` when the input has no `kind` field. This lets `matchPrefix` dispatch arrays to an `Array` case alongside Option/Result.
 
-3. ~~**`filter` predicate type**~~ **Decided:** `T → bool`. New `Filter` Rust builtin. Consistent with Rust's `Iterator::filter`.
+3. ~~**`filter` predicate type**~~ **Decided:** `T → bool`. Implemented as `flatMap` + `AsOption` — no new builtin needed for filter itself. Consistent with Rust's `Iterator::filter`.
 
 4. ~~**Short-circuit semantics**~~ **Not an issue now:** All Phase 1 methods (map, flatMap, filter, collect) are inherently non-short-circuiting.
 
@@ -367,14 +367,14 @@ Same fallback for the TypeScript runtime.
 
 **Goal:** Define types and the `Iterator` namespace with standalone combinators.
 
-##### 3.1: Add types to `ast.ts`
+##### 2.1: Add types to `ast.ts`
 
 ```ts
 export type IteratorDef<TElement> = { Iterator: TElement[] };
 export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
 ```
 
-##### 3.2: Create `iterator.ts`
+##### 2.2: Create `iterator.ts`
 
 The `Iterator` namespace with standalone combinators: `fromArray`, `fromOption`, `fromResult`, `collect`, `map`, `flatMap`, `filter`.
 
@@ -435,7 +435,7 @@ const intoIteratorNormalize: Action = matchPrefix({
 });
 ```
 
-##### 3.3: Export from `index.ts`
+##### 2.3: Export from `index.ts`
 
 ---
 
@@ -443,7 +443,7 @@ const intoIteratorNormalize: Action = matchPrefix({
 
 **Goal:** Postfix `.iterate()` on Option, Result, and arrays.
 
-##### 4.1: Add type signatures to `TypedAction`
+##### 3.1: Add type signatures to `TypedAction`
 
 Three overloads:
 
@@ -459,7 +459,7 @@ iterate<TIn, TElement>(
 ): TypedAction<TIn, Iterator<TElement>>;
 ```
 
-##### 4.2: Add method implementation
+##### 3.2: Add method implementation
 
 ```ts
 function iterateMethod(this: TypedAction): TypedAction {
@@ -477,7 +477,7 @@ function iterateMethod(this: TypedAction): TypedAction {
 }
 ```
 
-##### 4.3: Register in `typedAction()`
+##### 3.3: Register in `typedAction()`
 
 ---
 
@@ -485,7 +485,7 @@ function iterateMethod(this: TypedAction): TypedAction {
 
 **Goal:** `.map()`, `.flatMap()`, `.filter()`, `.collect()` as postfix methods when output is `Iterator<T>`.
 
-##### 5.1: Add type signatures
+##### 4.1: Add type signatures
 
 Add Iterator overload to existing `.map()`, and add new `.flatMap()` method (Iterator-only):
 
@@ -526,7 +526,7 @@ collect<TIn, TElement>(
 ): TypedAction<TIn, TElement[]>;
 ```
 
-##### 5.2: Extend method implementations
+##### 4.2: Extend method implementations
 
 Add `Iterator` case to `matchPrefix` in `mapMethod`, `collectMethod`. Add new `flatMapMethod` and `filterMethod` for Iterator:
 

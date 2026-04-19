@@ -124,7 +124,8 @@ export type BuiltinKind =
   // works but routes through the All executor for a trivial operation.
   // TODO: Add AsOption builtin (bool → Option<void>). true → Some(void), false → None.
   // Enables boolean branching via .asOption().branch({ Some: ..., None: ... }).
-  // Needed for Iterator.filter — currently requires CollectWhere workaround.
+  // Needed for Iterator.filter — pred returns bool, AsOption converts to Option<T>,
+  // then flatMap normalizes via IntoIterator (Some → keep, None → drop).
   | { kind: "SplitFirst" }
   | { kind: "SplitLast" }
   | { kind: "WrapInField"; field: string }
