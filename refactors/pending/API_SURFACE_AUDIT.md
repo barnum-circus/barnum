@@ -173,6 +173,7 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `.find(pred)` | `Iterator<T> → Option<T>` | composable | `filter(pred).first()` |
 | `.nth(n)` | `Iterator<T> → Option<T>` | composable | `collect` → `getIndex(n)` |
 | `.count()` | `Iterator<T> → number` | proposed | New `ArrayLength` builtin |
+| `.isEmpty()` | `Iterator<T> → boolean` | composable | `.count()` + compare to 0 |
 | `.any(pred)` | `Iterator<T> → boolean` | composable | `find(pred).isSome()` |
 | `.take(n)` / `.skip(n)` | `Iterator<T> → Iterator<T>` | proposed | New builtins |
 | `.reverse()` | `Iterator<T> → Iterator<T>` | proposed | New `Reverse` builtin |
