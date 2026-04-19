@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 /// Construct a tagged union value: `{ "kind": "{enum_name}.{variant}", "value": value }`.
 #[must_use]
-pub fn tagged_value(variant: &str, enum_name: &str, value: Value) -> Value {
+pub fn tagged_value(variant: &str, enum_name: &str, value: &Value) -> Value {
     json!({ "kind": format!("{enum_name}.{variant}"), "value": value })
 }
 
@@ -136,8 +136,8 @@ pub async fn execute_builtin(
                 });
             };
             arr.get(*index).map_or_else(
-                || Ok(tagged_value("None", "Option", Value::Null)),
-                |value| Ok(tagged_value("Some", "Option", value.clone())),
+                || Ok(tagged_value("None", "Option", &Value::Null)),
+                |value| Ok(tagged_value("Some", "Option", value)),
             )
         }
 
@@ -150,11 +150,11 @@ pub async fn execute_builtin(
                 });
             };
             if items.is_empty() {
-                Ok(tagged_value("None", "Option", Value::Null))
+                Ok(tagged_value("None", "Option", &Value::Null))
             } else {
                 let first = items[0].clone();
                 let rest = Value::Array(items[1..].to_vec());
-                Ok(tagged_value("Some", "Option", json!([first, rest])))
+                Ok(tagged_value("Some", "Option", &json!([first, rest])))
             }
         }
 
@@ -167,11 +167,11 @@ pub async fn execute_builtin(
                 });
             };
             if items.is_empty() {
-                Ok(tagged_value("None", "Option", Value::Null))
+                Ok(tagged_value("None", "Option", &Value::Null))
             } else {
                 let last = items[items.len() - 1].clone();
                 let init = Value::Array(items[..items.len() - 1].to_vec());
-                Ok(tagged_value("Some", "Option", json!([init, last])))
+                Ok(tagged_value("Some", "Option", &json!([init, last])))
             }
         }
 
@@ -209,14 +209,13 @@ pub async fn execute_builtin(
             if input.is_array() {
                 return Ok(json!({ "kind": "Array", "value": input }));
             }
-            let kind_str = input
-                .get("kind")
-                .and_then(Value::as_str)
-                .ok_or_else(|| BuiltinError::TypeMismatch {
+            let kind_str = input.get("kind").and_then(Value::as_str).ok_or_else(|| {
+                BuiltinError::TypeMismatch {
                     builtin: "ExtractPrefix",
                     expected: "object with string 'kind' field, or array",
                     actual: input.clone(),
-                })?;
+                }
+            })?;
             let prefix = kind_str
                 .split_once('.')
                 .map_or(kind_str, |(prefix, _)| prefix);
@@ -533,8 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_prefix_rejects_non_string_kind() {
-        let result =
-            execute_builtin(&BuiltinKind::ExtractPrefix, &json!({"kind": 123})).await;
+        let result = execute_builtin(&BuiltinKind::ExtractPrefix, &json!({"kind": 123})).await;
         assert!(result.is_err());
     }
 
@@ -552,10 +550,7 @@ mod tests {
     async fn extract_prefix_empty_array_fallback() {
         let input = json!([]);
         let result = execute_builtin(&BuiltinKind::ExtractPrefix, &input).await;
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "Array", "value": []})
-        );
+        assert_eq!(result.unwrap(), json!({"kind": "Array", "value": []}));
     }
 
     #[tokio::test]
