@@ -317,7 +317,7 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 
 ### What needs new builtins vs what composes from existing primitives
 
-**No new builtins needed for Phase 1 methods except `filter`.**
+**One new builtin needed: `AsOption` (bool → Option<void>).** Everything else composes from existing primitives.
 
 | Method | Needs builtin? | Implementation |
 |--------|---------------|----------------|
@@ -325,7 +325,7 @@ Per `refactors/PROCESS.md`, every task follows test-first: failing test → impl
 | `Iterator.collect()` | No | `getField("value")` — reuses existing `getField` |
 | `Iterator.map(f)` | No | `getField("value")` → `forEach(f)` → `tag("Iterator", "Iterator")` |
 | `Iterator.flatMap(f)` | No | `getField("value")` → `forEach(chain(f, intoIteratorNormalize))` → `flatten()` → `tag("Iterator", "Iterator")` |
-| `Iterator.filter(pred)` | **Yes** | `getField("value")` → `forEach(all(identity(), pred))` → **`CollectWhere`** → `tag("Iterator", "Iterator")` |
+| `Iterator.filter(pred)` | **Yes** (`AsOption`) | `getField("value")` → `forEach(boolFilterToOption(pred))` → `CollectSome` → `tag("Iterator", "Iterator")` |
 | `.iterate()` postfix | No | `matchPrefix` → branch per family → wrap |
 
 `wrapInArray()` wraps a single value in a one-element array: `T → T[]`. Implemented as `all(identity())` — may warrant a dedicated builtin later if it's a hot path.
@@ -348,11 +348,26 @@ const intoIteratorNormalize = matchPrefix({
 });
 ```
 
-**`filter` requires one new builtin: `CollectWhere`.** It can't be composed from existing primitives because there's no way to branch on a boolean (only on tagged union `kind` fields). The compositional approach avoids a new AST node by splitting filter into two steps:
-1. `forEach(all(identity(), pred))` — produces `[T, boolean][]` using existing nodes
-2. `CollectWhere` builtin — keeps elements where the boolean (index 1) is `true`, returning values (index 0)
+**`filter` uses `AsOption` + existing `CollectSome`.** `AsOption` is a new builtin: `bool → Option<void>`. `true` → `Some(void)`, `false` → `None`. This enables boolean branching via `.asOption().branch({ Some: ..., None: ... })`.
 
-This keeps the scheduler unchanged. `CollectWhere` is a pure data transformation like `CollectSome`.
+Filter implementation:
+1. For each element, run `pred` to get a bool
+2. `.asOption()` converts bool → `Option<void>`
+3. `.branch({ Some: original.some(), None: Option.none() })` → `Option<T>`
+4. `CollectSome` (existing builtin) keeps the Some values → `T[]`
+
+```ts
+// Conceptual filter(pred) inner transform using bindInput:
+forEach(
+  bindInput((element) =>
+    element.then(pred).asOption().branch({
+      Some: element.some(),
+      None: Option.none(),
+    })
+  )
+)
+// → Option<T>[], then CollectSome → T[]
+```
 
 ---
 
@@ -372,52 +387,55 @@ Same fallback for the TypeScript runtime.
 
 ---
 
-#### Task 2: Add `CollectWhere` builtin (Rust)
+#### Task 2: Add `AsOption` builtin (Rust + TypeScript)
 
-**Goal:** New Rust builtin for filter's second step. Input: `[[value, bool], ...]`. Output: `[value, ...]` for `true` elements.
+**Goal:** New builtin: `bool → Option<void>`. `true` → `{ kind: "Option.Some", value: null }`, `false` → `{ kind: "Option.None", value: null }`. Enables boolean branching via `.asOption().branch({ Some: ..., None: ... })`.
 
 ##### 2.1: Add variant to `BuiltinKind`
 
-**File:** `crates/barnum_ast/src/lib.rs` (after `CollectSome`)
+**File:** `crates/barnum_ast/src/lib.rs`
 
 ```rust
-/// Filter an array of `[value, bool]` pairs, keeping values where bool is `true`.
-CollectWhere,
+/// Convert a boolean to Option<void>. true → Some(null), false → None(null).
+AsOption,
 ```
 
 ##### 2.2: Add execution match arm
 
-**File:** `crates/barnum_builtins/src/lib.rs` (after `CollectSome` arm)
+**File:** `crates/barnum_builtins/src/lib.rs`
 
 ```rust
-BuiltinKind::CollectWhere => {
-    let Value::Array(pairs) = input else {
+BuiltinKind::AsOption => {
+    let Value::Bool(b) = input else {
         return Err(BuiltinError::TypeMismatch {
-            builtin: "CollectWhere",
-            expected: "array",
+            builtin: "AsOption",
+            expected: "bool",
             actual: input.clone(),
         });
     };
-    let mut collected = Vec::new();
-    for pair in pairs {
-        let Value::Array(items) = pair else {
-            return Err(BuiltinError::TypeMismatch {
-                builtin: "CollectWhere",
-                expected: "[value, bool] pair",
-                actual: pair.clone(),
-            });
-        };
-        if items.len() >= 2 && items[1] == Value::Bool(true) {
-            collected.push(items[0].clone());
-        }
+    if *b {
+        Ok(Value::Object(BTreeMap::from([
+            ("kind".into(), Value::String("Option.Some".into())),
+            ("value".into(), Value::Null),
+        ])))
+    } else {
+        Ok(Value::Object(BTreeMap::from([
+            ("kind".into(), Value::String("Option.None".into())),
+            ("value".into(), Value::Null),
+        ])))
     }
-    Ok(Value::Array(collected))
 }
 ```
 
-##### 2.3: Add Rust tests, TypeScript BuiltinKind variant, TypeScript standalone function
+##### 2.3: Add TypeScript BuiltinKind variant, standalone function, postfix method
 
-Same as before — `collectWhere<TElement>(): TypedAction<[TElement, boolean][], TElement[]>`.
+```ts
+// Standalone
+function asOption(): TypedAction<boolean, Option<void>> { ... }
+
+// Postfix on boolean-producing actions
+asOption<TIn>(this: TypedAction<TIn, boolean>): TypedAction<TIn, Option<void>>;
+```
 
 ---
 
@@ -468,11 +486,26 @@ export const Iterator = {
   filter<TElement>(
     predicate: Pipeable<TElement, boolean>,
   ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
+    // forEach: for each element, run pred → asOption → branch to Option<T>
+    // then CollectSome to keep Some values
     return chain(
       toAction(getField("value")),
       chain(
-        toAction(forEach(all(identity(), predicate))),
-        chain(toAction(collectWhere()), toAction(tag("Iterator", "Iterator"))),
+        toAction(forEach(
+          bindInput((element) =>
+            chain(toAction(element), chain(
+              toAction(predicate),
+              toAction(chain(
+                toAction(asOption()),
+                toAction(branch({
+                  Some: chain(toAction(element), toAction(Option.some())),
+                  None: Option.none(),
+                })),
+              )),
+            )),
+          ),
+        )),
+        chain(toAction(collectSome()), toAction(tag("Iterator", "Iterator"))),
       ),
     ) as TypedAction<IteratorT<TElement>, IteratorT<TElement>>;
   },
@@ -603,13 +636,27 @@ function flatMapMethod(this: TypedAction, action: Pipeable): TypedAction {
   })));
 }
 
-// filterMethod — Iterator-only (Option.filter is removed):
+// filterMethod — Iterator-only:
+// pred produces bool per element → asOption → branch to Option<T> → CollectSome
 function filterMethod(this: TypedAction, predicate: Pipeable): TypedAction {
   return chain(toAction(this), toAction(matchPrefix({
     Iterator: branch({
       Iterator: chain(
-        toAction(forEach(all(identity(), predicate))),
-        chain(toAction(collectWhere()), toAction(tag("Iterator", "Iterator"))),
+        toAction(forEach(
+          bindInput((element) =>
+            chain(toAction(element), chain(
+              toAction(predicate),
+              toAction(chain(
+                toAction(asOption()),
+                toAction(branch({
+                  Some: chain(toAction(element), toAction(Option.some())),
+                  None: Option.none(),
+                })),
+              )),
+            )),
+          ),
+        )),
+        chain(toAction(collectSome()), toAction(tag("Iterator", "Iterator"))),
       ),
     }),
   })));
