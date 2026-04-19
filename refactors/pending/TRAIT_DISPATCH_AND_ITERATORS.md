@@ -6,7 +6,7 @@ Dynamic dispatch in barnum uses **prefix-based dispatch** via the `ExtractPrefix
 
 Currently, transformation methods like `.map()` and `.andThen()` are postfix methods on TypedAction that use `matchPrefix` to dispatch across Option and Result.
 
-**This doc introduces Iterator as an additional transformation interface.** Option and Result keep their existing `.map()`, `.andThen()`, etc. methods. Iterator adds sequence-oriented methods (filter, find, collect, etc.) that don't belong on Option/Result. Option, Result, and arrays gain `.iterate()` postfix to enter Iterator.
+**This doc introduces Iterator as an additional transformation interface.** Option and Result keep their existing `.map()`, `.andThen()`, etc. methods. Iterator adds sequence-oriented methods (map, flatMap, filter, collect) that don't belong on Option/Result. Option, Result, and arrays gain `.iterate()` postfix to enter Iterator.
 
 ---
 
@@ -14,7 +14,7 @@ Currently, transformation methods like `.map()` and `.andThen()` are postfix met
 
 **Option/Result keep their existing methods.** `.map()`, `.andThen()`, `.unwrapOr()`, etc. remain as postfix methods dispatching via `matchPrefix`. They are the primary API for working with Option and Result values.
 
-**Iterator adds sequence operations.** Methods like `.filter()`, `.find()`, `.collect()`, `.first()`, `.last()` only make sense on sequences. Iterator is the interface for these.
+**Iterator adds sequence operations.** Methods like `.filter()` and `.collect()` only make sense on sequences. Iterator is the interface for these.
 
 **`.iterate()` bridges into Iterator.** Postfix on Option, Result, and arrays. Use it when you need sequence operations:
 
@@ -26,7 +26,6 @@ result.map(transform).unwrapOr(fallback)
 // Enter Iterator when you need sequence ops:
 option.iterate().filter(pred).collect()
 array.iterate().map(transform).filter(pred).collect()
-result.iterate().map(transform).first()
 ```
 
 ### Postfix methods by family
@@ -59,7 +58,6 @@ result.iterate().map(transform).first()
 - `.flatMap(f)` — `Iterator<T> → Iterator<U>` where `f` returns any IntoIterator type
 - `.filter(pred)` — `Iterator<T> → Iterator<T>` (pred: `T → bool`)
 - `.collect()` — `Iterator<T> → T[]`
-- `.first()` / `.last()` / `.find(pred)` — future, exit to Option
 
 ---
 
@@ -137,7 +135,7 @@ flatMap<TIn, T, U>(this: TypedAction<TIn, Iterator<T>>, action: Pipeable<T, U[]>
 
 ## Iterator methods
 
-All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap (for methods that stay in Iterator) or exit (for methods that produce Option, Result, or plain values). The pattern is: `getField("value")` → array operation → `Iterator.fromArray()`.
+All Iterator methods unwrap `{ kind: "Iterator.Iterator", value: T[] }` → operate on `T[]` → re-wrap (for methods that stay in Iterator) or unwrap (for `.collect()`). The pattern is: `getField("value")` → array operation → `Iterator.fromArray()`.
 
 ### Phase 1 — implement now (used in demos)
 
@@ -157,11 +155,6 @@ Future Iterator methods are cataloged in `ITERATOR_METHODS.md`.
 ```ts
 // Option — use existing methods for simple transforms:
 option.map(validate).unwrapOr(defaultValue)
-
-// Option → Iterator — when you need sequence ops:
-option.iterate()                             // Iterator<string>
-  .map(validate)                             // Iterator<ValidResult>
-  .first()                                   // Option<ValidResult>
 
 // Result — use existing methods:
 result.map(transform).unwrapOr(fallback)
@@ -191,7 +184,7 @@ option.iterate()                             // Iterator<Request>
 
 3. **Uniform entry point.** `.iterate()` on Option, Result, and arrays. One method to enter the sequence world from any starting type.
 
-Future methods (`.first()`, `.find()`, `.collectResult()`, `.fold()`, `.forEachSync()`, etc.) are cataloged in `ITERATOR_METHODS.md`.
+Future methods are cataloged in `ITERATOR_METHODS.md`.
 
 ---
 
@@ -203,13 +196,9 @@ Future methods (`.first()`, `.find()`, `.collectResult()`, `.fold()`, `.forEachS
 
 3. ~~**`filter` predicate type**~~ **Decided:** `T → bool`. New `Filter` Rust builtin. Consistent with Rust's `Iterator::filter`.
 
-4. ~~**Short-circuit semantics**~~ **Not an issue now:** All Phase 1 methods (map, flatMap, filter, collect) are inherently non-short-circuiting. Short-circuit matters for find/any/all — those are future phases.
+4. ~~**Short-circuit semantics**~~ **Not an issue now:** All Phase 1 methods (map, flatMap, filter, collect) are inherently non-short-circuiting.
 
-5. **`collect` destination types**: Rust's `Iterator::collect` is generic over the destination type via `FromIterator`. Barnum uses separate named methods:
-   - `.collect()` → `T[]` (default, like `Vec`)
-   - `.collectResult()`: `Iterator<Result<T, E>> → Result<T[], E>`
-
-6. ~~**`chain` naming collision**~~ **Not an issue:** barnum's `chain()` is an internal combinator; users see `.then()`. Iterator can use `.chain()` for concatenation without ambiguity.
+5. ~~**`chain` naming collision**~~ **Not an issue:** barnum's `chain()` is an internal combinator; users see `.then()`. Iterator can use `.chain()` for concatenation without ambiguity.
 
 ---
 
