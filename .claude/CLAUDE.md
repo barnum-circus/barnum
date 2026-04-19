@@ -65,6 +65,7 @@ No generated artifacts currently exist. When a Rust AST crate is added, schema g
 ## Demos
 
 Demos are first-class artifacts. They demonstrate both the framework's capabilities and great code quality. Hold demos to the same standard as library code:
+- **Demos must always reflect current best practices.** When a new pattern is introduced (e.g., Iterator), migrate all demos as part of the same refactor. No legacy patterns should remain.
 - Handlers should have narrow, well-defined inputs — never accept extra fields just to thread them through a pipeline.
 - Generic operations (git worktree, PR creation) should be reusable across workflows.
 - Domain-specific data preparation should be separate from generic operations.

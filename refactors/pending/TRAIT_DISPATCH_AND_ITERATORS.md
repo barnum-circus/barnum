@@ -593,6 +593,6 @@ Iterator: branch({ Iterator: identity() }),
 
 ---
 
-### Phase 2: Demo migration (optional, incremental)
+### Phase 2: Demo migration
 
-Demos can adopt Iterator patterns at their own pace. No methods are removed from Option/Result, so existing code continues to work.
+Migrate all demos to use Iterator patterns. Demos are first-class artifacts that must reflect best practices — no legacy `forEach` patterns should remain.
