@@ -34,6 +34,10 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 
 **Do not get stuck in type-level analysis loops.** When reasoning about types, if you haven't found a working approach in 60 seconds, try it and read the compiler error. Compiler feedback is faster than mental simulation of invariant phantom types. Ship something, see what breaks, fix it.
 
+## Prefer postfix style
+
+**Always prefer postfix `.then()` and method chains over `pipe()` or `chain()` when the value already has methods.** `remaining.splitFirst()` not `remaining.then(splitFirst())`. `iterator.collect()` not `pipe(iterator, Iterator.collect())`. Postfix reads left-to-right and is the style users write.
+
 ## Do exactly what is asked
 
 **Do not add features, methods, sections, or content beyond what was explicitly requested.** If the user asks for scan, splitFirst, splitLast, and splitN — deliver exactly those four things. Not fold, reduce, first, last, take, skip, and a kitchen sink. Extra work wastes the user's review time and blocks progress.

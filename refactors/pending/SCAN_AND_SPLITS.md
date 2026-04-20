@@ -6,61 +6,51 @@ Concrete implementations for: scan, Iterator.splitFirst, Iterator.splitLast, spl
 
 ## 1. Scan — composed from loop + splitFirst
 
-`scan(init, body)`: `Iterator<T> → Iterator<U>` where `body: [TAcc, T] → [TAcc, U]`.
+`scan(init, body)`: `Iterator<T> → Iterator<TAcc>` where `body: [TAcc, T] → TAcc`.
 
-Threads an accumulator through elements one at a time, collecting each output. Composed from `loop` + `splitFirst` + `bindInput`. No new AST nodes.
+Threads an accumulator through elements one at a time, collecting each accumulator value. The accumulator IS the output — no separate output type. Composed from `loop` + `splitFirst` + `bindInput`. No new AST nodes.
 
 ### Implementation
 
 ```typescript
 // In Iterator namespace:
-scan<TElement, TAcc, TOut>(
+scan<TElement, TAcc>(
   init: Pipeable<void, TAcc>,
-  body: Pipeable<[TAcc, TElement], [TAcc, TOut]>,
-): TypedAction<IteratorT<TElement>, IteratorT<TOut>> {
-  return pipe(
-    getField("value"),  // Iterator<T> → T[]
-    bindInput<TElement[]>(elements =>
-      pipe(
-        all(init, elements, constant<TOut[]>([])),
-        // State: [TAcc, TElement[], TOut[]], Done: TOut[]
-        loop<TOut[], [TAcc, TElement[], TOut[]]>((recur, done) =>
-          bindInput<[TAcc, TElement[], TOut[]]>(state => {
+  body: Pipeable<[TAcc, TElement], TAcc>,
+): TypedAction<IteratorT<TElement>, IteratorT<TAcc>> {
+  return Iterator.collect<TElement>()        // Iterator<T> → T[]
+    .then(bindInput<TElement[]>(elements =>
+      all(init, elements, constant<TAcc[]>([]))
+        // State: [TAcc, TElement[], TAcc[]], Done: TAcc[]
+        .then(loop<TAcc[], [TAcc, TElement[], TAcc[]]>((recur, done) =>
+          bindInput<[TAcc, TElement[], TAcc[]]>(state => {
             const acc = state.getIndex(0).unwrap();
             const remaining = state.getIndex(1).unwrap();
             const outputs = state.getIndex(2).unwrap();
 
-            return remaining.then(splitFirst()).branch({
+            return remaining.splitFirst().branch({
               None: outputs.then(done),
               Some: bindInput<[TElement, TElement[]]>(headTail => {
                 const head = headTail.getIndex(0).unwrap();
                 const tail = headTail.getIndex(1).unwrap();
 
-                return pipe(
-                  all(acc, head),    // [TAcc, TElement]
-                  body,              // [TAcc, TOut]
-                  bindInput<[TAcc, TOut]>(result => {
-                    const newAcc = result.getIndex(0).unwrap();
-                    const output = result.getIndex(1).unwrap();
-                    const newOutputs = pipe(
-                      all(outputs, output.then(wrapInArray<TOut>())),
-                      flatten<TOut>(),
-                    );
-                    return pipe(all(newAcc, tail, newOutputs), recur);
-                  }),
-                );
+                return all(acc, head)            // [TAcc, TElement]
+                  .then(body)                    // TAcc
+                  .then(bindInput<TAcc>(newAcc => {
+                    const newOutputs = all(outputs, newAcc.then(wrapInArray<TAcc>()))
+                      .then(flatten<TAcc>());
+                    return all(newAcc, tail, newOutputs).then(recur);
+                  }));
               }),
             });
           }),
-        ),
-      ),
-    ),
-    Iterator.fromArray<TOut>(),
-  ) as TypedAction<IteratorT<TElement>, IteratorT<TOut>>;
+        )),
+    ))
+    .then(Iterator.fromArray<TAcc>()) as TypedAction<IteratorT<TElement>, IteratorT<TAcc>>;
 },
 ```
 
-State threaded through loop: `[TAcc, TElement[], TOut[]]` — accumulator, remaining elements, collected outputs. Each iteration: `splitFirst(remaining)` → `None` means done, `Some([head, tail])` means run body, append output, recur. Array append via `all(existing, wrapInArray(new)).flatten()`.
+State threaded through loop: `[TAcc, TElement[], TAcc[]]` — accumulator, remaining elements, collected outputs. Each iteration: `splitFirst(remaining)` → `None` means done, `Some([head, tail])` means run body (returns new accumulator), append it to outputs, recur. Array append via `all(existing, wrapInArray(new)).flatten()`.
 
 ---
 
@@ -77,16 +67,14 @@ splitFirst<TElement>(): TypedAction<
   IteratorT<TElement>,
   OptionT<[TElement, IteratorT<TElement>]>
 > {
-  return pipe(
-    getField("value"),                       // Iterator<T> → T[]
-    splitFirst(),                            // → Option<[T, T[]]>
-    Option.map(
+  return Iterator.collect<TElement>()                           // Iterator<T> → T[]
+    .then(splitFirst())                                         // → Option<[T, T[]]>
+    .then(Option.map(
       all(
         getIndex(0).unwrap(),                                    // → T
-        pipe(getIndex(1).unwrap(), Iterator.fromArray()),        // → Iterator<T>
+        getIndex(1).unwrap().then(Iterator.fromArray()),         // → Iterator<T>
       ),
-    ),
-  ) as TypedAction<IteratorT<TElement>, OptionT<[TElement, IteratorT<TElement>]>>;
+    )) as TypedAction<IteratorT<TElement>, OptionT<[TElement, IteratorT<TElement>]>>;
 },
 ```
 
@@ -94,7 +82,7 @@ Postfix `.splitFirst()` changes from direct builtin call to branchFamily dispatc
 
 ```typescript
 function splitFirstMethod(this: TypedAction): TypedAction {
-  return pipe(this, branchFamily({
+  return this.then(branchFamily({
     Iterator: IteratorNs.splitFirst(),
     Array: splitFirst(),
   }));
@@ -114,16 +102,14 @@ splitLast<TElement>(): TypedAction<
   IteratorT<TElement>,
   OptionT<[IteratorT<TElement>, TElement]>
 > {
-  return pipe(
-    getField("value"),                       // Iterator<T> → T[]
-    splitLast(),                             // → Option<[T[], T]>
-    Option.map(
+  return Iterator.collect<TElement>()                           // Iterator<T> → T[]
+    .then(splitLast())                                          // → Option<[T[], T]>
+    .then(Option.map(
       all(
-        pipe(getIndex(0).unwrap(), Iterator.fromArray()),        // → Iterator<T>
+        getIndex(0).unwrap().then(Iterator.fromArray()),         // → Iterator<T>
         getIndex(1).unwrap(),                                    // → T
       ),
-    ),
-  ) as TypedAction<IteratorT<TElement>, OptionT<[IteratorT<TElement>, TElement]>>;
+    )) as TypedAction<IteratorT<TElement>, OptionT<[IteratorT<TElement>, TElement]>>;
 },
 ```
 
@@ -219,7 +205,7 @@ export const getServices = createHandler(
   "getServices",
 );
 
-/** Deploy a single service. Takes the service name, returns a status message. */
+/** Deploy a single service. Takes the service name, returns the service name. */
 export const deployService = createHandler(
   {
     inputValidator: z.string(),
@@ -229,13 +215,13 @@ export const deployService = createHandler(
       console.error(`[deploy] Deploying ${service}...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
       console.error(`[deploy] ${service} deployed (${delay}ms)`);
-      return `${service}: deployed`;
+      return service;
     },
   },
   "deployService",
 );
 
-/** Verify a service is healthy after deployment. */
+/** Verify a service is healthy after deployment. Takes the service name, returns the service name. */
 export const verifyService = createHandler(
   {
     inputValidator: z.string(),
@@ -244,7 +230,7 @@ export const verifyService = createHandler(
       console.error(`[verify] Health-checking ${service}...`);
       await new Promise((resolve) => setTimeout(resolve, 200));
       console.error(`[verify] ${service} healthy`);
-      return `${service}: verified`;
+      return service;
     },
   },
   "verifyService",
@@ -296,7 +282,7 @@ runPipeline(
             pair.getIndex(0).unwrap(),       // current service name
             deployService,                   // deploy it (waits for completion)
             verifyService,                   // verify it's healthy
-            drop,                            // discard status message
+            drop,                            // discard service name
             pair.getIndex(1).unwrap(),       // remaining services
             recur,                           // next service
           ),
