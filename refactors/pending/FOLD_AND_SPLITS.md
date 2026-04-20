@@ -1,6 +1,6 @@
 # Fold and Splits
 
-Concrete implementations for: fold, Iterator.splitFirst, Iterator.splitLast, splitFirstN, splitLastN. Plus a demo showing splitFirst as a sequential iteration pattern.
+Concrete implementations for: fold, Iterator.splitFirst, Iterator.splitLast. Plus a demo showing splitFirst as a sequential iteration pattern.
 
 ---
 
@@ -112,57 +112,7 @@ Postfix: same branchFamily pattern as splitFirst.
 
 ---
 
-## 4. splitFirstN / splitLastN — new builtins
-
-Two separate builtins for now. Once we have `length` and math builtins, these can be unified into a single `splitAt` builtin.
-
-### splitFirstN
-
-`T[] → [T[], T[]]` — splits at position n from the start.
-
-```typescript
-// BuiltinKind:
-| { kind: "SplitFirstN"; n: number }
-
-// Rust: (input[..n.min(len)], input[n.min(len)..])
-
-// Constructor in builtins/array.ts:
-export function splitFirstN<TElement>(
-  n: number,
-): TypedAction<TElement[], [TElement[], TElement[]]> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "SplitFirstN", n } },
-  });
-}
-```
-
-### splitLastN
-
-`T[] → [T[], T[]]` — splits at position n from the end.
-
-```typescript
-// BuiltinKind:
-| { kind: "SplitLastN"; n: number }
-
-// Rust: let split = len.saturating_sub(n); (input[..split], input[split..])
-
-// Constructor in builtins/array.ts:
-export function splitLastN<TElement>(
-  n: number,
-): TypedAction<TElement[], [TElement[], TElement[]]> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "SplitLastN", n } },
-  });
-}
-```
-
-Both clamp — `splitFirstN(100)` on `[1,2,3]` → `[[1,2,3], []]`.
-
----
-
-## 5. Demo: sequential iteration with splitFirst
+## 4. Demo: sequential iteration with splitFirst
 
 `splitFirst` + `loop` + `branch` processes elements one at a time in order — the sequential counterpart to `.iterate().map()` (parallel via ForEach).
 
@@ -312,25 +262,20 @@ Each service completes before the next starts. With `.iterate().map(pipe(deployS
 
 ---
 
-## 6. Implementation order
+## 5. Implementation order
 
-### Phase A: splitFirstN / splitLastN builtins (Rust + TypeScript)
-
-1. Add `SplitFirstN`, `SplitLastN` to Rust `BuiltinKind`
-2. Add TypeScript constructors to `builtins/array.ts`
-
-### Phase B: Iterator.splitFirst / Iterator.splitLast (TypeScript only)
+### Phase A: Iterator.splitFirst / Iterator.splitLast (TypeScript only)
 
 1. Add to iterator.ts
 2. Change postfix to branchFamily dispatch
 
-### Phase C: Iterator.fold (TypeScript only)
+### Phase B: Iterator.fold (TypeScript only)
 
-Depends on Phase B.
+Depends on Phase A.
 
 1. Add to iterator.ts (loop + splitFirst composition)
 2. Wire postfix method
 
-### Phase D: Sequential processing demo
+### Phase C: Sequential processing demo
 
-Depends on Phase B.
+Depends on Phase A.
