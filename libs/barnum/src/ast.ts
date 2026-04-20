@@ -123,7 +123,7 @@ export type BuiltinKind =
   | { kind: "GetField"; field: string }
   | { kind: "GetIndex"; index: number }
   | { kind: "CollectSome" }
-  // TODO: Add WrapInArray builtin (T → [T]). Currently done via all(identity()) which
+  // Future: Add WrapInArray builtin (T → [T]). Currently done via all(identity()) which
   // works but routes through the All executor for a trivial operation.
   | { kind: "AsOption" }
   | { kind: "SplitFirst" }
@@ -266,6 +266,11 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<TValue, TError>>,
     action: Pipeable<TValue, TOut>,
   ): TypedAction<TIn, Result<TOut, TError>>;
+  /** Transform each element in Iterator. `Iterator<T> → Iterator<U>` */
+  map<TIn, TElement, TOut>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    action: Pipeable<TElement, TOut>,
+  ): TypedAction<TIn, Iterator<TOut>>;
   /**
    * Transform the Err value of a Result output.
    * `Result<TValue, TError> → Result<TValue, TErrorOut>`
@@ -320,6 +325,11 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Option<TValue>>,
     predicate: Pipeable<TValue, Option<TValue>>,
   ): TypedAction<TIn, Option<TValue>>;
+  /** Keep elements where predicate returns true. `Iterator<T> → Iterator<T>` */
+  filter<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    predicate: Pipeable<TElement, boolean>,
+  ): TypedAction<TIn, Iterator<TElement>>;
 
   /** Test if the value is Some. `Option<T> → boolean` */
   isSome<TIn, TValue>(
@@ -335,6 +345,10 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   collect<TIn, TValue>(
     this: TypedAction<TIn, Option<TValue>[]>,
   ): TypedAction<TIn, TValue[]>;
+  /** Unwrap Iterator to array. `Iterator<T> → T[]` */
+  collect<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+  ): TypedAction<TIn, TElement[]>;
 
   /** Fallback on Err. `Result<T,E> → Result<T,F>` */
   or<TIn, TValue, TError, TErrorOut>(
@@ -390,12 +404,6 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, TElement[]>,
   ): TypedAction<TIn, Iterator<TElement>>;
 
-  /** Transform each element in Iterator. `Iterator<T> → Iterator<U>` */
-  map<TIn, TElement, TOut>(
-    this: TypedAction<TIn, Iterator<TElement>>,
-    action: Pipeable<TElement, TOut>,
-  ): TypedAction<TIn, Iterator<TOut>>;
-
   /** Flat-map each element. `f` returns Iterator. `Iterator<T> → Iterator<U>` */
   flatMap<TIn, TElement, TOut>(
     this: TypedAction<TIn, Iterator<TElement>>,
@@ -416,17 +424,6 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Iterator<TElement>>,
     action: Pipeable<TElement, TOut[]>,
   ): TypedAction<TIn, Iterator<TOut>>;
-
-  /** Keep elements where predicate returns true. `Iterator<T> → Iterator<T>` */
-  filter<TIn, TElement>(
-    this: TypedAction<TIn, Iterator<TElement>>,
-    predicate: Pipeable<TElement, boolean>,
-  ): TypedAction<TIn, Iterator<TElement>>;
-
-  /** Unwrap Iterator to array. `Iterator<T> → T[]` */
-  collect<TIn, TElement>(
-    this: TypedAction<TIn, Iterator<TElement>>,
-  ): TypedAction<TIn, TElement[]>;
 
   /** Fold elements with accumulator. `Iterator<T> → TAcc` */
   fold<TIn, TElement, TAcc>(

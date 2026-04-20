@@ -5,7 +5,7 @@ import {
   pipe,
   forEach,
   loop,
-  recur,
+  recur as recurCombinator,
   earlyReturn,
   resetEffectIdCounter,
   config,
@@ -293,7 +293,7 @@ describe("recur execution", () => {
     const result = await runPipeline(
       pipe(
         constant([1, 2]),
-        recur<number[], string>((restart) =>
+        recurCombinator<number[], string>((restart) =>
           splitFirst<number>().branch({
             Some: pipe(drop, constant([] as number[]), restart),
             None: constant("done"),
@@ -306,7 +306,7 @@ describe("recur execution", () => {
 
   it("recur completes immediately without restart", async () => {
     const result = await runPipeline(
-      recur<void, string>((_restart) => constant("immediate")),
+      recurCombinator<void, string>((_restart) => constant("immediate")),
     );
     expect(result).toBe("immediate");
   });

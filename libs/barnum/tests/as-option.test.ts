@@ -5,8 +5,7 @@ import {
   type Option,
   pipe,
 } from "../src/ast.js";
-import { constant } from "../src/builtins/index.js";
-import { asOption } from "../src/builtins/index.js";
+import { constant, asOption } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 
 // ---------------------------------------------------------------------------
