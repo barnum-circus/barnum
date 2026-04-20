@@ -150,10 +150,14 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `Iterator.flatMap(action)` | `Iterator<T> → Iterator<U>` | exists, postfix | `action` returns any IntoIterator type. Normalized via `branchFamily`. |
 | `Iterator.filter(pred)` | `Iterator<T> → Iterator<T>` | exists, postfix | `pred: T → boolean`. Implemented as flatMap + AsOption + bindInput. |
 | `Iterator.collect()` | `Iterator<T> → T[]` | exists, postfix | `getField("value")` |
+| `Iterator.splitFirst()` | `Iterator<T> → Option<[T, Iterator<T>]>` | exists, postfix | `.collect()` → `SplitFirst` → re-wrap tail. branchFamily dispatch (Array + Iterator). |
+| `Iterator.splitLast()` | `Iterator<T> → Option<[Iterator<T>, T]>` | exists, postfix | `.collect()` → `SplitLast` → re-wrap init. branchFamily dispatch (Array + Iterator). |
+| `Iterator.fold(init, body)` | `Iterator<T> → TAcc` | exists, postfix | Composed from loop + splitFirst + bindInput. No new AST nodes. |
+| `Iterator.isEmpty()` | `Iterator<T> → boolean` | exists, postfix | `.collect().splitFirst().isNone()` |
 
 ### Postfix dispatch
 
-`.map()` dispatches across Option, Result, and Iterator via `branchFamily`. `.collect()` dispatches between `Iterator<T>` (→ `getField("value")`) and `Option<T>[]` (→ `CollectSome` builtin). `.filter()` dispatches between `Iterator<T>` (pred returns `boolean`) and `Option<T>` (pred returns `Option<T>`).
+`.map()` dispatches across Option, Result, and Iterator via `branchFamily`. `.collect()` dispatches between `Iterator<T>` (→ `getField("value")`) and `Option<T>[]` (→ `CollectSome` builtin). `.filter()` dispatches between `Iterator<T>` (pred returns `boolean`) and `Option<T>` (pred returns `Option<T>`). `.splitFirst()` and `.splitLast()` dispatch between `Iterator<T>` and `T[]` via `branchFamily`.
 
 ### Proposed (see ITERATOR_METHODS.md)
 
@@ -162,21 +166,17 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 | `.filterMap(f)` | `Iterator<T> → Iterator<U>` | composable | `flatMap(f)` where `f: T → Option<U>` |
 | `.flatten()` | `Iterator<IntoIter<T>> → Iterator<T>` | composable | `flatMap(identity())` |
 | `.enumerate()` | `Iterator<T> → Iterator<[number, T]>` | proposed | New `Enumerate` builtin |
-| `.splitFirst()` | `Iterator<T> → Option<[T, Iterator<T>]>` | composable | `.collect()` → `SplitFirst` builtin, re-wrap tail |
-| `.splitLast()` | `Iterator<T> → Option<[Iterator<T>, T]>` | composable | `.collect()` → `SplitLast` builtin, re-wrap init |
 | `.first()` / `.last()` | `Iterator<T> → Option<T>` | composable | `.collect()` → `getIndex(0)` / `getIndex(-1)` |
 | `.find(pred)` | `Iterator<T> → Option<T>` | composable | `filter(pred).first()` |
 | `.nth(n)` | `Iterator<T> → Option<T>` | composable | `.collect()` → `GetIndex` builtin |
 | `.count()` | `Iterator<T> → number` | proposed | New `ArrayLength` builtin |
-| `.isEmpty()` | `Iterator<T> → boolean` | composable | `.count()` + compare to 0 |
 | `.any(pred)` | `Iterator<T> → boolean` | composable | `find(pred).isSome()` |
 | `.take(n)` / `.skip(n)` | `Iterator<T> → Iterator<T>` | proposed | New builtins |
 | `.reverse()` | `Iterator<T> → Iterator<T>` | proposed | New `Reverse` builtin |
 | `.chain(other)` | `(Iterator<T>, Iterator<T>) → Iterator<T>` | composable | `all` + `flatten` + `fromArray` |
 | `.collectResult()` | `Iterator<Result<T, E>> → Result<T[], E>` | proposed | New `CollectResult` builtin |
 | `.collectHashMap()` | `Iterator<{key: string, value: T}> → HashMap<T>` | composable (needs HashMap) | `.collect()` → `HashMap.fromEntries()` |
-| `.scan(init, f)` | `Iterator<T> → Iterator<U>` | proposed | **New `Scan` AST node.** Sequential primitive. Unlocks fold/reduce/forEachSync. |
-| `.fold(init, f)` | `Iterator<T> → U` | composable (needs scan) | `scan(init, f).last().unwrap()` |
+| `.scan(init, f)` | `Iterator<T> → Iterator<U>` | proposed | **New `Scan` AST node.** Sequential primitive. |
 | `.partition(pred)` | `Iterator<T> → [T[], T[]]` | proposed (needs scan) | |
 | `.zip(other)` | `(Iterator<T>, Iterator<U>) → Iterator<[T, U]>` | proposed | New `Zip` builtin |
 | `.sortBy(f)` | `Iterator<T> → Iterator<T>` | proposed | New `SortBy` AST node |
@@ -251,7 +251,7 @@ Iterators are **eager** (backed by arrays). `.map()` dispatches via `ForEach` (p
 |------|-----------|--------|-------|
 | `tag(kind, enumName)` | `T → TaggedUnion<TEnumName, {K: T}>` | exists | Constructor. Postfix `.tag(kind)` (infers enumName from context). |
 | `branch(cases)` | `TaggedUnion → TOut` | exists, postfix | Dispatch on discriminant. Auto-unwraps `value`. |
-| `branchFamily(cases)` | `TaggedUnion → TOut` | exists | Two-level dispatch: `extractPrefix` → `branch`. Powers `.map()`, `.unwrapOr()`, `.iterate()`, etc. |
+| `branchFamily(cases)` | `TaggedUnion → TOut` | exists | Two-level dispatch: `extractPrefix` → `branch`. Powers `.map()`, `.unwrapOr()`, `.iterate()`, `.splitFirst()`, `.splitLast()`, etc. |
 | `extractPrefix()` | `{kind, value} → {kind: prefix, value: original}` | exists | Rust builtin. Splits kind on `'.'`. Bare arrays → `{kind: "Array", value: input}`. Internal. |
 
 ---
@@ -287,8 +287,8 @@ These exist in the codebase but are not part of the public API. Kept for referen
 | Name | Notes |
 |------|-------|
 | `merge()` | Rust builtin. Merges a tuple of objects. Used internally by `pick`, `allObject`, `tag`, `withResource`. |
-| `splitFirst()` | Rust builtin. `T[] → Option<[T, T[]]>`. Used by Iterator `.splitFirst()`, `.first()`. |
-| `splitLast()` | Rust builtin. `T[] → Option<[T[], T]>`. Used by Iterator `.splitLast()`, `.last()`. |
+| `splitFirst()` | Rust builtin. `T[] → Option<[T, T[]]>`. Postfix `.splitFirst()` dispatches via branchFamily (Array + Iterator). |
+| `splitLast()` | Rust builtin. `T[] → Option<[T[], T]>`. Postfix `.splitLast()` dispatches via branchFamily (Array + Iterator). |
 | `getIndex(n)` | Rust builtin. `T[] → Option<T>`. Used by Iterator `.nth(n)`. |
 | `first()` / `last()` | Composites. Used by Iterator `.first()`, `.last()`. |
 | `toAction()` | Strips phantom types from Pipeable → Action. |
@@ -351,6 +351,9 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [x] `allObject` — composable from existing primitives
 - [x] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
 - [x] Remove `tap`, `__union` dispatch
+- [x] `Iterator.splitFirst()` / `.splitLast()` — composable, branchFamily dispatch (Array + Iterator)
+- [x] `Iterator.fold(init, body)` — composable from loop + splitFirst + bindInput
+- [x] `Iterator.isEmpty()` — `.collect().splitFirst().isNone()`
 
 ### Proposed
 - [ ] `withRetries(n)` — composable: loop + tryCatch
@@ -363,15 +366,14 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 ### Proposed: Iterator Phase 2 (see ITERATOR_METHODS.md)
 - [ ] `.filterMap(f)` — composable: type-constrained flatMap
 - [ ] `.flatten()` — composable: `flatMap(identity())`
-- [ ] `.splitFirst()` / `.splitLast()` — composable (move from array to Iterator)
 - [ ] `.first()` / `.last()` — composable (move from standalone to Iterator)
 - [ ] `.nth(n)` — composable (move `getIndex` from array to Iterator)
 - [ ] `.find(pred)` — composable: `filter(pred).first()`
 - [ ] `.enumerate()` — new `Enumerate` builtin
 - [ ] `.count()` — new `ArrayLength` builtin
 - [ ] `.collectResult()` — new `CollectResult` builtin
-- [ ] `.scan(init, f)` — **new `Scan` AST node** (unlocks fold/reduce/forEachSync)
-- [ ] `.fold(init, f)` / `.reduce(f)` — composable from scan
+- [ ] `.scan(init, f)` — **new `Scan` AST node** (sequential primitive)
+- [ ] `.reduce(f)` — composable from fold
 
 ### Lower priority
 - [ ] Iterator: take, skip, reverse, chain, zip, sortBy, unique, partition, takeWhile, skipWhile, chunks, windows, contains/any, append/concat
