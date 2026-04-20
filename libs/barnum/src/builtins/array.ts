@@ -81,6 +81,31 @@ export function splitLast<TElement>(): TypedAction<
 }
 
 // ---------------------------------------------------------------------------
+// Slice — extract a sub-array from start to end
+// ---------------------------------------------------------------------------
+
+/**
+ * Slice an array from `start` (inclusive) to `end` (exclusive).
+ * `T[] → T[]`
+ *
+ * Both indices are clamped to array length. If `end` is omitted, slices
+ * to the end of the array. Returns empty array if `start >= end`.
+ */
+export function slice<TElement>(
+  start: number,
+  end?: number,
+): TypedAction<TElement[], TElement[]> {
+  const builtin: { kind: "Slice"; start: number; end?: number } =
+    end === undefined
+      ? { kind: "Slice", start }
+      : { kind: "Slice", start, end };
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Range — produce an integer array [start, start+1, ..., end-1]
 // ---------------------------------------------------------------------------
 

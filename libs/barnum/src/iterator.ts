@@ -20,6 +20,7 @@ import {
   getField,
   getIndex,
   identity,
+  slice,
   splitFirst,
   splitLast,
   tag,
@@ -205,6 +206,34 @@ export const Iterator = {
         ),
       ),
     );
+  },
+
+  /** Slice elements from start to end. `Iterator<T> → Iterator<T>` */
+  slice<TElement>(
+    start: number,
+    end?: number,
+  ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
+    return chain(
+      Iterator.collect<TElement>(),
+      chain(
+        toAction(slice<TElement>(start, end)),
+        Iterator.fromArray<TElement>(),
+      ),
+    );
+  },
+
+  /** First n elements. `Iterator<T> → Iterator<T>` */
+  take<TElement>(
+    n: number,
+  ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
+    return Iterator.slice(0, n);
+  },
+
+  /** Drop first n elements. `Iterator<T> → Iterator<T>` */
+  skip<TElement>(
+    n: number,
+  ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
+    return Iterator.slice(n);
   },
 
   /** Check if iterator is empty. `Iterator<T> → boolean` */

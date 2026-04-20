@@ -240,6 +240,24 @@ pub async fn execute_builtin(
         BuiltinKind::Panic { message } => Err(BuiltinError::Panic {
             message: message.clone(),
         }),
+
+        BuiltinKind::Slice { start, end } => {
+            let Value::Array(items) = input else {
+                return Err(BuiltinError::TypeMismatch {
+                    builtin: "Slice",
+                    expected: "array",
+                    actual: input.clone(),
+                });
+            };
+            let len = items.len();
+            let s = (*start).min(len);
+            let e = end.map_or(len, |n| n.min(len));
+            if s >= e {
+                Ok(Value::Array(vec![]))
+            } else {
+                Ok(Value::Array(items[s..e].to_vec()))
+            }
+        }
     }
 }
 
@@ -574,6 +592,130 @@ mod tests {
     #[tokio::test]
     async fn as_option_rejects_non_boolean() {
         let result = execute_builtin(&BuiltinKind::AsOption, &json!(42)).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn slice_with_end() {
+        let input = json!([1, 2, 3, 4, 5]);
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 0,
+                end: Some(3),
+            },
+            &input,
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([1, 2, 3]));
+    }
+
+    #[tokio::test]
+    async fn slice_without_end() {
+        let input = json!([1, 2, 3, 4, 5]);
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 2,
+                end: None,
+            },
+            &input,
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([3, 4, 5]));
+    }
+
+    #[tokio::test]
+    async fn slice_middle() {
+        let input = json!([1, 2, 3, 4, 5]);
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 1,
+                end: Some(4),
+            },
+            &input,
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([2, 3, 4]));
+    }
+
+    #[tokio::test]
+    async fn slice_clamps_end_to_array_length() {
+        let input = json!([1, 2]);
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 0,
+                end: Some(10),
+            },
+            &input,
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([1, 2]));
+    }
+
+    #[tokio::test]
+    async fn slice_clamps_start_to_array_length() {
+        let input = json!([1, 2]);
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 10,
+                end: None,
+            },
+            &input,
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([]));
+    }
+
+    #[tokio::test]
+    async fn slice_start_at_zero_end_at_zero() {
+        let input = json!([1, 2, 3]);
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 0,
+                end: Some(0),
+            },
+            &input,
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([]));
+    }
+
+    #[tokio::test]
+    async fn slice_start_past_end_returns_empty() {
+        let input = json!([1, 2, 3]);
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 3,
+                end: Some(1),
+            },
+            &input,
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([]));
+    }
+
+    #[tokio::test]
+    async fn slice_empty_array() {
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 0,
+                end: Some(3),
+            },
+            &json!([]),
+        )
+        .await;
+        assert_eq!(result.unwrap(), json!([]));
+    }
+
+    #[tokio::test]
+    async fn slice_rejects_non_array() {
+        let result = execute_builtin(
+            &BuiltinKind::Slice {
+                start: 0,
+                end: Some(1),
+            },
+            &json!("not array"),
+        )
+        .await;
         assert!(result.is_err());
     }
 }

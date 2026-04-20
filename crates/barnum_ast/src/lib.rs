@@ -308,6 +308,15 @@ pub enum BuiltinKind {
         /// The error message.
         message: String,
     },
+    /// Slice an array from `start` to `end`. Both clamped to array length.
+    /// `end: None` means "to the end of the array."
+    Slice {
+        /// Start index (inclusive). Clamped to array length.
+        start: usize,
+        /// End index (exclusive). `None` means end of array. Clamped to array length.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end: Option<usize>,
+    },
 }
 
 // ---------------------------------------------------------------------------

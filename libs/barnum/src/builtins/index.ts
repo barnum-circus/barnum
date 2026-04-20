@@ -1,6 +1,13 @@
 export { constant, identity, drop, panic } from "./scalar.js";
 export { getField, wrapInField, merge, pick, allObject } from "./struct.js";
-export { getIndex, flatten, splitFirst, splitLast, range } from "./array.js";
+export {
+  getIndex,
+  flatten,
+  splitFirst,
+  splitLast,
+  slice,
+  range,
+} from "./array.js";
 export {
   tag,
   extractPrefix,

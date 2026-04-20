@@ -131,7 +131,8 @@ export type BuiltinKind =
   | { kind: "WrapInField"; field: string }
   | { kind: "Sleep"; ms: number }
   | { kind: "Panic"; message: string }
-  | { kind: "ExtractPrefix" };
+  | { kind: "ExtractPrefix" }
+  | { kind: "Slice"; start: number; end?: number };
 
 /**
  * When T is `never` or `void` (handler ignores input / recur doesn't
@@ -436,6 +437,25 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   isEmpty<TIn, TElement>(
     this: TypedAction<TIn, Iterator<TElement>>,
   ): TypedAction<TIn, boolean>;
+
+  /** Slice elements from start to end. `Iterator<T> → Iterator<T>` */
+  slice<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    start: number,
+    end?: number,
+  ): TypedAction<TIn, Iterator<TElement>>;
+
+  /** First n elements. `Iterator<T> → Iterator<T>` */
+  take<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    n: number,
+  ): TypedAction<TIn, Iterator<TElement>>;
+
+  /** Drop first n elements. `Iterator<T> → Iterator<T>` */
+  skip<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    n: number,
+  ): TypedAction<TIn, Iterator<TElement>>;
 
   /** Bind concurrent values as VarRefs available throughout the body. */
   bind<TBindings extends Action[], TOut>(
@@ -927,6 +947,22 @@ function isEmptyMethod(this: TypedAction): TypedAction {
   return chain(toAction(this), toAction(IteratorNs.isEmpty()));
 }
 
+function sliceMethod(
+  this: TypedAction,
+  start: number,
+  end?: number,
+): TypedAction {
+  return chain(toAction(this), toAction(IteratorNs.slice(start, end)));
+}
+
+function takeMethod(this: TypedAction, n: number): TypedAction {
+  return chain(toAction(this), toAction(IteratorNs.take(n)));
+}
+
+function skipMethod(this: TypedAction, n: number): TypedAction {
+  return chain(toAction(this), toAction(IteratorNs.skip(n)));
+}
+
 function bindMethod(
   this: TypedAction,
   bindings: Action[],
@@ -979,6 +1015,9 @@ export function typedAction<In = unknown, Out = unknown>(
       collect: { value: collectMethod, configurable: true },
       fold: { value: foldMethod, configurable: true },
       isEmpty: { value: isEmptyMethod, configurable: true },
+      slice: { value: sliceMethod, configurable: true },
+      take: { value: takeMethod, configurable: true },
+      skip: { value: skipMethod, configurable: true },
       or: { value: orMethod, configurable: true },
       iterate: { value: iterateMethod, configurable: true },
       flatMap: { value: flatMapMethod, configurable: true },
