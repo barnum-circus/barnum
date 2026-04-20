@@ -6,9 +6,11 @@ import {
   type Result as ResultT,
   type TypedAction,
   toAction,
+  typedAction,
   branch,
   branchFamily,
   forEach,
+  loop,
 } from "./ast.js";
 import { chain } from "./chain.js";
 import {
@@ -16,7 +18,10 @@ import {
   drop,
   flatten,
   getField,
+  getIndex,
   identity,
+  splitFirst,
+  splitLast,
   tag,
 } from "./builtins/index.js";
 import { all } from "./all.js";
@@ -121,5 +126,89 @@ export const Iterator = {
           }),
       ),
     );
+  },
+
+  /** Head/tail decomposition. `Iterator<T> → Option<[T, Iterator<T>]>` */
+  splitFirst<TElement>(): TypedAction<
+    IteratorT<TElement>,
+    OptionT<[TElement, IteratorT<TElement>]>
+  > {
+    return Iterator.collect<TElement>()
+      .then(splitFirst<TElement>())
+      .then(
+        Option.map(
+          all(
+            getIndex<[TElement, TElement[]], 0>(0).unwrap(),
+            getIndex<[TElement, TElement[]], 1>(1).unwrap().iterate(),
+          ),
+        ),
+      );
+  },
+
+  /** Init/last decomposition. `Iterator<T> → Option<[Iterator<T>, T]>` */
+  splitLast<TElement>(): TypedAction<
+    IteratorT<TElement>,
+    OptionT<[IteratorT<TElement>, TElement]>
+  > {
+    return Iterator.collect<TElement>()
+      .then(splitLast<TElement>())
+      .then(
+        Option.map(
+          all(
+            getIndex<[TElement[], TElement], 0>(0).unwrap().iterate(),
+            getIndex<[TElement[], TElement], 1>(1).unwrap(),
+          ),
+        ),
+      );
+  },
+
+  /** Fold elements with accumulator. `Iterator<T> → TAcc` */
+  fold<TElement, TAcc>(
+    init: Pipeable<void, TAcc>,
+    body: Pipeable<[TAcc, TElement], TAcc>,
+  ): TypedAction<IteratorT<TElement>, TAcc> {
+    return Iterator.collect<TElement>().then(
+      bindInput<TElement[]>((elements) =>
+        all(init, elements).then(
+          loop<TAcc, [TAcc, TElement[]]>((recur, done) => {
+            // Re-wrap done to bridge VoidToNull<TAcc> → TAcc (TypeScript
+            // can't simplify the conditional type for generic TAcc).
+            const doneTAcc = typedAction<TAcc, never>(toAction(done));
+
+            // Wrap return with typedAction — branch output inference fails
+            // for generic types inside loop bodies.
+            return typedAction<[TAcc, TElement[]], never>(
+              toAction(
+                bindInput<[TAcc, TElement[]]>((state) => {
+                  const acc = state.getIndex(0).unwrap();
+                  const remaining = state.getIndex(1).unwrap();
+
+                  return remaining.splitFirst().branch({
+                    None: acc.then(doneTAcc),
+                    Some: bindInput<[TElement, TElement[]]>((headTail) => {
+                      const head = headTail.getIndex(0).unwrap();
+                      const tail = headTail.getIndex(1).unwrap();
+
+                      return all(acc, head)
+                        .then(body)
+                        .then(
+                          bindInput<TAcc>((newAcc) =>
+                            all(newAcc, tail).then(recur),
+                          ),
+                        );
+                    }),
+                  });
+                }),
+              ),
+            );
+          }),
+        ),
+      ),
+    );
+  },
+
+  /** Check if iterator is empty. `Iterator<T> → boolean` */
+  isEmpty<TElement>(): TypedAction<IteratorT<TElement>, boolean> {
+    return Iterator.collect<TElement>().splitFirst().isNone();
   },
 } as const;

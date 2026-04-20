@@ -239,10 +239,18 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
   ): TypedAction<In, Pick<Out, TKeys[number]>>;
+  /** Head/tail decomposition for Iterator. `Iterator<T> → Option<[T, Iterator<T>]>` */
+  splitFirst<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+  ): TypedAction<TIn, Option<[TElement, Iterator<TElement>]>>;
   /** Head/tail decomposition. Only callable when Out is TElement[]. */
   splitFirst<TIn, TElement>(
     this: TypedAction<TIn, TElement[]>,
   ): TypedAction<TIn, Option<[TElement, TElement[]]>>;
+  /** Init/last decomposition for Iterator. `Iterator<T> → Option<[Iterator<T>, T]>` */
+  splitLast<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+  ): TypedAction<TIn, Option<[Iterator<TElement>, TElement]>>;
   /** Init/last decomposition. Only callable when Out is TElement[]. */
   splitLast<TIn, TElement>(
     this: TypedAction<TIn, TElement[]>,
@@ -419,6 +427,18 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   collect<TIn, TElement>(
     this: TypedAction<TIn, Iterator<TElement>>,
   ): TypedAction<TIn, TElement[]>;
+
+  /** Fold elements with accumulator. `Iterator<T> → TAcc` */
+  fold<TIn, TElement, TAcc>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+    init: Pipeable<void, TAcc>,
+    body: Pipeable<[TAcc, TElement], TAcc>,
+  ): TypedAction<TIn, TAcc>;
+
+  /** Check if iterator is empty. `Iterator<T> → boolean` */
+  isEmpty<TIn, TElement>(
+    this: TypedAction<TIn, Iterator<TElement>>,
+  ): TypedAction<TIn, boolean>;
 
   /** Bind concurrent values as VarRefs available throughout the body. */
   bind<TBindings extends Action[], TOut>(
@@ -638,11 +658,27 @@ function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
 }
 
 function splitFirstMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(splitFirst()));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Iterator: IteratorNs.splitFirst(),
+        Array: splitFirst(),
+      }),
+    ),
+  );
 }
 
 function splitLastMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(splitLast()));
+  return chain(
+    toAction(this),
+    toAction(
+      branchFamily({
+        Iterator: IteratorNs.splitLast(),
+        Array: splitLast(),
+      }),
+    ),
+  );
 }
 
 // --- Shared postfix methods (Option + Result) — dispatch via branchFamily ---
@@ -882,6 +918,18 @@ function collectMethod(this: TypedAction): TypedAction {
   );
 }
 
+function foldMethod(
+  this: TypedAction,
+  init: Action,
+  body: Action,
+): TypedAction {
+  return chain(toAction(this), toAction(IteratorNs.fold(init, body)));
+}
+
+function isEmptyMethod(this: TypedAction): TypedAction {
+  return chain(toAction(this), toAction(IteratorNs.isEmpty()));
+}
+
 function bindMethod(
   this: TypedAction,
   bindings: Action[],
@@ -932,6 +980,8 @@ export function typedAction<In = unknown, Out = unknown>(
       isNone: { value: isNoneMethod, configurable: true },
       asOption: { value: asOptionMethod, configurable: true },
       collect: { value: collectMethod, configurable: true },
+      fold: { value: foldMethod, configurable: true },
+      isEmpty: { value: isEmptyMethod, configurable: true },
       or: { value: orMethod, configurable: true },
       iterate: { value: iterateMethod, configurable: true },
       flatMap: { value: flatMapMethod, configurable: true },
