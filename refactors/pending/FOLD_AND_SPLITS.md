@@ -1,56 +1,51 @@
-# Scan and Splits
+# Fold and Splits
 
-Concrete implementations for: scan, Iterator.splitFirst, Iterator.splitLast, splitFirstN, splitLastN. Plus a demo showing splitFirst as a sequential iteration pattern.
+Concrete implementations for: fold, Iterator.splitFirst, Iterator.splitLast, splitFirstN, splitLastN. Plus a demo showing splitFirst as a sequential iteration pattern.
 
 ---
 
-## 1. Scan — composed from loop + splitFirst
+## 1. Fold — composed from loop + splitFirst
 
-`scan(init, body)`: `Iterator<T> → Iterator<TAcc>` where `body: [TAcc, T] → TAcc`.
+`fold(init, body)`: `Iterator<T> → TAcc` where `body: [TAcc, T] → TAcc`.
 
-Threads an accumulator through elements one at a time, collecting each accumulator value. The accumulator IS the output — no separate output type. Composed from `loop` + `splitFirst` + `bindInput`. No new AST nodes.
+Threads an accumulator through elements one at a time, returns the final accumulator. Composed from `loop` + `splitFirst` + `bindInput`. No new AST nodes.
 
 ### Implementation
 
 ```typescript
 // In Iterator namespace:
-scan<TElement, TAcc>(
+fold<TElement, TAcc>(
   init: Pipeable<void, TAcc>,
   body: Pipeable<[TAcc, TElement], TAcc>,
-): TypedAction<IteratorT<TElement>, IteratorT<TAcc>> {
-  return Iterator.collect<TElement>()        // Iterator<T> → T[]
+): TypedAction<IteratorT<TElement>, TAcc> {
+  return Iterator.collect<TElement>()
     .then(bindInput<TElement[]>(elements =>
-      all(init, elements, constant<TAcc[]>([]))
-        // State: [TAcc, TElement[], TAcc[]], Done: TAcc[]
-        .then(loop<TAcc[], [TAcc, TElement[], TAcc[]]>((recur, done) =>
-          bindInput<[TAcc, TElement[], TAcc[]]>(state => {
+      all(init, elements)
+        .then(loop<TAcc, [TAcc, TElement[]]>((recur, done) =>
+          bindInput<[TAcc, TElement[]]>(state => {
             const acc = state.getIndex(0).unwrap();
             const remaining = state.getIndex(1).unwrap();
-            const outputs = state.getIndex(2).unwrap();
 
             return remaining.splitFirst().branch({
-              None: outputs.then(done),
+              None: acc.then(done),
               Some: bindInput<[TElement, TElement[]]>(headTail => {
                 const head = headTail.getIndex(0).unwrap();
                 const tail = headTail.getIndex(1).unwrap();
 
-                return all(acc, head)            // [TAcc, TElement]
-                  .then(body)                    // TAcc
-                  .then(bindInput<TAcc>(newAcc => {
-                    const newOutputs = all(outputs, newAcc.then(wrapInArray<TAcc>()))
-                      .then(flatten<TAcc>());
-                    return all(newAcc, tail, newOutputs).then(recur);
-                  }));
+                return all(acc, head)
+                  .then(body)
+                  .then(bindInput<TAcc>(newAcc =>
+                    all(newAcc, tail).then(recur),
+                  ));
               }),
             });
           }),
         )),
-    ))
-    .then(Iterator.fromArray<TAcc>()) as TypedAction<IteratorT<TElement>, IteratorT<TAcc>>;
+    ));
 },
 ```
 
-State threaded through loop: `[TAcc, TElement[], TAcc[]]` — accumulator, remaining elements, collected outputs. Each iteration: `splitFirst(remaining)` → `None` means done, `Some([head, tail])` means run body (returns new accumulator), append it to outputs, recur. Array append via `all(existing, wrapInArray(new)).flatten()`.
+State threaded through loop: `[TAcc, TElement[]]` — accumulator and remaining elements. Each iteration: `splitFirst(remaining)` → `None` means done (return acc), `Some([head, tail])` means run body, recur with new acc and tail. No output collection — just returns the final accumulator.
 
 ---
 
@@ -74,7 +69,7 @@ splitFirst<TElement>(): TypedAction<
         getIndex(0).unwrap(),                                    // → T
         getIndex(1).unwrap().then(Iterator.fromArray()),         // → Iterator<T>
       ),
-    )) as TypedAction<IteratorT<TElement>, OptionT<[TElement, IteratorT<TElement>]>>;
+    ));
 },
 ```
 
@@ -109,7 +104,7 @@ splitLast<TElement>(): TypedAction<
         getIndex(0).unwrap().then(Iterator.fromArray()),         // → Iterator<T>
         getIndex(1).unwrap(),                                    // → T
       ),
-    )) as TypedAction<IteratorT<TElement>, OptionT<[IteratorT<TElement>, TElement]>>;
+    ));
 },
 ```
 
@@ -327,7 +322,7 @@ Each service completes before the next starts. With `.iterate().map(pipe(deployS
 1. Add to iterator.ts
 2. Change postfix to branchFamily dispatch
 
-### Phase C: Iterator.scan (TypeScript only)
+### Phase C: Iterator.fold (TypeScript only)
 
 Depends on Phase B.
 

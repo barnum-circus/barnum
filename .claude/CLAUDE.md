@@ -63,7 +63,7 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 
 ## Type safety
 
-- **No `as` casts to fix type inference.** If a return type doesn't match, pass explicit type parameters to the leaf combinators so TypeScript infers the correct types. `as TypedAction<...>` silences the compiler instead of letting it catch real errors. Explicit type params (`Option.none<U>()`, `identity<T>()`) let inference propagate correctly.
+- **No `as` casts. Period.** Not to fix type inference, not for convenience, not ever. If a return type doesn't match, pass explicit type parameters to the leaf combinators so TypeScript infers the correct types. Use `.then()` chains instead of `chain()` — `.then()` preserves type parameters while `chain()` loses them. `as TypedAction<...>` silences the compiler instead of letting it catch real errors.
 
 ## Core Values
 
