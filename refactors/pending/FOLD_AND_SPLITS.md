@@ -101,7 +101,7 @@ splitLast<TElement>(): TypedAction<
     .then(splitLast())                                          // → Option<[T[], T]>
     .then(Option.map(
       all(
-        getIndex(0).unwrap().then(Iterator.fromArray()),         // → Iterator<T>
+        getIndex(0).unwrap().iterate(),                          // → Iterator<T>
         getIndex(1).unwrap(),                                    // → T
       ),
     ));
