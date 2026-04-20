@@ -1,12 +1,14 @@
 # Take and Skip
 
-New `Take` and `Skip` builtins for array slicing, exposed as `Iterator.take(n)` and `Iterator.skip(n)` postfix methods.
+A single `Slice` builtin for array slicing, exposed as `Iterator.take(n)` and `Iterator.skip(n)` postfix methods.
 
 ---
 
 ## Motivation
 
 `take(n)` and `skip(n)` are fundamental slicing operations. They appear in the API surface audit as proposed (medium priority) and in ITERATOR_METHODS.md under "Limiting & Slicing." Both are trivial array slice operations on our eager iterator model — no laziness, no short-circuiting, just `input[..n]` and `input[n..]`.
+
+Both operations are `input[start..end]` with different defaults. One builtin handles both.
 
 ---
 
@@ -18,64 +20,56 @@ No slicing builtins exist. The closest operations are `SplitFirst` and `SplitLas
 
 ## Design
 
-### New Rust builtins
+### New Rust builtin
 
-Two new `BuiltinKind` variants. Both operate on arrays and clamp `n` to the array length (no panics on out-of-bounds).
+One new `BuiltinKind` variant: `Slice`. Operates on arrays with `start` and `end` indices, both clamped to array length.
 
-**`Take`** — `T[] → T[]`
+- `take(n)` → `Slice { start: 0, end: Some(n) }`
+- `skip(n)` → `Slice { start: n, end: None }`
+
+`end: None` means "to the end of the array."
 
 ```rust
-BuiltinKind::Take { n } => {
+BuiltinKind::Slice { start, end } => {
     let Value::Array(items) = input else {
         return Err(BuiltinError::TypeMismatch {
-            builtin: "Take",
+            builtin: "Slice",
             expected: "array",
             actual: input.clone(),
         });
     };
-    let end = n.min(items.len());
-    Ok(Value::Array(items[..end].to_vec()))
+    let len = items.len();
+    let s = start.min(len);
+    let e = end.map_or(len, |n| n.min(len));
+    // If start >= end after clamping, return empty array
+    if s >= e {
+        Ok(Value::Array(vec![]))
+    } else {
+        Ok(Value::Array(items[s..e].to_vec()))
+    }
 }
 ```
 
-**`Skip`** — `T[] → T[]`
-
-```rust
-BuiltinKind::Skip { n } => {
-    let Value::Array(items) = input else {
-        return Err(BuiltinError::TypeMismatch {
-            builtin: "Skip",
-            expected: "array",
-            actual: input.clone(),
-        });
-    };
-    let start = n.min(items.len());
-    Ok(Value::Array(items[start..].to_vec()))
-}
-```
-
-### AST definitions
+### AST definition
 
 **Rust** (`crates/barnum_ast/src/lib.rs`, in `BuiltinKind` enum):
 
 ```rust
-/// First `n` elements of an array. Clamps to array length.
-Take {
-    /// Number of elements to take.
-    n: usize,
-},
-/// Drop the first `n` elements of an array. Clamps to array length.
-Skip {
-    /// Number of elements to skip.
-    n: usize,
+/// Slice an array from `start` to `end`. Both clamped to array length.
+/// `end: None` means "to the end of the array."
+Slice {
+    /// Start index (inclusive). Clamped to array length.
+    start: usize,
+    /// End index (exclusive). `None` means end of array. Clamped to array length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    end: Option<usize>,
 },
 ```
 
 **TypeScript** (`libs/barnum/src/ast.ts`, in `BuiltinKind` type):
 
 ```typescript
-| { kind: "Take"; n: number }
-| { kind: "Skip"; n: number }
+| { kind: "Slice"; start: number; end?: number }
 ```
 
 ### TypeScript builtin constructors
@@ -83,22 +77,35 @@ Skip {
 **`libs/barnum/src/builtins/array.ts`:**
 
 ```typescript
-export function take<TElement>(n: number): TypedAction<TElement[], TElement[]> {
+export function slice<TElement>(
+  start: number,
+  end?: number,
+): TypedAction<TElement[], TElement[]> {
   return typedAction({
     kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Take", n } },
-  });
-}
-
-export function skip<TElement>(n: number): TypedAction<TElement[], TElement[]> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Skip", n } },
+    handler: {
+      kind: "Builtin",
+      builtin: end !== undefined
+        ? { kind: "Slice", start, end }
+        : { kind: "Slice", start },
+    },
   });
 }
 ```
 
-Re-export from `builtins/index.ts`.
+`take` and `skip` are thin wrappers:
+
+```typescript
+export function take<TElement>(n: number): TypedAction<TElement[], TElement[]> {
+  return slice(0, n);
+}
+
+export function skip<TElement>(n: number): TypedAction<TElement[], TElement[]> {
+  return slice(n);
+}
+```
+
+Re-export all three from `builtins/index.ts`.
 
 ### Iterator namespace methods
 
@@ -122,7 +129,7 @@ skip<TElement>(n: number): TypedAction<IteratorT<TElement>, IteratorT<TElement>>
 },
 ```
 
-Pattern: `collect → builtin → fromArray`. Same as `map` (unwrap, transform, re-wrap).
+Pattern: `collect → builtin → fromArray`. Same as `map` (unwrap, transform, re-wrap). Both delegate to `Slice` through the `take`/`skip` array builtin wrappers.
 
 ### Postfix methods
 
@@ -160,94 +167,118 @@ skip(n: number): TypedAction;
 
 ## Edge cases
 
-| Input | `take(n)` | `skip(n)` |
-|-------|-----------|-----------|
-| `n = 0` | `[]` | full array |
-| `n >= length` | full array | `[]` |
-| empty array | `[]` | `[]` |
+All handled by clamping `start` and `end` to array length, and returning `[]` when `start >= end`.
 
-All handled by the `min` clamp — no special-casing needed.
+| Builtin | Equivalent | Result |
+|---------|-----------|--------|
+| `Slice { start: 0, end: Some(0) }` | `take(0)` | `[]` |
+| `Slice { start: 0, end: Some(n) }` where `n >= len` | `take(big)` | full array |
+| `Slice { start: n, end: None }` where `n >= len` | `skip(big)` | `[]` |
+| `Slice { start: 3, end: Some(1) }` | start past end | `[]` |
+| any slice on `[]` | — | `[]` |
 
 ---
 
 ## Tasks
 
-### Task 1: Rust builtins
+### Task 1: Rust builtin
 
-**1.1: AST variants** — `crates/barnum_ast/src/lib.rs`
+**1.1: AST variant** — `crates/barnum_ast/src/lib.rs`
 
-Add `Take { n: usize }` and `Skip { n: usize }` to `BuiltinKind`.
+Add `Slice { start: usize, end: Option<usize> }` to `BuiltinKind`.
 
 **1.2: Builtin execution** — `crates/barnum_builtins/src/lib.rs`
 
-Add match arms for `Take` and `Skip` as shown in the Design section.
+Add match arm for `Slice` as shown in the Design section.
 
 **1.3: Rust tests** — `crates/barnum_builtins/src/lib.rs`
 
 ```rust
 #[tokio::test]
-async fn take_returns_first_n_elements() {
+async fn slice_with_end() {
     let input = json!([1, 2, 3, 4, 5]);
-    let result = execute_builtin(&BuiltinKind::Take { n: 3 }, &input).await;
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 0, end: Some(3) },
+        &input,
+    ).await;
     assert_eq!(result.unwrap(), json!([1, 2, 3]));
 }
 
 #[tokio::test]
-async fn take_clamps_to_array_length() {
-    let input = json!([1, 2]);
-    let result = execute_builtin(&BuiltinKind::Take { n: 10 }, &input).await;
-    assert_eq!(result.unwrap(), json!([1, 2]));
-}
-
-#[tokio::test]
-async fn take_zero_returns_empty() {
-    let input = json!([1, 2, 3]);
-    let result = execute_builtin(&BuiltinKind::Take { n: 0 }, &input).await;
-    assert_eq!(result.unwrap(), json!([]));
-}
-
-#[tokio::test]
-async fn take_empty_array() {
-    let result = execute_builtin(&BuiltinKind::Take { n: 3 }, &json!([])).await;
-    assert_eq!(result.unwrap(), json!([]));
-}
-
-#[tokio::test]
-async fn take_rejects_non_array() {
-    let result = execute_builtin(&BuiltinKind::Take { n: 1 }, &json!("not array")).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn skip_drops_first_n_elements() {
+async fn slice_without_end() {
     let input = json!([1, 2, 3, 4, 5]);
-    let result = execute_builtin(&BuiltinKind::Skip { n: 2 }, &input).await;
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 2, end: None },
+        &input,
+    ).await;
     assert_eq!(result.unwrap(), json!([3, 4, 5]));
 }
 
 #[tokio::test]
-async fn skip_clamps_to_array_length() {
+async fn slice_middle() {
+    let input = json!([1, 2, 3, 4, 5]);
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 1, end: Some(4) },
+        &input,
+    ).await;
+    assert_eq!(result.unwrap(), json!([2, 3, 4]));
+}
+
+#[tokio::test]
+async fn slice_clamps_end_to_array_length() {
     let input = json!([1, 2]);
-    let result = execute_builtin(&BuiltinKind::Skip { n: 10 }, &input).await;
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 0, end: Some(10) },
+        &input,
+    ).await;
+    assert_eq!(result.unwrap(), json!([1, 2]));
+}
+
+#[tokio::test]
+async fn slice_clamps_start_to_array_length() {
+    let input = json!([1, 2]);
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 10, end: None },
+        &input,
+    ).await;
     assert_eq!(result.unwrap(), json!([]));
 }
 
 #[tokio::test]
-async fn skip_zero_returns_full_array() {
+async fn slice_start_at_zero_end_at_zero() {
     let input = json!([1, 2, 3]);
-    let result = execute_builtin(&BuiltinKind::Skip { n: 0 }, &input).await;
-    assert_eq!(result.unwrap(), json!([1, 2, 3]));
-}
-
-#[tokio::test]
-async fn skip_empty_array() {
-    let result = execute_builtin(&BuiltinKind::Skip { n: 3 }, &json!([])).await;
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 0, end: Some(0) },
+        &input,
+    ).await;
     assert_eq!(result.unwrap(), json!([]));
 }
 
 #[tokio::test]
-async fn skip_rejects_non_array() {
-    let result = execute_builtin(&BuiltinKind::Skip { n: 1 }, &json!("not array")).await;
+async fn slice_start_past_end_returns_empty() {
+    let input = json!([1, 2, 3]);
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 3, end: Some(1) },
+        &input,
+    ).await;
+    assert_eq!(result.unwrap(), json!([]));
+}
+
+#[tokio::test]
+async fn slice_empty_array() {
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 0, end: Some(3) },
+        &json!([]),
+    ).await;
+    assert_eq!(result.unwrap(), json!([]));
+}
+
+#[tokio::test]
+async fn slice_rejects_non_array() {
+    let result = execute_builtin(
+        &BuiltinKind::Slice { start: 0, end: Some(1) },
+        &json!("not array"),
+    ).await;
     assert!(result.is_err());
 }
 ```
@@ -256,19 +287,19 @@ async fn skip_rejects_non_array() {
 
 **2.1: BuiltinKind type** — `libs/barnum/src/ast.ts`
 
-Add `| { kind: "Take"; n: number }` and `| { kind: "Skip"; n: number }` to the `BuiltinKind` union.
+Add `| { kind: "Slice"; start: number; end?: number }` to the `BuiltinKind` union.
 
 **2.2: Builtin constructors** — `libs/barnum/src/builtins/array.ts`
 
-Add `take` and `skip` functions as shown in the Design section.
+Add `slice`, `take`, and `skip` functions as shown in the Design section.
 
 **2.3: Re-export** — `libs/barnum/src/builtins/index.ts`
 
-Add `take` and `skip` to the barrel export.
+Add `slice`, `take`, and `skip` to the barrel export.
 
 **2.4: Iterator methods** — `libs/barnum/src/iterator.ts`
 
-Add `take` and `skip` to the `Iterator` namespace object. Import `take` and `skip` from `./builtins/index.js` (aliased to avoid name collision with Iterator methods: `import { take as takeBuiltin, skip as skipBuiltin } from "./builtins/index.js"`).
+Add `take` and `skip` to the `Iterator` namespace object. Import `take` and `skip` from `./builtins/index.js` (aliased to avoid name collision with the Iterator methods: `import { take as takeBuiltin, skip as skipBuiltin } from "./builtins/index.js"`).
 
 **2.5: Postfix methods** — `libs/barnum/src/ast.ts`
 
