@@ -1,6 +1,6 @@
 # Take and Skip
 
-A single `Slice` builtin for array slicing, exposed as `Iterator.take(n)` and `Iterator.skip(n)` postfix methods.
+A single `Slice` builtin for array slicing, exposed as `Iterator.take(n)`, `Iterator.skip(n)`, and `Iterator.slice(start, end?)` postfix methods.
 
 ---
 
@@ -112,30 +112,36 @@ Re-export all three from `builtins/index.ts`.
 **`libs/barnum/src/iterator.ts`:**
 
 ```typescript
-/** First n elements. `Iterator<T> → Iterator<T>` */
-take<TElement>(n: number): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
+/** Slice elements from start to end. `Iterator<T> → Iterator<T>` */
+slice<TElement>(start: number, end?: number): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
   return chain(
     Iterator.collect<TElement>(),
-    chain(toAction(take<TElement>(n)), Iterator.fromArray<TElement>()),
+    chain(toAction(sliceBuiltin<TElement>(start, end)), Iterator.fromArray<TElement>()),
   );
+},
+
+/** First n elements. `Iterator<T> → Iterator<T>` */
+take<TElement>(n: number): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
+  return Iterator.slice(0, n);
 },
 
 /** Drop first n elements. `Iterator<T> → Iterator<T>` */
 skip<TElement>(n: number): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
-  return chain(
-    Iterator.collect<TElement>(),
-    chain(toAction(skip<TElement>(n)), Iterator.fromArray<TElement>()),
-  );
+  return Iterator.slice(n);
 },
 ```
 
-Pattern: `collect → builtin → fromArray`. Same as `map` (unwrap, transform, re-wrap). Both delegate to `Slice` through the `take`/`skip` array builtin wrappers.
+Pattern: `collect → builtin → fromArray`. Same as `map` (unwrap, transform, re-wrap). `take` and `skip` delegate to `slice`, which uses the `Slice` builtin directly.
 
 ### Postfix methods
 
 **`libs/barnum/src/ast.ts`:**
 
 ```typescript
+function sliceMethod(this: TypedAction, start: number, end?: number): TypedAction {
+  return chain(toAction(this), toAction(IteratorNs.slice(start, end)));
+}
+
 function takeMethod(this: TypedAction, n: number): TypedAction {
   return chain(toAction(this), toAction(IteratorNs.take(n)));
 }
@@ -148,17 +154,19 @@ function skipMethod(this: TypedAction, n: number): TypedAction {
 Register in `typedAction`'s property descriptor block:
 
 ```typescript
+slice: { value: sliceMethod, configurable: true },
 take: { value: takeMethod, configurable: true },
 skip: { value: skipMethod, configurable: true },
 ```
 
-No `branchFamily` dispatch — take/skip only make sense on Iterator, not Option/Result. Direct delegation to `Iterator.take(n)` / `Iterator.skip(n)`.
+No `branchFamily` dispatch — these only make sense on Iterator, not Option/Result.
 
 ### Type declarations
 
 Add to the `TypedAction` interface in `ast.ts`:
 
 ```typescript
+slice(start: number, end?: number): TypedAction;
 take(n: number): TypedAction;
 skip(n: number): TypedAction;
 ```
@@ -299,21 +307,28 @@ Add `slice`, `take`, and `skip` to the barrel export.
 
 **2.4: Iterator methods** — `libs/barnum/src/iterator.ts`
 
-Add `take` and `skip` to the `Iterator` namespace object. Import `take` and `skip` from `./builtins/index.js` (aliased to avoid name collision with the Iterator methods: `import { take as takeBuiltin, skip as skipBuiltin } from "./builtins/index.js"`).
+Add `slice`, `take`, and `skip` to the `Iterator` namespace object. Import `slice` from `./builtins/index.js` (aliased as `sliceBuiltin` to avoid name collision with the Iterator method).
 
 **2.5: Postfix methods** — `libs/barnum/src/ast.ts`
 
-Add `takeMethod`, `skipMethod` functions. Register in `typedAction` property descriptors. Add `take(n)` and `skip(n)` to the `TypedAction` interface.
+Add `sliceMethod`, `takeMethod`, `skipMethod` functions. Register in `typedAction` property descriptors. Add `slice(start, end?)`, `take(n)`, and `skip(n)` to the `TypedAction` interface.
 
 **2.6: Public export** — `libs/barnum/src/pipeline.ts` (or wherever the public barrel is)
 
-Export `Iterator.take` and `Iterator.skip` are already accessible through the `Iterator` namespace. The `take`/`skip` array builtins should also be exported if we want them usable on raw arrays.
+`Iterator.slice`, `Iterator.take`, and `Iterator.skip` are already accessible through the `Iterator` namespace. The `slice`/`take`/`skip` array builtins should also be exported if we want them usable on raw arrays.
 
 ### Task 3: Execution tests
 
 E2E tests through `runPipeline` exercising the full path (TypeScript AST → Rust execution → result).
 
 ```typescript
+test("Iterator.slice extracts a range", async () => {
+  const result = await runPipeline(
+    pipe(constant([1, 2, 3, 4, 5]), identity<number[]>().iterate().slice(1, 4).collect()),
+  );
+  expect(result).toEqual([2, 3, 4]);
+});
+
 test("Iterator.take returns first n elements", async () => {
   const result = await runPipeline(
     pipe(constant([1, 2, 3, 4, 5]), identity<number[]>().iterate().take(3).collect()),
