@@ -47,6 +47,10 @@ fold<TElement, TAcc>(
 
 State threaded through loop: `[TAcc, TElement[]]` — accumulator and remaining elements. Each iteration: `splitFirst(remaining)` → `None` means done (return acc), `Some([head, tail])` means run body, recur with new acc and tail. No output collection — just returns the final accumulator.
 
+**Implementation note:** The actual code requires two `typedAction()` re-wrappings to work around TypeScript inference limitations:
+1. `done` has type `TypedAction<VoidToNull<TAcc>, never>` — the conditional type can't simplify for generic `TAcc`, so it's re-wrapped as `typedAction<TAcc, never>(toAction(done))`.
+2. The loop body's return type infers as `any` due to `bindInput`'s `TOut = any` default cascading through `branch`. The entire body is wrapped with `typedAction<[TAcc, TElement[]], never>(...)` to provide the correct type.
+
 ---
 
 ## 2. Iterator.splitFirst
@@ -130,6 +134,8 @@ loop:
 
 `bindInput` is essential — it captures the `[head, tail]` pair so both components remain accessible after the head is consumed by a handler.
 
+**Implementation note:** `loop<null, Iterator<string>>` uses `null` (not `void`) for TBreak because `done` has type `TypedAction<VoidToNull<TBreak>, never>` — `VoidToNull<void>` is `null`, so the None branch must produce `null` via `constant<null>(null).then(done)`. The `bindInput<..., never>` on the Some branch explicitly specifies the output type to prevent `TOut = any` from poisoning branch inference.
+
 ### Demo: deploy services in dependency order
 
 Services must be deployed one at a time in dependency order. Each deployment must complete (and be verified) before the next one starts. This is the classic case where `.iterate().map(deploy)` would break things — parallel deploys would violate dependency ordering.
@@ -200,12 +206,13 @@ export const verifyService = createHandler(
  */
 
 import {
+  type Iterator,
   runPipeline,
   pipe,
   loop,
   drop,
+  constant,
   identity,
-  Iterator,
   bindInput,
 } from "@barnum/barnum/pipeline";
 import { getServices, deployService, verifyService } from "./handlers/deploy";
@@ -214,27 +221,26 @@ console.error("=== Sequential deploy demo ===\n");
 
 runPipeline(
   pipe(
-    getServices,                             // → string[]
-    identity<string[]>().iterate(),          // → Iterator<string>
+    getServices,
+    identity<string[]>().iterate(),
 
-    // Process one service at a time in order
-    loop<void, Iterator<string>>((recur, done) =>
-      Iterator.splitFirst<string>().branch({
-        // All services deployed
-        None: done,
+    loop<null, Iterator<string>>((recur, done) =>
+      identity<Iterator<string>>()
+        .splitFirst()
+        .branch({
+          None: constant<null>(null).then(done),
 
-        // Deploy head, then continue with tail
-        Some: bindInput<[string, Iterator<string>]>(pair =>
-          pipe(
-            pair.getIndex(0).unwrap(),       // current service name
-            deployService,                   // deploy it (waits for completion)
-            verifyService,                   // verify it's healthy
-            drop,                            // discard service name
-            pair.getIndex(1).unwrap(),       // remaining services
-            recur,                           // next service
+          Some: bindInput<[string, Iterator<string>], never>((pair) =>
+            pipe(
+              pair.getIndex(0).unwrap(),
+              deployService,
+              verifyService,
+              drop,
+              pair.getIndex(1).unwrap(),
+              recur,
+            ),
           ),
-        ),
-      }),
+        }),
     ),
   ),
 );
@@ -262,20 +268,10 @@ Each service completes before the next starts. With `.iterate().map(pipe(deployS
 
 ---
 
-## 5. Implementation order
+## 5. Implementation status
 
-### Phase A: Iterator.splitFirst / Iterator.splitLast (TypeScript only)
+All phases complete.
 
-1. Add to iterator.ts
-2. Change postfix to branchFamily dispatch
-
-### Phase B: Iterator.fold (TypeScript only)
-
-Depends on Phase A.
-
-1. Add to iterator.ts (loop + splitFirst composition)
-2. Wire postfix method
-
-### Phase C: Sequential processing demo
-
-Depends on Phase A.
+- **Phase A: Iterator.splitFirst / splitLast** — `libs/barnum/src/iterator.ts` + branchFamily dispatch in `ast.ts`
+- **Phase B: Iterator.fold + isEmpty** — `libs/barnum/src/iterator.ts` + postfix methods in `ast.ts`
+- **Phase C: Sequential deploy demo** — `demos/sequential-deploy/`
