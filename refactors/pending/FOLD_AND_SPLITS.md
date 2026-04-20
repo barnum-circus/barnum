@@ -114,6 +114,8 @@ Postfix: same branchFamily pattern as splitFirst.
 
 ## 4. splitFirstN / splitLastN — new builtins
 
+Two separate builtins for now. Once we have `length` and math builtins, these can be unified into a single `splitAt` builtin.
+
 ### splitFirstN
 
 `T[] → [T[], T[]]` — splits at position n from the start.
