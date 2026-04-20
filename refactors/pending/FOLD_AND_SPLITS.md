@@ -67,7 +67,7 @@ splitFirst<TElement>(): TypedAction<
     .then(Option.map(
       all(
         getIndex(0).unwrap(),                                    // → T
-        getIndex(1).unwrap().then(Iterator.fromArray()),         // → Iterator<T>
+        getIndex(1).unwrap().iterate(),                          // → Iterator<T>
       ),
     ));
 },
