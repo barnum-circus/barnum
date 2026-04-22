@@ -29,18 +29,24 @@ type BuildResult = {
 // Tagged unions (sum types) — the { kind, value } convention from the TS DSL
 // is the compilation target, not the surface syntax. In .barn files, variants
 // are declared with standard algebraic data type syntax.
+//
+// Compilation target uses namespaced kind strings: { kind: "Shape.Circle", value: ... }
+// The enum name is the namespace prefix, dot-separated from the variant name.
 type Shape =
   | Circle(Float)
   | Rect({ width: Float, height: Float })
   | Point                                   // unit variant (value = void)
 
 // Built-ins, always in scope:
-//   Option<T>     = Some(T) | None
-//   Result<T, E>  = Ok(T) | Err(E)
+//   Option<T>      = Some(T) | None
+//   Result<T, E>   = Ok(T) | Err(E)
+//   Iterator<T>    = Iterator(T[])          // eager, backed by array
 //   LoopResult<C, B> = Continue(C) | Break(B)
 ```
 
 Types are structural for objects and nominal for tagged unions. An object `{ path: String, content: String }` matches any handler expecting those fields. A tagged union `Shape` is distinct from another union with the same variants — the union name matters for exhaustiveness checking.
+
+The compilation target for tagged unions uses **namespaced kind strings**: `Shape.Circle`, not `Circle`. The enum name is the namespace prefix. This enables two-level dispatch (see "branchFamily" in the desugaring section) — the engine can route first on the enum prefix, then on the variant, which is how polymorphic methods like `.map()` and `.unwrapOr()` dispatch across Option/Result/Iterator without runtime metadata.
 
 ### Handler declarations
 
@@ -82,20 +88,49 @@ The pipeline is the basic unit of composition. Every workflow is a pipeline.
 
 ### Builtins
 
-Builtins are the ALU operations that run inline in Rust. In the native syntax, most have dedicated syntax rather than function calls.
+Builtins are the ALU operations that run inline in Rust (no subprocess). The full list of builtins in the engine:
+
+| Builtin | Description | TS DSL equivalent |
+|---|---|---|
+| **Constant** | Return a fixed value, ignoring input | `constant(value)` |
+| **Identity** | Return input unchanged | `identity()` |
+| **Drop** | Discard input, return null | `drop()` |
+| **GetField** | Extract a named field from an object | `.getField("name")` |
+| **GetIndex** | Extract element by index, returns **Option\<T\>** | `.getIndex(n)` |
+| **Pick** | Select named fields from object | `.pick("a", "b")` (composed) |
+| **WrapInField** | Wrap input as `{ field: input }` | `.wrapInField("field")` |
+| **Merge** | Merge array of objects into single object | `merge()` |
+| **Flatten** | Flatten nested array one level | `.flatten()` |
+| **SplitFirst** | Head/tail decomposition → Option\<[T, T[]]\> | `.splitFirst()` |
+| **SplitLast** | Init/last decomposition → Option\<[T[], T]\> | `.splitLast()` |
+| **Slice** | Slice array from start (inclusive) to end (exclusive) | `slice(start, end?)` |
+| **CollectSome** | Collect Some values from Option\<T\>[], discard Nones | `Option.collect()` |
+| **ExtractPrefix** | Extract enum namespace from kind field (two-level dispatch) | `extractPrefix()` |
+| **AsOption** | Convert boolean to Option\<void\> | `.asOption()` |
+| **Sleep** | Async sleep for fixed ms, then return null | `sleep(ms)` |
+| **Panic** | Halt execution with fatal error (not caught by tryCatch) | `panic("msg")` |
+
+Note: **Pick** is currently a composed operation (GetField + WrapInField + All + Merge) rather than a dedicated builtin variant. **GetIndex** returns `Option<T>` — `Some(element)` for valid indices, `None` for out-of-bounds. This is a departure from typical array indexing and affects the surface syntax.
+
+In the native syntax, most builtins have dedicated syntax rather than function calls:
 
 ```barnum
 // Field access — desugars to GetField
 value |> .name              // extract "name" from the pipeline value
 
-// Indexing — desugars to GetIndex
-value |> .[0]               // extract index 0
+// Indexing — desugars to GetIndex (returns Option<T>!)
+value |> .[0]               // extract index 0 → Option<T>
+value |> .[0]!              // extract index 0, unwrap (panics on out-of-bounds)
 
-// Pick — desugars to Pick
+// Pick — desugars to composed GetField+WrapInField+All+Merge
 value |> .{name, age}       // select fields "name" and "age"
 
-// Tag — desugars to Tag (wrapping a value as a tagged union variant)
-value |> @Ok                // wrap as { kind: "Ok", value: value }
+// WrapInField — wrap input value inside a field
+value |> .name = _          // { name: value } — syntax TBD
+
+// Tag — desugars to Constant(namespaced kind) + WrapInField + Merge
+// The compiler resolves @Ok to the full namespaced kind "Result.Ok" from context.
+value |> @Ok                // wrap as { kind: "Result.Ok", value: value }
 
 // Drop — desugars to Drop
 value |> _                  // discard the value
@@ -111,9 +146,21 @@ all(a, b) |> merge          // merge tuple of objects into one
 
 // Flatten — desugars to Flatten
 nested_lists |> flatten     // flatten nested arrays
+
+// SplitFirst / SplitLast — head/tail and init/last decomposition
+items |> splitFirst         // Option<[first, rest]>
+items |> splitLast          // Option<[init, last]>
+
+// Slice / Take / Skip — array and iterator slicing
+items |> slice(2, 5)        // elements at indices [2, 5)
+items |> take(3)            // first 3 elements (sugar for slice(0, 3))
+items |> skip(2)            // drop first 2 (sugar for slice(2))
+
+// Panic — fatal, uncatchable error
+value |> panic("invalid state")
 ```
 
-The `.field`, `.[index]`, `.{fields}` syntax replaces the TS DSL's `.getField("field")`, `getIndex(n)`, `.pick("a", "b")`. The `@Variant` syntax replaces `.tag("Variant")`. The `_` discard replaces `.drop()`.
+The `.field`, `.[index]`, `.{fields}` syntax replaces the TS DSL's `.getField("field")`, `.getIndex(n)`, `.pick("a", "b")`. The `@Variant` syntax replaces `.tag("Variant", "EnumName")` — the compiler resolves the enum prefix from the expected type context. The `_` discard replaces `.drop()`.
 
 ### Pattern matching (Branch)
 
@@ -148,7 +195,7 @@ all(computeA, computeB) |> merge
 
 ### Bind (let-bindings)
 
-`let` introduces concurrent bindings that are available as named references throughout the body. Desugars to the same Handle/Perform/All structure as the TS DSL's `bind`.
+`let` introduces concurrent bindings that are available as named references throughout the body. Desugars to the same ResumeHandle/ResumePerform/All structure as the TS DSL's `bind`.
 
 ```barnum
 let files = listFiles,
@@ -202,7 +249,17 @@ loop (recur, done) {
 }
 ```
 
-`recur` and `done` are scoped effect tokens. `recur` restarts the loop body with a new input. `done` exits the loop with the break value. Desugars to Handle/Perform/Branch, same as the TS DSL.
+`recur` and `done` are scoped effect tokens. `recur` restarts the loop body with a new input. `done` exits the loop with the break value. Desugars to RestartHandle/RestartPerform/Branch, same as the TS DSL.
+
+### Recur (simple restart)
+
+```barnum
+recur (restart) {
+  body |> restart    // restart the body with a new input
+}
+```
+
+`recur` is a simpler form of `loop` — it provides a single `restart` token with no `done`. The body either completes normally (the value exits) or restarts. Useful when the loop exit condition is handled elsewhere (e.g., by a match arm that doesn't call restart). Desugars to a single RestartHandle/RestartPerform without the Continue/Break branching wrapper that `loop` adds.
 
 ### Early return
 
@@ -235,6 +292,8 @@ withTimeout(2000, longRunningHandler)
 // Returns: Result<T, Void> — Ok if completed, Err if timed out
 ```
 
+In the TS DSL, `withTimeout(ms, body)` takes `ms` as a `Pipeable<TIn, number>` — the timeout duration is itself an action, not a raw number. In `.barn` syntax, a literal integer is automatically wrapped in a Constant. If the timeout needs to be computed from the pipeline input, pass an expression: `withTimeout(.timeoutMs, body)`.
+
 ### Steps (named actions / function calls)
 
 ```barnum
@@ -253,15 +312,47 @@ workflow main: Void -> ValidationResult =
 
 Steps are named actions that can reference each other (mutual recursion). `step Foo` is a jump to Foo's body — mechanically a function call, with Chain providing the return address.
 
-### Augment
+In the TS DSL, this is implemented by `defineRecursiveFunctions`, which uses ResumeHandle/ResumePerform for variable capture (each function is a VarRef) and mutual references are captured at construction time.
+
+### Iterator
+
+Iterators are an abstraction over arrays wrapped in a tagged union: `{ kind: "Iterator.Iterator", value: T[] }`. They are **eager** (backed by a real array), not lazy — no short-circuiting, no infinite iterators.
 
 ```barnum
-// Run a sub-pipeline, merge its output back into the original input
-augment(.name |> enrichName)
-// Input: { name: String, age: Number }
-// enrichName: String -> { displayName: String }
-// Output: { name: String, age: Number, displayName: String }
+// Enter Iterator from various types
+items |> iterate            // dispatches: Array → fromArray, Option → fromOption, Result → fromResult
+
+// Transform elements
+items |> iterate |> map(transform) |> collect
+
+// Flat-map (action returns any IntoIterator: Iterator, Option, Result, or Array)
+items |> iterate |> flatMap(action) |> collect
+
+// Filter
+items |> iterate |> filter(predicate) |> collect
+
+// Fold
+items |> iterate |> fold(init, body)
+
+// Decomposition
+items |> iterate |> splitFirst    // Option<[T, Iterator<T>]>
+items |> iterate |> splitLast     // Option<[Iterator<T>, T]>
+
+// Slicing
+items |> iterate |> take(3)       // first 3 elements
+items |> iterate |> skip(2)       // drop first 2
+items |> iterate |> slice(2, 5)   // elements at indices [2, 5)
+
+// Check emptiness
+items |> iterate |> isEmpty       // boolean
+
+// Collect back to array
+items |> iterate |> collect
 ```
+
+Iterator methods operate on the `Iterator<T>` tagged union. `.iterate()` is the entry point — it uses `branchFamily` (ExtractPrefix + Branch) to dispatch based on the input type's enum prefix. `.collect()` exits the Iterator back to `T[]`.
+
+Note: `collect` also dispatches via `branchFamily` — on `Option<T>[]` (an array of Options), it routes to CollectSome (discards Nones, unwraps Somes). On `Iterator<T>`, it routes to `getField("value")`.
 
 ### Full example: retry-on-error demo
 
@@ -366,23 +457,53 @@ workflow main: Void -> PollResult =
 
 The compiler is written in Rust and lives in the same repo as the engine. Its output is the same flat config JSON that the TS DSL produces. The engine doesn't know or care which frontend produced the config.
 
+### Core AST (compilation target)
+
+The engine operates on 9 action variants:
+
+| Action | Description |
+|---|---|
+| **Invoke** | Leaf node — invokes an external handler (TypeScript) or builtin |
+| **Chain** | Binary sequential composition: run `first`, feed output to `rest` |
+| **ForEach** | Parallel map over array input |
+| **All** | Fanout: same input to all actions, collect results as tuple |
+| **Branch** | N-ary branch on `kind` field of discriminated union |
+| **ResumeHandle** | Resume-style effect handler — handler runs inline, produces `[value, new_state]` |
+| **ResumePerform** | Raise resume-style effect (targets enclosing ResumeHandle) |
+| **RestartHandle** | Restart-style effect handler — body torn down, handler output re-advances body |
+| **RestartPerform** | Raise restart-style effect (targets enclosing RestartHandle) |
+
+The two effect flavors:
+- **Resume**: handler runs inline at the Perform site, returns a value to the Perform's parent, and writes new state back to the handle frame. Used for `let`/`bind` (VarRefs), `defineRecursiveFunctions` (function refs).
+- **Restart**: body is torn down when the effect fires, handler's output becomes the new body input, body re-executes from scratch. Used for `tryCatch`, `loop`, `earlyReturn`, `race`, `recur`.
+
 ### Desugaring
 
-Most surface syntax is sugar over Handle/Perform:
+Most surface syntax is sugar over these 9 actions:
 
 | Surface syntax | Desugars to |
 |---|---|
-| `try (t) { body } catch { recovery }` | `Handle(eid, body, Chain(GetField("payload"), Chain(recovery, Tag("Discard"))))` |
-| `loop (r, d) { body }` | `Chain(Tag("Continue"), Handle(eid, Branch({ Continue: body, Break: Identity }), RestartBodyHandler))` |
-| `earlyReturn (e) { body }` | Same as loop but the body is wrapped differently |
-| `let x = a, y = b in { body }` | `Chain(All(a, b, Identity), Handle(e0, readVar(0), Handle(e1, readVar(1), Chain(GetIndex(2), body))))` |
-| `match { A => x, B => y }` | `Branch({ A: Chain(GetField("value"), x), B: Chain(GetField("value"), y) })` |
+| `try (t) { body } catch { recovery }` | `RestartHandle(id, Chain(Tag("LoopResult.Continue"), body_wrapped_in_branch), handler)` |
+| `loop (r, d) { body }` | `Chain(Tag("LoopResult.Continue"), RestartHandle(id, Branch({ Continue: body, Break: Identity }), handler))` |
+| `recur (r) { body }` | `RestartHandle(id, body, GetIndex(0))` — simpler, no Continue/Break wrapper |
+| `earlyReturn (e) { body }` | Same restart substrate as loop — Break path exits, Continue path runs body |
+| `race(a, b, c)` | `RestartHandle(id, All(a_tagged_break, b_tagged_break, ...), handler)` |
+| `let x = a, y = b in { body }` | `Chain(All(a, b, Identity), ResumeHandle(e0, ResumeHandle(e1, ..., body), handler))` |
+| `step` (mutual recursion) | `ResumeHandle` per function ref, body uses `ResumePerform` to call |
+| `match { A => x, B => y }` | `Branch({ "A": Chain(GetField("value"), x), "B": Chain(GetField("value"), y) })` |
 | `.field` | `Invoke(Builtin(GetField("field")))` |
-| `@Variant` | `Invoke(Builtin(Tag("Variant")))` |
+| `@Variant` (in Result context) | `Chain(All(Constant("Result.Variant"), WrapInField("kind")), WrapInField("value")), Merge)` |
 | `_` | `Invoke(Builtin(Drop))` |
 | `42` (literal) | `Invoke(Builtin(Constant(42)))` |
+| `iterate` | `Chain(ExtractPrefix, Branch({ Option: fromOption, Result: fromResult, Array: fromArray }))` |
+| `collect` | `Chain(ExtractPrefix, Branch({ Array: CollectSome, Iterator: GetField("value") }))` |
+| `slice(2, 5)` | `Invoke(Builtin(Slice { start: 2, end: Some(5) }))` |
+| `take(3)` | `Invoke(Builtin(Slice { start: 0, end: Some(3) }))` |
+| `skip(2)` | `Invoke(Builtin(Slice { start: 2, end: None }))` |
 
 The desugaring is mechanical and produces the same AST the TS DSL would produce. The compiler and engine share the `barnum_ast` crate.
+
+**branchFamily**: Many postfix methods (`.map()`, `.unwrapOr()`, `.filter()`, `.iterate()`, `.collect()`) work polymorphically across Option, Result, and Iterator. This is implemented as two-level dispatch: `Chain(ExtractPrefix, Branch({ Result: ..., Option: ..., Iterator: ... }))`. The ExtractPrefix builtin extracts the enum namespace from the `kind` field (e.g., `"Result.Ok"` → `{ kind: "Result", value: original }`), then Branch dispatches on the namespace. In `.barn` syntax, this dispatch is implicit — the compiler generates it from the type context.
 
 ## Type system
 
@@ -502,9 +623,9 @@ import { z } from "zod";
 
 export const stepA = createHandler({
   inputValidator: z.void(),
-  outputValidator: z.union([
-    z.object({ kind: z.literal("Ok"), value: z.void() }),
-    z.object({ kind: z.literal("Err"), value: z.string() }),
+  outputValidator: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("Result.Ok"), value: z.void() }),
+    z.object({ kind: z.literal("Result.Err"), value: z.string() }),
   ]),
   handle: async ({ value }) => {
     // TODO: implement
@@ -592,17 +713,13 @@ This is the hardest step. The type system is simple compared to TypeScript or Ru
 
 ### Step 3: Desugaring
 
-Lower the surface AST to the core `Action` enum. This is mechanical: each surface construct (`try`/`catch`, `loop`, `let`/`in`, etc.) maps to a fixed pattern of Handle/Perform/Chain/Branch/All nodes. The TS DSL's combinator functions *are* the desugaring — `tryCatch()`, `loop()`, `bind()` each produce a specific AST pattern. The Rust compiler does the same thing.
+Lower the surface AST to the core `Action` enum (9 variants: Invoke, Chain, ForEach, All, Branch, ResumeHandle, ResumePerform, RestartHandle, RestartPerform). This is mechanical: each surface construct (`try`/`catch`, `loop`, `recur`, `let`/`in`, `iterate`, `collect`, etc.) maps to a fixed pattern of these actions. The TS DSL's combinator functions *are* the desugaring — `tryCatch()`, `loop()`, `bind()`, `branchFamily()` each produce a specific AST pattern. The Rust compiler does the same thing.
 
 This lives in `barnum_syntax` or a small `barnum_desugar` crate.
 
 ### Step 4: Flatten and emit
 
-Reuse the existing `flatten()` logic (or port it to Rust if it's currently TS-only). Produce the same `FlatConfig` JSON. Write it to a file.
-
-If flatten is currently in TypeScript: port to Rust in `barnum_ast` (it's a pure tree-to-table transformation with no I/O).
-
-If flatten is already in Rust: wire it into the compiler pipeline.
+Flatten is already implemented in Rust (`crates/barnum_ast/src/flat.rs`). The `FlatConfig` is a linear array of 8-byte entries with index-based cross-references. Wire the compiler pipeline into the existing flatten pass and produce the same `FlatConfig` JSON.
 
 ### Step 5: CLI
 
@@ -632,9 +749,19 @@ Crate: `barnum_lsp` (new). Dependencies: `barnum_syntax`, `barnum_typecheck`, `t
 
 4. **String interpolation and expressions.** Are inline constants (`_ |> 42`, `_ |> "hello"`) sufficient, or do we need string interpolation (`_ |> "timeout: ${ms}ms"`) and arithmetic expressions? Probably not — computation happens in handlers, not in the workflow language. But error messages and logging might benefit from basic string operations.
 
-5. **How do postfix combinators work in native syntax?** The TS DSL has `.unwrapOr(action)`, `.mapErr(action)`, `.mapOption(action)`. In the native syntax, these could be:
+5. **How do postfix combinators work in native syntax?** The TS DSL has 41 postfix methods (`.unwrapOr()`, `.mapErr()`, `.map()`, `.filter()`, `.iterate()`, `.collect()`, `.splitFirst()`, `.slice()`, `.take()`, `.skip()`, `.fold()`, `.andThen()`, `.transpose()`, `.or()`, `.flatMap()`, `.isEmpty()`, etc.). Many of these dispatch polymorphically across Option/Result/Iterator via `branchFamily` (two-level dispatch). In the native syntax, these could be:
    - Regular functions: `unwrapOr(throw)`, `mapErr(transform)` — used after `|>`
    - Built-in syntax: `? throw` for unwrapOr (Rust-inspired)
+   - Dot-method syntax: `value |> .unwrapOr(throw)` — consistent with `.field` syntax
    - Decided per-combinator (some get syntax, some stay as functions)
+   
+   The compiler handles the branchFamily dispatch automatically — the user writes `.map(f)` and the compiler emits the correct two-level dispatch based on the type.
 
 6. **Formatter opinions.** Indentation (spaces vs tabs, width). Line wrapping rules for long pipelines. Trailing commas. These are bikeshed decisions but they matter for `barnum fmt` producing consistent output.
+
+7. **Iterator syntax.** The TS DSL uses `branchFamily` to dispatch `.iterate()` across Option/Result/Array inputs. In `.barn` syntax, should Iterator operations be:
+   - Explicit: `items |> iterate |> map(f) |> collect`
+   - Implicit: type-driven — if the input is an array and you call `.map()`, the compiler auto-wraps in Iterator
+   - A mix: explicit entry (`iterate`) but implicit collect when the pipeline expects `T[]`
+
+8. **augment.** The STANDALONE_SYNTAX.md originally proposed an `augment` combinator (run a sub-pipeline, merge output back into original input). This does not exist in the TS DSL. Should it be added as a `.barn` surface construct, or is `bindInput + all + merge` sufficient?
