@@ -12,9 +12,9 @@ See `past/COMPILATION.md` for full details.
 
 Compile-time simplifications during flattening (or a validation/normalization pass):
 
-- **`Parallel([A])`**: NOT a trivial elimination. `Parallel([A])` produces `[A(x)]` while `A` produces `A(x)` — different output shapes (array-wrapped vs unwrapped). Eliminating the Parallel requires also wrapping the child's output in an array, which means a builtin. Not worth pursuing until builtins exist.
+- **`All([A])`**: NOT a trivial elimination. `All([A])` produces `[A(x)]` while `A` produces `A(x)` — different output shapes (array-wrapped vs unwrapped). Eliminating the All requires also wrapping the child's output in an array, which means a builtin. Not worth pursuing until builtins exist.
 
-- **`Parallel([])`**: Produces `[]` (empty tuple). The TS `parallel()` already compiles this to `constant([])` at build time. The Rust flattener should also handle `Parallel { actions: [] }` by rewriting to a constant empty array, as a defensive measure. Important for constant folding and dead code elimination.
+- **`All([])`**: Produces `[]` (empty tuple). The TS `all()` already compiles this to `constant([])` at build time. The Rust flattener should also handle `All { actions: [] }` by rewriting to a constant empty array, as a defensive measure. Important for constant folding and dead code elimination.
 
 Other potential simplifications to investigate as the AST matures.
 
@@ -30,14 +30,14 @@ Handlers could carry metadata annotations that enable the engine to skip redunda
 
 ### Dispatch deduplication for pure handlers
 
-During `advance()`, the engine accumulates dispatches. Before yielding them to the runtime, it scans for duplicates: pairs where `(handler_id, value)` are equal and the handler is annotated pure. Duplicates share a single dispatch; when the result arrives, it's delivered to all waiting Invoke frames.
+During `advance()`, the engine accumulates effects in `pending_effects`. Before yielding them to the runtime, it scans for duplicates: pairs where `(handler_id, value)` are equal and the handler is annotated pure. Duplicates share a single dispatch; when the result arrives, it's delivered to all waiting Invoke frames.
 
 Implementation sketch:
-- `pending_dispatches` gains a dedup index: `HashMap<(HandlerId, ValueHash), TaskId>` mapping `(handler, input)` to an existing task.
+- `pending_effects` gains a dedup index: `HashMap<(HandlerId, ValueHash), TaskId>` mapping `(handler, input)` to an existing task.
 - When a new Invoke dispatch matches an existing entry, the new Invoke frame's `task_id` is set to the existing `TaskId`. `task_to_frame` becomes `task_to_frames: HashMap<TaskId, Vec<FrameId>>` (one task can complete multiple Invoke frames).
 - On completion, the result is cloned to each frame in the vec.
 
-This matters for Parallel where multiple branches invoke the same pure handler with the same input — e.g., `parallel(fetchUser(userId), fetchUser(userId))` dispatches once instead of twice.
+This matters for All where multiple branches invoke the same pure handler with the same input — e.g., `all(fetchUser(userId), fetchUser(userId))` dispatches once instead of twice.
 
 ### Annotation mechanism
 
@@ -56,21 +56,6 @@ The annotations serialize into the handler metadata and are available to the eng
 
 This is purely an optimization — the engine produces correct results without annotations. Annotations are opt-in; unannotated handlers are treated as effectful (no deduplication, no automatic retry).
 
-## Lazy Step Flattening
-
-Currently, flattening eagerly processes all steps in `Config::steps`, even if some are never referenced by the workflow. This is wasted work and inflates the flat table with dead entries.
-
-Lazy flattening: only flatten a step when the flattener first encounters a `Step` reference to it. Steps that are never referenced are never flattened. This is a natural fit for the two-pass model — pass 1 reserves ActionIds for steps when they're first referenced, pass 2 resolves them. The change is to skip pre-allocating entries for unreferenced steps entirely.
-
-Benefits:
-- Smaller flat tables when configs contain library-style step registries (many steps defined, few used per workflow).
-- Faster flattening for large configs.
-- Dead step detection for free — any step that wasn't flattened after the walk is unreferenced.
-
-This could go further: flatten steps on-demand during execution, not just during the flattening pass. The engine flattens the workflow root eagerly (down to the first Invoke leaves), dispatches those handlers, and while waiting for results, lazily flattens any Step targets that haven't been flattened yet. Step bodies behind a Chain's `rest` or inside a Branch case that hasn't been taken yet don't need to exist in the flat table until the engine actually reaches them. This turns flattening into an incremental process interleaved with execution — only the reachable frontier is materialized at any given time.
-
-The current eager approach is simpler and correct. Lazy/incremental flattening is an optimization for when config sizes grow.
-
 ## Workflow Stack Traces
 
 When a handler panics, fails, or the engine hits an unexpected state, the error message should include a meaningful stack trace showing the workflow path that led to the failure — not a Rust call stack, but a Barnum frame trace.
@@ -83,16 +68,16 @@ The frame tree already contains the information: every frame has a `parent`, for
 Handler error in ./payment.ts:charge
   at Invoke (action 14)
   at Chain rest (action 12)
-  at Parallel child 2 of 3 (action 8)
+  at All child 2 of 3 (action 8)
   at Chain rest (action 5)
-  at Attempt (action 3)
+  at RestartHandle (action 3)
   at Root
 ```
 
 Each frame in the trace can include:
-- **Frame kind**: Invoke, Chain, Parallel, ForEach, Loop, Attempt
+- **Frame kind**: Invoke, Chain, All, ForEach, Branch, ResumeHandle, RestartHandle
 - **ActionId**: position in the flat table (useful for developer debugging)
-- **Structural context**: "child 2 of 3" for Parallel, "iteration N" for Loop
+- **Structural context**: "child 2 of 3" for All, "iteration N" for RestartHandle (loop)
 - **Handler identity**: for Invoke frames, the handler's module path + function name
 
 ### Implementation
@@ -109,9 +94,9 @@ On-demand is the right choice. The engine already has `parent` pointers — walk
 
 The trace above uses ActionIds, which are opaque to workflow authors. To make traces human-readable, actions could carry optional names:
 
-- Step references already have names (`StepName`). Step frames in the trace show the step name.
 - Handlers have module path + function name. Invoke frames show these.
-- Combinators (`pipe`, `parallel`, `branch`) could accept an optional label parameter in the TS surface DSL: `pipe("checkout-flow", ...)`. The label would serialize into the AST and survive flattening as metadata on the FlatEntry.
+- Combinators (`pipe`, `all`, `branch`) could accept an optional label parameter in the TS surface DSL: `pipe("checkout-flow", ...)`. The label would serialize into the AST and survive flattening as metadata on the FlatEntry.
+- Recursive functions defined via `defineRecursiveFunctions` could carry their function names as labels.
 
 Without labels, the trace falls back to ActionIds + handler identities, which is still more useful than nothing.
 
@@ -127,15 +112,15 @@ This requires the engine (or a thread-local) to be accessible from the panic hoo
 
 ### Error propagation traces
 
-When `error()` propagates up the frame tree, it could accumulate a trace: each frame the error passes through adds a line. By the time the error reaches Root (or is caught by Attempt), the trace shows the full propagation path including cancelled siblings. This is richer than a simple parent-chain walk — it shows the dynamic error path, not just the static frame ancestry.
+When an error propagates up the frame tree, it could accumulate a trace: each frame the error passes through adds a line. By the time the error reaches Root (or is caught by a RestartHandle implementing tryCatch), the trace shows the full propagation path including cancelled siblings. This is richer than a simple parent-chain walk — it shows the dynamic error path, not just the static frame ancestry.
 
 ## Value Interning
 
-Values (`serde_json::Value`) flow through the engine by move/clone. Parallel clones the input for each child — `value.clone()` deep-copies the entire JSON tree. For a 10KB payload fanned out to 20 parallel branches, that's 200KB of redundant copies.
+Values (`serde_json::Value`) flow through the engine by move/clone. All clones the input for each child — `value.clone()` deep-copies the entire JSON tree. For a 10KB payload fanned out to 20 All branches, that's 200KB of redundant copies.
 
 ### Level 1: Rc<Value> (cheap clones)
 
-Replace `Value` with `Rc<Value>` in the engine's internal data flow. Parallel's `value.clone()` becomes an Rc clone — O(1), just an increment of the reference count. No deep copy.
+Replace `Value` with `Rc<Value>` in the engine's internal data flow. All's `value.clone()` becomes an Rc clone — O(1), just an increment of the reference count. No deep copy.
 
 ```rust
 // Before: deep clone per child
@@ -168,7 +153,7 @@ struct ValuePool {
 }
 ```
 
-When a value enters the engine (from `start()` or `on_task_completed()`), it's looked up in the pool. If it already exists, the existing `ValueId` is reused. Structurally identical values share a single allocation.
+When a value enters the engine (from `WorkflowState::new()` or `complete()`), it's looked up in the pool. If it already exists, the existing `ValueId` is reused. Structurally identical values share a single allocation.
 
 **Benefits:**
 - **Identity equality:** `value_a == value_b` becomes `value_id_a == value_id_b` — O(1) instead of O(n) structural comparison. This enables cheap dispatch deduplication for pure handlers (same handler + same ValueId = skip redundant dispatch).
@@ -179,13 +164,15 @@ When a value enters the engine (from `start()` or `on_task_completed()`), it's l
 - **Lifetime management:** When should entries be evicted? Reference counting per entry, or GC pass between engine steps? An Rc-based approach (Level 1) handles this automatically; an intern table needs explicit management.
 - **Floating-point hashing:** JSON numbers include floats. `f64` is not `Hash` in Rust. Need a wrapper that hashes the bits (`f64::to_bits()`), which means `NaN != NaN` in the intern table. Edge case but real.
 
-**Verdict:** Level 1 (Rc) is the clear first step — trivial to implement, no downsides, eliminates Parallel deep clones. Level 2 (intern table) is worth pursuing only when dispatch deduplication for pure handlers is implemented, since that's the main consumer of identity equality.
+**Verdict:** Level 1 (Rc) is the clear first step — trivial to implement, no downsides, eliminates All deep clones. Level 2 (intern table) is worth pursuing only when dispatch deduplication for pure handlers is implemented, since that's the main consumer of identity equality.
 
 ### Interaction with other features
 
 - **Dispatch deduplication (Handler Annotations):** Requires comparing input values for equality. With interning, this is O(1) by ValueId. Without interning, it's O(n) structural comparison per dispatch pair.
 - **Schema validation elision:** If values are interned, "this value was already validated" can be tracked per ValueId rather than per value instance.
 - **Snapshot testing:** Interned values serialize identically to plain values. No impact on test output.
+
+Note: The engine currently uses `pending_effects: VecDeque<PendingEffect>` to queue dispatches, and `task_to_frame: BTreeMap<TaskId, FrameId>` to track which frame owns which task. Dispatch deduplication would add an index on top of this structure.
 
 ## Streams
 
@@ -314,7 +301,7 @@ The "next item" handler (`waitForPrEvent`, `fetchNextItem`) is an ordinary Invok
 - **Webhook/push**: handler blocks (async) until an event arrives, returns it
 - **Buffered**: handler pulls from an internal queue, returns `None` when drained
 
-The engine doesn't know or care about the delivery mechanism. It dispatches the handler, waits for `complete()`, processes the result.
+The engine doesn't know or care about the delivery mechanism. It dispatches the handler via `advance()`, waits for the runtime to call `complete()`, processes the result.
 
 ### Backpressure
 
@@ -344,27 +331,9 @@ Not urgent — `ExtractPrefix` handles the concrete need (Option/Result dispatch
 
 ## Boolean-to-Enum Builtin
 
-Branch dispatches on tagged unions (`{ kind, value }`). Booleans can't be branched on directly — you need to convert `true`/`false` to `{ kind: "True", value: void }` / `{ kind: "False", value: void }` first.
+**Partially implemented.** The `AsOption` builtin (`crates/barnum_builtins/src/lib.rs`) converts `boolean → Option<void>`: `true` → `{ kind: "Option.Some", value: null }`, `false` → `{ kind: "Option.None", value: null }`. This enables branching on booleans via `asOption()` + `branch({ Some: ..., None: ... })`.
 
-A `boolToEnum` builtin would do this conversion inline in Rust:
-
-```ts
-type BoolDef = { True: void; False: void };
-type Bool = TaggedUnion<BoolDef>;
-
-function boolToEnum(): TypedAction<boolean, Bool>
-```
-
-Desugars to a Builtin handler that reads the boolean and produces the tagged union:
-
-```rust
-BuiltinKind::BoolToEnum => {
-    let kind = if value.as_bool().unwrap() { "True" } else { "False" };
-    json!({ "kind": kind, "value": null, "__def": null })
-}
-```
-
-This enables `ifElse` as a surface combinator:
+The original proposal was a more general `boolToEnum` producing `{ kind: "True", value: void } | { kind: "False", value: void }`. `AsOption` covers the same use case with the existing Option type. A dedicated `ifElse` combinator could be built on top:
 
 ```ts
 function ifElse<TIn, TOut>(
@@ -374,12 +343,10 @@ function ifElse<TIn, TOut>(
 ): TypedAction<TIn, TOut> {
   return pipe(
     condition,
-    boolToEnum(),
-    branch({ True: thenAction, False: elseAction }),
+    asOption(),
+    branch({ Some: thenAction, None: elseAction }),
   );
 }
 ```
 
-The `Bool` type would be a proper TaggedUnion with `__def`, so `.branch()` works on it with exhaustiveness checking. The `True`/`False` cases receive `void` (the boolean carries no data beyond the discriminant).
-
-This is a small addition — one Builtin variant, one combinator, one type alias. No engine changes.
+Whether a dedicated `Bool` tagged union (True/False) is still worth adding is an open question — `AsOption` works but the Some/None naming is semantically awkward for if/else branching.
