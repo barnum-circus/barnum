@@ -112,7 +112,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "barnum_ast"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "intern",
  "serde",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "barnum_builtins"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "barnum_ast",
  "serde_json",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "barnum_cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "barnum_ast",
  "barnum_engine",
@@ -148,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "barnum_engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "barnum_ast",
  "barnum_builtins",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "barnum_event_loop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "barnum_ast",
  "barnum_builtins",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "barnum_typescript_handler"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "thiserror",
@@ -1466,7 +1466,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "string_key_newtype"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "intern",
  "serde",
@@ -1709,7 +1709,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "u32_newtype"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "unicode-ident"
