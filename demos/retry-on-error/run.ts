@@ -20,17 +20,6 @@ import { stepA, stepB, stepC, logError } from "./handlers/steps";
 
 console.error("=== Retry-on-error demo ===\n");
 
-// throwError is a first-class value — you can pass it to helper functions
-// that build sub-pipelines, keeping the main pipeline flat and readable.
-function stepBWithTimeout(
-  throwError: TypedAction<string, never>,
-): TypedAction<void, void> {
-  return withTimeout(constant(2_000), stepB.unwrapOr(throwError))
-    .mapErr(constant("stepB: timed out"))
-    .unwrapOr(throwError)
-    .drop();
-}
-
 runPipeline(
   loop<string, void>((recur, done) =>
     tryCatch(
@@ -51,3 +40,14 @@ runPipeline(
     ),
   ),
 );
+
+// throwError is a first-class value — you can pass it to helper functions
+// that build sub-pipelines, keeping the main pipeline flat and readable.
+function stepBWithTimeout(
+  throwError: TypedAction<string, never>,
+): TypedAction<void, void> {
+  return withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+    .mapErr(constant("stepB: timed out"))
+    .unwrapOr(throwError)
+    .drop();
+}
