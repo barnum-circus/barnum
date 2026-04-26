@@ -1,7 +1,7 @@
 import { createHandler } from "@barnum/barnum/runtime";
 import { z } from "zod";
 
-const randomDelay = () =>
+const randomDelay = (): Promise<void> =>
   new Promise<void>((resolve) =>
     setTimeout(resolve, Math.floor(Math.random() * 1000)),
   );
