@@ -14,13 +14,21 @@ Bump the version in all of these:
 
 Internal crate dependencies use `path = "..."` only, no `version` field. There's nothing to update for these.
 
+## Update Lock Files
+
+```bash
+cargo check          # regenerates Cargo.lock
+pnpm install --lockfile-only  # regenerates pnpm-lock.yaml (if version appears in it)
+```
+
 ## Verify
 
 ```bash
 cargo check
+cargo test --locked --workspace -- --test-threads=1
 ```
 
-This ensures all Cargo.toml versions are consistent.
+`--locked` ensures `Cargo.lock` is up to date (CI uses this flag).
 
 ## Commit, Tag, Push
 
