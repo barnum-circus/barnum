@@ -17,6 +17,7 @@ import {
   loop,
   drop,
   constant,
+  Iterator as Iter,
   identity,
   bindInput,
 } from "@barnum/barnum/pipeline";
@@ -27,7 +28,7 @@ console.error("=== Sequential deploy demo ===\n");
 runPipeline(
   pipe(
     getServices,
-    identity<string[]>().iterate(),
+    Iter.fromArray<string>(),
 
     loop<null, Iterator<string>>((recur, done) =>
       identity<Iterator<string>>()
