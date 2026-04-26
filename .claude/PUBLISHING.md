@@ -39,6 +39,16 @@ git tag v0.X.0
 git push origin master --tags
 ```
 
+## Docs Website Version (minor/major releases only)
+
+Cut a new docs version snapshot. Skip this for patch releases.
+
+```bash
+cd docs-website && pnpm exec docusaurus docs:version 0.X
+```
+
+This copies `docs/` into `versioned_docs/version-0.X/` and updates `versions.json`.
+
 ## npm Publish
 
 CI handles npm publishing when a tag is pushed (if configured), or publish manually:
