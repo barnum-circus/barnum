@@ -36,7 +36,7 @@ runPipeline(
   pipe(
     withRetry(3, implement).drop(),
 
-    loop<void, void>((recur, done) =>
+    loop((recur, done) =>
       pipe(
         allObject({
           security: withRetry(3, reviewSecurity),

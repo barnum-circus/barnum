@@ -161,7 +161,7 @@ export const fix = createHandler(
 
 export const typeCheckFix = bindInput<{ worktreePath: string }>(
   (typeCheckFixParams) =>
-    loop<void, void>((recur, done) =>
+    loop((recur, done) =>
       typeCheckFixParams.then(pipe(typeCheck, classifyErrors)).branch({
         HasErrors: Iterator.fromArray<TypeError>().map(fix).drop().then(recur),
         Clean: done,

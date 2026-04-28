@@ -162,7 +162,7 @@ export const fix = createHandler(
 
 // --- Pipeline ---
 
-export const typeCheckFix = loop<void, void>((recur, done) =>
+export const typeCheckFix = loop((recur, done) =>
   typeCheck.then(classifyErrors).branch({
     HasErrors: forEach(fix).drop().then(recur),
     Clean: done,

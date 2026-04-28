@@ -35,5 +35,8 @@ runPipeline(
       typeCheckFix,
     ),
   ),
-  { inputDir: path.join(baseDir, "src"), outputDir: path.join(baseDir, "out") },
+  {
+    inputDir: path.join(baseDir, "src"),
+    outputDir: path.join(baseDir, "out"),
+  },
 );

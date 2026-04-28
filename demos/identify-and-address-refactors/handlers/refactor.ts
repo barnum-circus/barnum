@@ -389,7 +389,7 @@ export const implementAndReview = bindInput<ImplementAndReviewParams>(
       implementAndReviewParams.pick("worktreePath").then(typeCheckFix).drop(),
 
       // Judge quality; revise and re-check if needed.
-      loop<void, void>((recur, done) =>
+      loop((recur, done) =>
         judgeRefactor.then(classifyJudgment).branch({
           NeedsWork: applyFeedback
             .drop()
