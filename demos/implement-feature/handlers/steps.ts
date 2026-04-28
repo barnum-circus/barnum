@@ -38,10 +38,10 @@ import { callClaude } from "./call-claude";
 // ---------------------------------------------------------------------------
 
 type CheckResult = Result<string[], string>;
-type ActionResult = Result<void, string>;
+type ActionResult = Result<null, string>;
 
 const CheckResultValidator = resultSchema(z.array(z.string()), z.string());
-const ActionResultValidator = resultSchema(z.void(), z.string());
+const ActionResultValidator = resultSchema(z.null(), z.string());
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -100,7 +100,7 @@ export const implement = createHandler(
           cwd: outDir,
         });
         console.error("[implement] Feature implemented");
-        return ok(undefined);
+        return ok(null);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[implement] Failed: ${msg}`);
@@ -397,7 +397,7 @@ export const incorporateFeedback = createHandler(
           cwd: outDir,
         });
         console.error("[incorporateFeedback] Feedback incorporated");
-        return ok(undefined);
+        return ok(null);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[incorporateFeedback] Failed: ${msg}`);
@@ -417,7 +417,7 @@ export const splitCommits = createHandler(
     outputValidator: ActionResultValidator,
     handle: async (): Promise<ActionResult> => {
       console.error("[splitCommits] No-op — skipping commit split");
-      return ok(undefined);
+      return ok(null);
     },
   },
   "splitCommits",
