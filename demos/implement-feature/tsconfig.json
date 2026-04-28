@@ -10,7 +10,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noEmit": true,
-    "composite": true
+    "composite": true,
+    "jsx": "react-jsx"
   },
   "include": ["run.ts", "handlers"]
 }

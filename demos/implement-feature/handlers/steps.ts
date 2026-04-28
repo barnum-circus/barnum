@@ -1,21 +1,37 @@
 /**
- * Mock handlers for the implement-feature demo.
+ * Handlers for the implement-feature demo.
  *
- * Each review/check handler returns Result<string[], string>:
- *   Ok([])           — no issues found
- *   Ok(["issue..."])  — issues found (not an error — normal outcome)
- *   Err("msg")        — transient failure (network, timeout, etc.)
- *
- * The implement/incorporate handlers return Result<void, string>:
- *   Ok(void)  — success
- *   Err("msg") — transient failure
+ * setup: clear out/, copy src/ to out/
+ * implement: invoke Claude to implement the feature
+ * reviewBestPractices / reviewAdherence / checkSuppressedTests: review handlers
+ * runTypecheck: run tsc --noEmit on out/
+ * classifyFeedback: combine check results into HasIssues / AllClean
+ * incorporateFeedback: invoke Claude to address issues
+ * splitCommits: no-op (always clean)
+ * checkRetries: decrement retry budget for withRetry
  */
 
-import { createHandler, ok, err, resultSchema } from "@barnum/barnum/runtime";
-import type { Result } from "@barnum/barnum/runtime";
-import { taggedUnionSchema } from "@barnum/barnum/runtime";
-import type { TaggedUnion } from "@barnum/barnum/pipeline";
+import {
+  createHandler,
+  ok,
+  err,
+  resultSchema,
+  taggedUnionSchema,
+} from "@barnum/barnum/runtime";
+import type { Result, TaggedUnion } from "@barnum/barnum/pipeline";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { z } from "zod";
+import { baseDir, srcDir, outDir } from "./lib";
+import { callClaude } from "./call-claude";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,179 +44,261 @@ const CheckResultValidator = resultSchema(z.array(z.string()), z.string());
 const ActionResultValidator = resultSchema(z.void(), z.string());
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Setup
 // ---------------------------------------------------------------------------
 
-/** Simulate a transient failure ~20% of the time. */
-function maybeTransientFailure(stepName: string): string | null {
-  if (Math.random() < 0.2) {
-    return `${stepName}: transient failure (network timeout)`;
-  }
-  return null;
-}
+export const setup = createHandler(
+  {
+    handle: async (): Promise<void> => {
+      console.error("[setup] Clearing output directory...");
+      if (existsSync(outDir)) {
+        rmSync(outDir, { recursive: true });
+      }
+      mkdirSync(outDir, { recursive: true });
+
+      console.error(`[setup] Copying ${srcDir} → ${outDir}`);
+      cpSync(srcDir, outDir, { recursive: true });
+
+      const files = readdirSync(outDir);
+      console.error(
+        `[setup] Copied ${files.length} files: ${files.join(", ")}`,
+      );
+    },
+  },
+  "setup",
+);
 
 // ---------------------------------------------------------------------------
-// Implementation handlers
+// Implement
 // ---------------------------------------------------------------------------
 
-/** Implement the feature based on the description. */
 export const implement = createHandler(
   {
     inputValidator: z.string(),
     outputValidator: ActionResultValidator,
     handle: async ({ value: description }): Promise<ActionResult> => {
-      const failure = maybeTransientFailure("implement");
-      if (failure) {
-        console.error(`[implement] ${failure}`);
-        return err(failure);
-      }
+      console.error(`[implement] Task: ${description}`);
 
-      console.error(`[implement] Implementing: ${description.slice(0, 60)}...`);
-      console.error("[implement] Feature implemented");
-      return ok(undefined);
+      try {
+        await callClaude({
+          prompt: [
+            `Implement this feature in the codebase at ${outDir}:`,
+            "",
+            description,
+            "",
+            "The codebase already has a fetchSuggestions function in autocomplete.ts.",
+            "Use it — do not reimplement autocomplete logic.",
+            "Add debouncing (300ms) so the API is not called on every keystroke.",
+            "Show suggestions in a dropdown list below the input.",
+            "Update the tests to cover the new behavior.",
+          ].join("\n"),
+          allowedTools: [
+            `Read(//${outDir}/**)`,
+            `Edit(//${outDir}/**)`,
+            `Write(//${outDir}/**)`,
+          ],
+          cwd: outDir,
+        });
+        console.error("[implement] Feature implemented");
+        return ok(undefined);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[implement] Failed: ${msg}`);
+        return err(msg);
+      }
     },
   },
   "implement",
 );
 
-/** Incorporate review feedback into the implementation. */
-export const incorporateFeedback = createHandler(
-  {
-    inputValidator: z.string(),
-    outputValidator: ActionResultValidator,
-    handle: async ({ value: feedback }): Promise<ActionResult> => {
-      const failure = maybeTransientFailure("incorporateFeedback");
-      if (failure) {
-        console.error(`[incorporateFeedback] ${failure}`);
-        return err(failure);
-      }
-
-      console.error(
-        `[incorporateFeedback] Addressing: ${feedback.slice(0, 80)}...`,
-      );
-      console.error("[incorporateFeedback] Feedback incorporated");
-      return ok(undefined);
-    },
-  },
-  "incorporateFeedback",
-);
-
 // ---------------------------------------------------------------------------
-// Review handlers (agent-based, hardcoded criteria)
+// Review: best practices
 // ---------------------------------------------------------------------------
 
-const securityIssues = [
-  "SQL injection risk in query builder",
-  "Unsanitized user input in template rendering",
-  "Hardcoded API key in config module",
-];
-
-export const reviewSecurity = createHandler(
+export const reviewBestPractices = createHandler(
   {
     outputValidator: CheckResultValidator,
     handle: async (): Promise<CheckResult> => {
-      const failure = maybeTransientFailure("reviewSecurity");
-      if (failure) {
-        console.error(`[reviewSecurity] ${failure}`);
-        return err(failure);
-      }
+      console.error("[reviewBestPractices] Reviewing...");
 
-      console.error("[reviewSecurity] Reviewing for security issues...");
-      const issues =
-        Math.random() < 0.4
-          ? [securityIssues[Math.floor(Math.random() * securityIssues.length)]!]
-          : [];
-      console.error(
-        `[reviewSecurity] ${issues.length === 0 ? "Clean" : `Found: ${issues[0]}`}`,
-      );
-      return ok(issues);
+      const files = readdirSync(outDir)
+        .filter((f) => f.endsWith(".tsx"))
+        .map((f) => path.join(outDir, f));
+
+      try {
+        const response = await callClaude({
+          prompt: [
+            "Review these React files for best practices violations.",
+            "Check for:",
+            "- Missing cleanup of effects (useEffect without cleanup)",
+            "- Inline function definitions in JSX that should use useCallback",
+            "- Missing key props in lists",
+            "- Direct state mutation",
+            "- Missing error boundaries for async operations",
+            "",
+            "Files to review:",
+            ...files.map((f) => `  ${f}`),
+            "",
+            "Respond with ONLY a JSON array of issue strings.",
+            "If no issues: []",
+            'If issues: ["issue 1 description", "issue 2 description"]',
+          ].join("\n"),
+          allowedTools: [`Read(//${outDir}/**)`],
+          cwd: outDir,
+        });
+
+        const issues = parseJsonArray(response);
+        console.error(
+          `[reviewBestPractices] ${issues.length === 0 ? "Clean" : `${issues.length} issue(s)`}`,
+        );
+        return ok(issues);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[reviewBestPractices] Failed: ${msg}`);
+        return err(msg);
+      }
     },
   },
-  "reviewSecurity",
+  "reviewBestPractices",
 );
 
-const qualityIssues = [
-  "Function exceeds 50 lines — extract helper",
-  "Duplicated logic between handleCreate and handleUpdate",
-  "Missing error handling in async pipeline",
-];
-
-export const reviewQuality = createHandler(
-  {
-    outputValidator: CheckResultValidator,
-    handle: async (): Promise<CheckResult> => {
-      const failure = maybeTransientFailure("reviewQuality");
-      if (failure) {
-        console.error(`[reviewQuality] ${failure}`);
-        return err(failure);
-      }
-
-      console.error("[reviewQuality] Reviewing code quality...");
-      const issues =
-        Math.random() < 0.3
-          ? [qualityIssues[Math.floor(Math.random() * qualityIssues.length)]!]
-          : [];
-      console.error(
-        `[reviewQuality] ${issues.length === 0 ? "Clean" : `Found: ${issues[0]}`}`,
-      );
-      return ok(issues);
-    },
-  },
-  "reviewQuality",
-);
-
-const adherenceIssues = [
-  "Feature description says 'cache all endpoints' but only GET is cached",
-  "Missing retry logic specified in requirements",
-];
+// ---------------------------------------------------------------------------
+// Review: adherence to task
+// ---------------------------------------------------------------------------
 
 export const reviewAdherence = createHandler(
   {
+    inputValidator: z.string(),
     outputValidator: CheckResultValidator,
-    handle: async (): Promise<CheckResult> => {
-      const failure = maybeTransientFailure("reviewAdherence");
-      if (failure) {
-        console.error(`[reviewAdherence] ${failure}`);
-        return err(failure);
-      }
+    handle: async ({ value: description }): Promise<CheckResult> => {
+      console.error("[reviewAdherence] Checking adherence to task...");
 
-      console.error("[reviewAdherence] Checking adherence to spec...");
-      const issues =
-        Math.random() < 0.3
-          ? [
-              adherenceIssues[
-                Math.floor(Math.random() * adherenceIssues.length)
-              ]!,
-            ]
-          : [];
-      console.error(
-        `[reviewAdherence] ${issues.length === 0 ? "Clean" : `Found: ${issues[0]}`}`,
-      );
-      return ok(issues);
+      const files = readdirSync(outDir)
+        .filter((f) => f.endsWith(".ts") || f.endsWith(".tsx"))
+        .map((f) => path.join(outDir, f));
+
+      try {
+        const response = await callClaude({
+          prompt: [
+            "Check whether the implementation adheres to this task description:",
+            "",
+            description,
+            "",
+            "Files to review:",
+            ...files.map((f) => `  ${f}`),
+            "",
+            "Specifically check:",
+            "- Does it use the existing fetchSuggestions function (not a reimplementation)?",
+            "- Is the input debounced (not firing on every keystroke)?",
+            "- Are suggestions displayed to the user?",
+            "",
+            "Respond with ONLY a JSON array of issue strings.",
+            "If fully adherent: []",
+            'If issues: ["issue 1", "issue 2"]',
+          ].join("\n"),
+          allowedTools: [`Read(//${outDir}/**)`],
+          cwd: outDir,
+        });
+
+        const issues = parseJsonArray(response);
+        console.error(
+          `[reviewAdherence] ${issues.length === 0 ? "Clean" : `${issues.length} issue(s)`}`,
+        );
+        return ok(issues);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[reviewAdherence] Failed: ${msg}`);
+        return err(msg);
+      }
     },
   },
   "reviewAdherence",
 );
 
 // ---------------------------------------------------------------------------
-// Static analysis handlers (deterministic tools)
+// Review: suppressed tests
+// ---------------------------------------------------------------------------
+
+export const checkSuppressedTests = createHandler(
+  {
+    outputValidator: CheckResultValidator,
+    handle: async (): Promise<CheckResult> => {
+      console.error("[checkSuppressedTests] Scanning for suppressed tests...");
+
+      const testFiles = readdirSync(outDir).filter(
+        (f) => f.includes(".test.") || f.includes(".spec."),
+      );
+
+      const issues: string[] = [];
+      const suppressionPatterns = [
+        { pattern: /\bit\.skip\b/, label: "it.skip" },
+        { pattern: /\btest\.skip\b/, label: "test.skip" },
+        { pattern: /\bdescribe\.skip\b/, label: "describe.skip" },
+        { pattern: /\bxit\b/, label: "xit" },
+        { pattern: /\bxdescribe\b/, label: "xdescribe" },
+        { pattern: /\bxtest\b/, label: "xtest" },
+      ];
+
+      for (const file of testFiles) {
+        const content = readFileSync(path.join(outDir, file), "utf-8");
+        for (const { pattern, label } of suppressionPatterns) {
+          if (pattern.test(content)) {
+            issues.push(`${file}: contains ${label} — suppressed test`);
+          }
+        }
+      }
+
+      console.error(
+        `[checkSuppressedTests] ${issues.length === 0 ? "Clean" : `${issues.length} suppressed test(s)`}`,
+      );
+      return ok(issues);
+    },
+  },
+  "checkSuppressedTests",
+);
+
+// ---------------------------------------------------------------------------
+// Typecheck
 // ---------------------------------------------------------------------------
 
 export const runTypecheck = createHandler(
   {
     outputValidator: CheckResultValidator,
     handle: async (): Promise<CheckResult> => {
-      const failure = maybeTransientFailure("runTypecheck");
-      if (failure) {
-        console.error(`[runTypecheck] ${failure}`);
-        return err(failure);
+      console.error(`[runTypecheck] Running tsc --noEmit on ${outDir}...`);
+
+      const tsFiles = readdirSync(outDir)
+        .filter((f) => f.endsWith(".ts") || f.endsWith(".tsx"))
+        .map((f) => path.join(outDir, f));
+
+      if (tsFiles.length === 0) {
+        console.error("[runTypecheck] No TS files found");
+        return ok([]);
       }
 
-      console.error("[runTypecheck] Running tsc --noEmit...");
-      const issues =
-        Math.random() < 0.3
-          ? ["TS2345: Argument of type 'string' is not assignable to 'number'"]
-          : [];
+      const tscPath = path.join(baseDir, "node_modules", ".bin", "tsc");
+      const result = spawnSync(
+        tscPath,
+        [
+          "--noEmit",
+          "--strict",
+          "--esModuleInterop",
+          "--target",
+          "ES2020",
+          "--module",
+          "ES2020",
+          "--moduleResolution",
+          "node",
+          "--jsx",
+          "react-jsx",
+          ...tsFiles,
+        ],
+        { encoding: "utf-8", cwd: baseDir, timeout: 30_000 },
+      );
+
+      const output = result.stdout + result.stderr;
+      const issues = parseTscErrors(output);
+
       console.error(
         `[runTypecheck] ${issues.length === 0 ? "Clean" : `${issues.length} error(s)`}`,
       );
@@ -210,56 +308,115 @@ export const runTypecheck = createHandler(
   "runTypecheck",
 );
 
-export const runLint = createHandler(
+// ---------------------------------------------------------------------------
+// Classify feedback
+// ---------------------------------------------------------------------------
+
+type ClassifyFeedbackResultDef = {
+  HasIssues: string;
+  AllClean: void;
+};
+export type ClassifyFeedbackResult = TaggedUnion<
+  "ClassifyFeedbackResult",
+  ClassifyFeedbackResultDef
+>;
+
+const FeedbackInputValidator = z.object({
+  bestPractices: z.array(z.string()),
+  adherence: z.array(z.string()),
+  suppressedTests: z.array(z.string()),
+  typecheck: z.array(z.string()),
+});
+
+export const classifyFeedback = createHandler(
   {
-    outputValidator: CheckResultValidator,
-    handle: async (): Promise<CheckResult> => {
-      const failure = maybeTransientFailure("runLint");
-      if (failure) {
-        console.error(`[runLint] ${failure}`);
-        return err(failure);
+    inputValidator: FeedbackInputValidator,
+    outputValidator: taggedUnionSchema("ClassifyFeedbackResult", {
+      HasIssues: z.string(),
+      AllClean: z.null(),
+    }),
+    handle: async ({ value }): Promise<ClassifyFeedbackResult> => {
+      const allIssues: string[] = [
+        ...value.bestPractices,
+        ...value.adherence,
+        ...value.suppressedTests,
+        ...value.typecheck,
+      ];
+
+      if (allIssues.length > 0) {
+        const summary = allIssues.join("; ");
+        console.error(
+          `[classifyFeedback] ${allIssues.length} issue(s): ${summary.slice(0, 120)}`,
+        );
+        return { kind: "ClassifyFeedbackResult.HasIssues", value: summary };
       }
 
-      console.error("[runLint] Running linter...");
-      const issues =
-        Math.random() < 0.2
-          ? ["no-unused-vars: 'tempResult' is defined but never used"]
-          : [];
-      console.error(
-        `[runLint] ${issues.length === 0 ? "Clean" : `${issues.length} warning(s)`}`,
-      );
-      return ok(issues);
+      console.error("[classifyFeedback] All checks passed");
+      return { kind: "ClassifyFeedbackResult.AllClean", value: null };
     },
   },
-  "runLint",
-);
-
-export const runTests = createHandler(
-  {
-    outputValidator: CheckResultValidator,
-    handle: async (): Promise<CheckResult> => {
-      const failure = maybeTransientFailure("runTests");
-      if (failure) {
-        console.error(`[runTests] ${failure}`);
-        return err(failure);
-      }
-
-      console.error("[runTests] Running test suite...");
-      const issues =
-        Math.random() < 0.25
-          ? ["FAIL cache.test.ts: expected 200, got 404"]
-          : [];
-      console.error(
-        `[runTests] ${issues.length === 0 ? "All passed" : `${issues.length} failure(s)`}`,
-      );
-      return ok(issues);
-    },
-  },
-  "runTests",
+  "classifyFeedback",
 );
 
 // ---------------------------------------------------------------------------
-// Retry budget
+// Incorporate feedback
+// ---------------------------------------------------------------------------
+
+export const incorporateFeedback = createHandler(
+  {
+    inputValidator: z.string(),
+    outputValidator: ActionResultValidator,
+    handle: async ({ value: feedback }): Promise<ActionResult> => {
+      console.error(
+        `[incorporateFeedback] Addressing: ${feedback.slice(0, 120)}...`,
+      );
+
+      try {
+        await callClaude({
+          prompt: [
+            `Fix the following issues in the codebase at ${outDir}:`,
+            "",
+            feedback,
+            "",
+            "Make minimal changes. Do not change behavior beyond what's needed to fix the issues.",
+            "Do not suppress or skip any tests.",
+          ].join("\n"),
+          allowedTools: [
+            `Read(//${outDir}/**)`,
+            `Edit(//${outDir}/**)`,
+            `Write(//${outDir}/**)`,
+          ],
+          cwd: outDir,
+        });
+        console.error("[incorporateFeedback] Feedback incorporated");
+        return ok(undefined);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[incorporateFeedback] Failed: ${msg}`);
+        return err(msg);
+      }
+    },
+  },
+  "incorporateFeedback",
+);
+
+// ---------------------------------------------------------------------------
+// Split commits (no-op)
+// ---------------------------------------------------------------------------
+
+export const splitCommits = createHandler(
+  {
+    outputValidator: ActionResultValidator,
+    handle: async (): Promise<ActionResult> => {
+      console.error("[splitCommits] No-op — skipping commit split");
+      return ok(undefined);
+    },
+  },
+  "splitCommits",
+);
+
+// ---------------------------------------------------------------------------
+// Retry budget (used by withRetry)
 // ---------------------------------------------------------------------------
 
 type CheckRetriesResultDef = {
@@ -289,58 +446,36 @@ export const checkRetries = createHandler(
 );
 
 // ---------------------------------------------------------------------------
-// Classify feedback
+// Helpers
 // ---------------------------------------------------------------------------
 
-type ClassifyFeedbackResultDef = {
-  HasIssues: string;
-  AllClean: void;
-};
-export type ClassifyFeedbackResult = TaggedUnion<
-  "ClassifyFeedbackResult",
-  ClassifyFeedbackResultDef
->;
+/** Parse a JSON array from Claude's response, tolerating markdown fences. */
+function parseJsonArray(response: string): string[] {
+  const stripped = response
+    .replace(/^```(?:json)?\n?/m, "")
+    .replace(/\n?```$/m, "")
+    .trim();
+  try {
+    const parsed: unknown = JSON.parse(stripped);
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+      return parsed;
+    }
+  } catch {
+    // Claude didn't return valid JSON — treat as single issue
+  }
+  if (stripped && stripped !== "[]") {
+    return [stripped];
+  }
+  return [];
+}
 
-const FeedbackInputValidator = z.object({
-  security: z.array(z.string()),
-  quality: z.array(z.string()),
-  adherence: z.array(z.string()),
-  typecheck: z.array(z.string()),
-  lint: z.array(z.string()),
-  tests: z.array(z.string()),
-});
-
-export const classifyFeedback = createHandler(
-  {
-    inputValidator: FeedbackInputValidator,
-    outputValidator: taggedUnionSchema("ClassifyFeedbackResult", {
-      HasIssues: z.string(),
-      AllClean: z.null(),
-    }),
-    handle: async ({ value }): Promise<ClassifyFeedbackResult> => {
-      const allIssues: string[] = [
-        ...value.security,
-        ...value.quality,
-        ...value.adherence,
-        ...value.typecheck,
-        ...value.lint,
-        ...value.tests,
-      ];
-
-      if (allIssues.length > 0) {
-        const summary = allIssues.join("; ");
-        console.error(
-          `[classifyFeedback] ${allIssues.length} issue(s): ${summary.slice(0, 100)}`,
-        );
-        return {
-          kind: "ClassifyFeedbackResult.HasIssues",
-          value: summary,
-        };
-      }
-
-      console.error("[classifyFeedback] All checks passed");
-      return { kind: "ClassifyFeedbackResult.AllClean", value: null };
-    },
-  },
-  "classifyFeedback",
-);
+/** Parse tsc error output into issue strings. */
+function parseTscErrors(output: string): string[] {
+  const issues: string[] = [];
+  const pattern = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/gm;
+  let match;
+  while ((match = pattern.exec(output)) !== null) {
+    issues.push(`${match[1]}(${match[2]}): ${match[4]}: ${match[5]}`);
+  }
+  return issues;
+}

@@ -3,55 +3,72 @@
  * parallel review, static analysis, and feedback loop.
  *
  * Pipeline:
- *   1. Implement the feature (agent)
- *   2. Loop until clean:
- *      a. Run all reviews and checks in parallel (allObject)
+ *   1. Setup: clear out/, copy src/ to out/
+ *   2. Implement the feature (agent)
+ *   3. Review loop (max 3 iterations):
+ *      a. Run all checks in parallel (allObject)
  *      b. If any issues → incorporate feedback → loop
  *      c. If all clean → done
- *   3. Every step retried up to 3 times (withRetry)
+ *   4. Split into commits (no-op)
  *
- * Demonstrates: allObject, loop, tryCatch, bindInput, branch,
- * withRetry as a higher-order combinator.
+ * Each agent step retried up to 3 times (withRetry).
+ *
+ * Demonstrates: allObject, loop, earlyReturn, tryCatch, bindInput,
+ * branch, withRetry as a higher-order combinator.
  *
  * Usage: pnpm exec tsx run.ts
  */
 
-import { runPipeline, pipe, allObject, loop } from "@barnum/barnum/pipeline";
 import {
+  runPipeline,
+  pipe,
+  allObject,
+  loop,
+  bindInput,
+} from "@barnum/barnum/pipeline";
+import {
+  setup,
   implement,
-  reviewSecurity,
-  reviewQuality,
+  reviewBestPractices,
   reviewAdherence,
+  checkSuppressedTests,
   runTypecheck,
-  runLint,
-  runTests,
   classifyFeedback,
   incorporateFeedback,
+  splitCommits,
 } from "./handlers/steps";
 import { withRetry } from "./handlers/with-retry";
 
 console.error("=== Implement feature demo ===\n");
 
-runPipeline(
-  pipe(
-    withRetry(3, implement).drop(),
+const DESCRIPTION =
+  "Replace the text input in SearchPage.tsx with a debounced autocomplete. " +
+  "Use the existing fetchSuggestions function from autocomplete.ts. " +
+  "Debounce at 300ms. Show suggestions in a dropdown below the input.";
 
-    loop((recur, done) =>
-      pipe(
-        allObject({
-          security: withRetry(3, reviewSecurity),
-          quality: withRetry(3, reviewQuality),
-          adherence: withRetry(3, reviewAdherence),
-          typecheck: withRetry(3, runTypecheck),
-          lint: withRetry(3, runLint),
-          tests: withRetry(3, runTests),
-        }),
-        classifyFeedback.branch({
-          HasIssues: withRetry(3, incorporateFeedback).drop().then(recur),
-          AllClean: done,
-        }),
+runPipeline(
+  bindInput<string>((description) =>
+    pipe(
+      setup,
+      description.then(withRetry(3, implement)).drop(),
+
+      loop((recur, done) =>
+        pipe(
+          allObject({
+            bestPractices: withRetry(3, reviewBestPractices),
+            adherence: description.then(withRetry(3, reviewAdherence)),
+            suppressedTests: withRetry(3, checkSuppressedTests),
+            typecheck: withRetry(3, runTypecheck),
+          }),
+          classifyFeedback.branch({
+            HasIssues: withRetry(3, incorporateFeedback).drop().then(recur),
+            AllClean: done,
+          }),
+        ),
       ),
+
+      splitCommits.drop(),
     ),
   ),
-  "Add a caching layer to the API endpoints",
+  DESCRIPTION,
 );

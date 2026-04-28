@@ -10,8 +10,11 @@
   "dependencies": {
     "@barnum/barnum": "workspace:*",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
     "tsx": "^4.19.0",
     "typescript": "^6.0.3",
+    "vitest": "^3.0.0",
     "zod": "^4.3.6"
   }
 }
