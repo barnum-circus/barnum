@@ -80,7 +80,8 @@ export const typeCheck = createHandler(
           "--module",
           "ES2020",
           "--moduleResolution",
-          "node",
+          "bundler",
+          "--ignoreConfig",
           ...tsFiles,
         ],
         {
