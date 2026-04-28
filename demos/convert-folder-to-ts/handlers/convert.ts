@@ -1,6 +1,6 @@
 // Handlers for the convert-folder-to-ts workflow.
 //
-// setup: clean output dir, return project config with absolute paths
+// setup: clean output dir (side-effect only)
 // listFiles: scan input dir for JS source files
 // migrate: invoke Claude to convert a JS file to TypeScript (reads source, writes output)
 
@@ -8,7 +8,6 @@ import { createHandler, createHandlerWithConfig } from "@barnum/barnum/runtime";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { baseDir } from "./lib";
 import { callClaude } from "./call-claude";
 
 // --- Types ---
@@ -22,20 +21,14 @@ export type ProjectConfig = {
 
 export const setup = createHandler(
   {
-    outputValidator: z.object({ inputDir: z.string(), outputDir: z.string() }),
-    handle: async (): Promise<ProjectConfig> => {
-      const inputDir = path.join(baseDir, "src");
-      const outputDir = path.join(baseDir, "out");
-
+    inputValidator: z.object({ inputDir: z.string(), outputDir: z.string() }),
+    handle: async ({ value: { outputDir } }): Promise<void> => {
       console.error("[setup] Cleaning output directory...");
       if (existsSync(outputDir)) {
         rmSync(outputDir, { recursive: true });
       }
       mkdirSync(outputDir, { recursive: true });
-
-      console.error(`[setup] inputDir: ${inputDir}`);
-      console.error(`[setup] outputDir: ${outputDir}`);
-      return { inputDir, outputDir };
+      console.error(`[setup] Cleaned ${outputDir}`);
     },
   },
   "setup",
