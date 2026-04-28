@@ -5,10 +5,13 @@
     "typecheck": "turbo run typecheck --output-logs=errors-only",
     "lint": "turbo run lint --output-logs=errors-only",
     "test": "turbo run test --output-logs=errors-only",
+    "format": "prettier --write 'libs/**/*.ts' 'demos/**/*.ts'",
+    "format:check": "prettier --check 'libs/**/*.ts' 'demos/**/*.ts'",
     "prepare": "husky"
   },
   "devDependencies": {
     "husky": "^9.1.7",
+    "prettier": "^3.8.1",
     "turbo": "^2.9.4",
     "typescript": "^6.0.3"
   }
