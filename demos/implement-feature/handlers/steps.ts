@@ -259,6 +259,36 @@ export const runTests = createHandler(
 );
 
 // ---------------------------------------------------------------------------
+// Retry budget
+// ---------------------------------------------------------------------------
+
+type CheckRetriesResultDef = {
+  Retry: number;
+  Exhausted: void;
+};
+export type CheckRetriesResult = TaggedUnion<
+  "CheckRetriesResult",
+  CheckRetriesResultDef
+>;
+
+export const checkRetries = createHandler(
+  {
+    inputValidator: z.number(),
+    outputValidator: taggedUnionSchema("CheckRetriesResult", {
+      Retry: z.number(),
+      Exhausted: z.null(),
+    }),
+    handle: async ({ value: remaining }): Promise<CheckRetriesResult> => {
+      if (remaining > 0) {
+        return { kind: "CheckRetriesResult.Retry", value: remaining - 1 };
+      }
+      return { kind: "CheckRetriesResult.Exhausted", value: null };
+    },
+  },
+  "checkRetries",
+);
+
+// ---------------------------------------------------------------------------
 // Classify feedback
 // ---------------------------------------------------------------------------
 

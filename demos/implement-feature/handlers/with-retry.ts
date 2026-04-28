@@ -1,35 +1,45 @@
 /**
  * withRetry — higher-order combinator that retries a fallible action
- * up to 3 times before giving up.
+ * up to N times before giving up.
  *
  * The action must return Result<TOut, string>. On Ok, the value is
- * unwrapped. On Err, the action is retried with the original input.
- * After all attempts are exhausted, the pipeline panics.
+ * unwrapped and the loop exits via earlyReturn. On Err, checkRetries
+ * decrements the remaining count: Retry → loop again, Exhausted → panic.
  *
- * Uses bindInput to capture the original input, then nested tryCatch:
- * each level tries the action and falls through to the next on failure.
+ * Uses bindInput to capture the original input, loop to track retry
+ * state, and tryCatch to handle each attempt.
  */
 
 import type { Pipeable, TypedAction, Result } from "@barnum/barnum/pipeline";
-import { bindInput, tryCatch, drop, panic } from "@barnum/barnum/pipeline";
+import {
+  bindInput,
+  tryCatch,
+  loop,
+  earlyReturn,
+  drop,
+  panic,
+  constant,
+} from "@barnum/barnum/pipeline";
+import { checkRetries } from "./steps";
 
 export function withRetry<TIn, TOut>(
-  _maxAttempts: 3,
+  maxAttempts: number,
   action: Pipeable<TIn, Result<TOut, string>>,
 ): TypedAction<TIn, TOut> {
   return bindInput<TIn, TOut>((originalInput) =>
-    tryCatch(
-      (throw1: TypedAction<string, never>) =>
-        originalInput.then(action).unwrapOr(throw1),
-      drop.then(
-        tryCatch(
-          (throw2: TypedAction<string, never>) =>
-            originalInput.then(action).unwrapOr(throw2),
-          drop.then(
+    earlyReturn<TOut>((ret) =>
+      constant(maxAttempts - 1).then(
+        loop<void, number>((recur, _done) =>
+          bindInput<number, never>((retriesRemaining) =>
             tryCatch(
-              (throw3: TypedAction<string, never>) =>
-                originalInput.then(action).unwrapOr(throw3),
-              drop.then(panic("max retries (3) exceeded")),
+              (throwError: TypedAction<string, never>) =>
+                originalInput.then(action).unwrapOr(throwError).then(ret),
+              drop.then(
+                retriesRemaining.then(checkRetries).branch({
+                  Retry: recur,
+                  Exhausted: drop.then(panic("max retries exceeded")),
+                }),
+              ),
             ),
           ),
         ),
