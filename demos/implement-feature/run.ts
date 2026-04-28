@@ -14,7 +14,7 @@
  * Each agent step retried up to 3 times (withRetry).
  *
  * Demonstrates: allObject, loop, earlyReturn, tryCatch, bindInput,
- * branch, withRetry as a higher-order combinator.
+ * branch, withRetry and withMaxAttempts as higher-order combinators.
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -23,8 +23,8 @@ import {
   runPipeline,
   pipe,
   allObject,
-  loop,
   bindInput,
+  drop,
 } from "@barnum/barnum/pipeline";
 import {
   setup,
@@ -38,6 +38,7 @@ import {
   splitCommits,
 } from "./handlers/steps";
 import { withRetry } from "./handlers/with-retry";
+import { withMaxAttempts } from "./handlers/with-max-attempts";
 
 console.error("=== Implement feature demo ===\n");
 
@@ -52,7 +53,7 @@ runPipeline(
       setup,
       description.then(withRetry(3, implement)).drop(),
 
-      loop((recur, done) =>
+      withMaxAttempts<void>(3, (recur, done) =>
         pipe(
           allObject({
             bestPractices: withRetry(3, reviewBestPractices),
@@ -61,8 +62,16 @@ runPipeline(
             typecheck: withRetry(3, runTypecheck),
           }),
           classifyFeedback.branch({
-            HasIssues: withRetry(3, incorporateFeedback).drop().then(recur),
-            AllClean: done,
+            HasIssues: bindInput<string, never>((feedback) =>
+              allObject({
+                description,
+                feedback,
+              })
+                .then(withRetry(3, incorporateFeedback))
+                .drop()
+                .then(recur),
+            ),
+            AllClean: drop.then(done),
           }),
         ),
       ),

@@ -364,9 +364,14 @@ export const classifyFeedback = createHandler(
 
 export const incorporateFeedback = createHandler(
   {
-    inputValidator: z.string(),
+    inputValidator: z.object({
+      description: z.string(),
+      feedback: z.string(),
+    }),
     outputValidator: ActionResultValidator,
-    handle: async ({ value: feedback }): Promise<ActionResult> => {
+    handle: async ({
+      value: { description, feedback },
+    }): Promise<ActionResult> => {
       console.error(
         `[incorporateFeedback] Addressing: ${feedback.slice(0, 120)}...`,
       );
@@ -377,6 +382,9 @@ export const incorporateFeedback = createHandler(
             `Fix the following issues in the codebase at ${outDir}:`,
             "",
             feedback,
+            "",
+            "The original task was:",
+            description,
             "",
             "Make minimal changes. Do not change behavior beyond what's needed to fix the issues.",
             "Do not suppress or skip any tests.",
