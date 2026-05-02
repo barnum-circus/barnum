@@ -2,17 +2,14 @@
 //
 // Configuration:
 //   PREFIX_COMMAND controls how the Claude CLI is invoked.
-//   - "ai-sandbox" (default): runs `ai-sandbox claude -p ...`
-//   - null: runs `claude -p ...` directly (no wrapper)
-//   - any other string: runs `<PREFIX_COMMAND> claude -p ...`
-//
-// If you're running Claude Code directly without a wrapper, set PREFIX_COMMAND to null.
+//   - Set GSD_PREFIX env var to use a wrapper (e.g. GSD_PREFIX=ai-sandbox runs `ai-sandbox claude -p ...`)
+//   - Without GSD_PREFIX, runs `claude -p ...` directly (no wrapper)
 
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PREFIX_COMMAND: string | null = "ai-sandbox";
+const PREFIX_COMMAND: string | null = process.env.GSD_PREFIX ?? null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const baseDir = path.resolve(__dirname, "..");
