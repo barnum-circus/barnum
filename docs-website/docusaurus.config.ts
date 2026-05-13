@@ -34,10 +34,13 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
-          lastVersion: '0.3',
+          lastVersion: '0.4',
           versions: {
             current: {
               label: 'main',
+            },
+            '0.4': {
+              label: '0.4',
             },
             '0.3': {
               label: '0.3',
