@@ -134,6 +134,36 @@ files.iterate().filter(isRelevant)
 // Iterator<File> → Iterator<File> (only relevant files kept)
 ```
 
+#### `.take(n)` — first n elements
+
+Keep only the first `n` elements, discarding the rest.
+
+```ts
+// Iterator<T> → Iterator<T>
+```
+
+**Postfix:** Yes — `.take(n)`. Available when output is `Iterator<T>`.
+
+```ts
+listFiles.iterate().take(5).map(processFile).collect()
+// Iterator<string> → Iterator<string> (first 5 only) → ...
+```
+
+#### `.skip(n)` — drop first n elements
+
+Drop the first `n` elements, keeping the rest.
+
+```ts
+// Iterator<T> → Iterator<T>
+```
+
+**Postfix:** Yes — `.skip(n)`. Available when output is `Iterator<T>`.
+
+```ts
+listFiles.iterate().skip(2).collect()
+// Iterator<string> → Iterator<string> (without first 2)
+```
+
 #### `.collect()` — exit Iterator
 
 Unwrap Iterator back to a plain array.
@@ -158,6 +188,8 @@ Iterator.fromResult<TElement, TError>()  // Result<T, E> → Iterator<T>
 Iterator.map<TIn, TOut>(action)   // Iterator<TIn> → Iterator<TOut>
 Iterator.flatMap<TIn, TOut>(action) // Iterator<TIn> → Iterator<TOut>
 Iterator.filter<T>(predicate)     // Iterator<T> → Iterator<T>
+Iterator.take<T>(n)              // Iterator<T> → Iterator<T>
+Iterator.skip<T>(n)              // Iterator<T> → Iterator<T>
 Iterator.collect<T>()             // Iterator<T> → T[]
 ```
 
@@ -856,6 +888,8 @@ These methods are available on any `TypedAction` via dot-chaining. **Always pref
 | `.map(action)` | `Iterator.map(action)` | Requires Iterator output (also works on Option, Result) |
 | `.flatMap(action)` | `Iterator.flatMap(action)` | Requires Iterator output; `action` returns any IntoIterator |
 | `.filter(pred)` | `Iterator.filter(pred)` | Requires Iterator output; pred returns boolean |
+| `.take(n)` | `Iterator.take(n)` | Requires Iterator output; keeps first n elements |
+| `.skip(n)` | `Iterator.skip(n)` | Requires Iterator output; drops first n elements |
 | `.collect()` | `Iterator.collect()` | Requires Iterator output; unwraps to `T[]` |
 | `.forEach(action)` | `chain(a, forEach(action))` | Low-level; requires array output; prefer `.iterate().map(action).collect()` |
 | `.branch(cases)` | `chain(a, branch(cases))` | Requires tagged union output |
