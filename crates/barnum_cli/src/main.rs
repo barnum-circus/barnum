@@ -49,16 +49,24 @@ enum Command {
     /// Deserialize a workflow config, reserialize, and print. Used for
     /// round-trip validation.
     Check {
-        /// Serialized JSON config.
-        #[arg(long)]
-        config: String,
+        /// Serialized JSON config (inline). Mutually exclusive with --config-file.
+        #[arg(long, conflicts_with = "config_file")]
+        config: Option<String>,
+
+        /// Path to a JSON config file. Mutually exclusive with --config.
+        #[arg(long, conflicts_with = "config")]
+        config_file: Option<String>,
     },
 
     /// Run a workflow to completion.
     Run {
-        /// Serialized JSON config.
-        #[arg(long)]
-        config: String,
+        /// Serialized JSON config (inline). Mutually exclusive with --config-file.
+        #[arg(long, conflicts_with = "config_file")]
+        config: Option<String>,
+
+        /// Path to a JSON config file. Mutually exclusive with --config.
+        #[arg(long, conflicts_with = "config")]
+        config_file: Option<String>,
 
         /// Executor command for TypeScript (e.g., "node /path/to/tsx/cli.mjs").
         #[arg(long)]
@@ -78,15 +86,22 @@ enum Command {
 async fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Check { config } => check(&config),
+        Command::Check {
+            config,
+            config_file,
+        } => resolve_config(config, config_file).and_then(|json| check(&json)),
         Command::Run {
             config,
+            config_file,
             executor,
             worker,
             log_level,
         } => {
             init_tracing(log_level);
-            run(&config, &executor, &worker).await
+            match resolve_config(config, config_file) {
+                Ok(json) => run(&json, &executor, &worker).await,
+                Err(e) => Err(e),
+            }
         }
     };
     if let Err(e) = result {
@@ -95,6 +110,18 @@ async fn main() {
             eprintln!("{e}");
         }
         std::process::exit(1);
+    }
+}
+
+/// Resolve config from either inline JSON or a file path. Exactly one must be provided.
+fn resolve_config(
+    config: Option<String>,
+    config_file: Option<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match (config, config_file) {
+        (Some(json), None) => Ok(json),
+        (None, Some(path)) => Ok(std::fs::read_to_string(&path)?),
+        _ => Err("exactly one of --config or --config-file must be provided".into()),
     }
 }
 

@@ -5,7 +5,7 @@
 
 import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -149,12 +149,16 @@ function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
   }
   const executor = resolveExecutor();
   const worker = resolveWorker();
+
   const configJson = JSON.stringify(config);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "barnum-"));
+  const configFilePath = path.join(tmpDir, "config.json");
+  writeFileSync(configFilePath, configJson);
 
   const cliArgs = [
     "run",
-    "--config",
-    configJson,
+    "--config-file",
+    configFilePath,
     "--executor",
     executor,
     "--worker",
@@ -181,11 +185,21 @@ function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
       process.stderr.write(chunk);
     });
 
+    const cleanup = () => {
+      try {
+        unlinkSync(configFilePath);
+      } catch {
+        /* best-effort */
+      }
+    };
+
     child.on("error", (error) => {
+      cleanup();
       reject(new Error(`Failed to spawn barnum: ${error.message}`));
     });
 
     child.on("close", (code) => {
+      cleanup();
       if (code !== 0) {
         const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
         const detail = stderr ? `\n${stderr}` : "";

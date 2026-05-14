@@ -184,4 +184,13 @@ describe("pipe execution", () => {
     expect(chainResult).toBe(1);
     expect(pipeResult).toBe(chainResult);
   });
+
+  it("large config (>200KB) works via config file", async () => {
+    // This would hit E2BIG if passed as a CLI argument.
+    const largePayload = "x".repeat(250_000);
+    const result = await runPipeline(
+      constant({ data: largePayload }).getField("data"),
+    );
+    expect(result).toBe(largePayload);
+  });
 });
