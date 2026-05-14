@@ -136,7 +136,18 @@ export const implement = createHandler({
 
 ## `createHandlerWithConfig`
 
-For handlers that need configuration at composition time (not at runtime), use `createHandlerWithConfig`. It returns a factory function that takes the config and produces a `TypedAction`.
+`createHandlerWithConfig` is a handler factory — it returns a function that, when called with a config object, produces a `TypedAction`. Think of the relationship like this:
+
+| | `createHandler` | `createHandlerWithConfig` |
+|---|---|---|
+| Returns | A `TypedAction` (ready to use) | A **factory function** that returns a `TypedAction` |
+| Input data | Comes from the pipeline at runtime | Comes from the pipeline at runtime |
+| Configuration | N/A — baked into the handler body | Provided at composition time, fixed for the lifetime of the action |
+| Analogy | A function | A function that returns a function (currying) |
+
+Use `createHandler` when the handler's behavior is fully determined by its runtime input. Use `createHandlerWithConfig` when you want one handler definition that can be parameterized differently at different call sites — like `migrate({ to: "TypeScript" })` vs `migrate({ to: "ESM" })`.
+
+The config is **not** runtime data that flows through the pipeline. It's a compile-time constant baked into the workflow graph. The runtime input still arrives via `{ value }` as usual — the config just controls *how* that input is processed.
 
 ```ts
 import { createHandlerWithConfig } from "@barnum/barnum/runtime";
