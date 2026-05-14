@@ -36,23 +36,23 @@ export const analyze = createHandler({
 analyze.branch({ Critical: escalate, Low: log })
 ```
 
-### Retry and loop logic belongs in the pipeline
+### Retries, timeouts, and error recovery belong in the pipeline
 
-A handler makes exactly one attempt and returns a `Result` on failure. The pipeline uses `loop`, `tryCatch`, and `unwrapOr` to handle retries, back-off, and fallback paths.
+A handler makes exactly one attempt and returns a `Result` on failure. Retries, timeouts, back-off, and fallback paths are all pipeline-level concerns — they compose around handlers via `loop`, `tryCatch`, `unwrapOr`, and `withTimeout`.
 
 ```ts
-// Avoid: retry inside the handler
+// Avoid: retry and timeout inside the handler
 export const callApi = createHandler({
   handle: async ({ value }) => {
     for (let i = 0; i < 3; i++) {
-      try { return await fetch(value.url); }
+      try { return await fetch(value.url, { signal: AbortSignal.timeout(5000) }); }
       catch { await sleep(1000 * i); }
     }
     throw new Error("failed after retries");
   },
 }, "callApi");
 
-// Prefer: handler does one attempt, pipeline handles retry
+// Prefer: handler does one attempt, pipeline handles retry and timeout
 export const callApi = createHandler({
   outputValidator: Result.schema(responseSchema, z.string()),
   handle: async ({ value }) => {
@@ -61,11 +61,14 @@ export const callApi = createHandler({
   },
 }, "callApi");
 
-// Pipeline retries:
+// Pipeline adds timeout and retries:
 loop((recur, done) =>
-  callApi.branch({ Ok: done, Err: logAndWait.then(recur) })
+  withTimeout(constant(5_000), callApi)
+    .branch({ Ok: done, Err: logAndWait.then(recur) })
 )
 ```
+
+This separation means you can reuse `callApi` in contexts that don't want retries, or change the retry strategy without touching the handler.
 
 ### Don't return data the pipeline already knows
 
