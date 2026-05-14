@@ -26,6 +26,7 @@ import { Iterator as IteratorNs } from "./iterator.js";
 import {
   bind as bindStandalone,
   bindInput as bindInputStandalone,
+  tap as tapStandalone,
   type VarRef,
   type InferVarRefs,
 } from "./bind.js";
@@ -466,6 +467,8 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   bindInput<TOut>(
     body: (input: VarRef<Out>) => Action & { __out?: () => TOut },
   ): TypedAction<In, TOut>;
+  /** Run a side effect, pass the original value through unchanged. `T → T` */
+  tap(action: Pipeable<Out, any>): TypedAction<In, Out>;
 };
 
 /**
@@ -978,6 +981,10 @@ function bindInputMethod(
   return chain(toAction(this), toAction(bindInputStandalone(body)));
 }
 
+function tapMethod(this: TypedAction, action: Pipeable<any, any>): TypedAction {
+  return chain(toAction(this), toAction(tapStandalone(action)));
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -1029,6 +1036,7 @@ export function typedAction<In = unknown, Out = unknown>(
       transpose: { value: transposeMethod, configurable: true },
       bind: { value: bindMethod, configurable: true },
       bindInput: { value: bindInputMethod, configurable: true },
+      tap: { value: tapMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out>;
@@ -1067,7 +1075,13 @@ export type ExtractOutput<T> = T extends { __out?: () => infer Out }
 export { pipe } from "./pipe.js";
 export { chain } from "./chain.js";
 export { all } from "./all.js";
-export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
+export {
+  bind,
+  bindInput,
+  tap,
+  type VarRef,
+  type InferVarRefs,
+} from "./bind.js";
 export { defineRecursiveFunctions } from "./recursive.js";
 export { resetEffectIdCounter } from "./effect-id.js";
 import {

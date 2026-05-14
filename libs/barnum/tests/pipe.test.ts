@@ -5,6 +5,7 @@ import {
   pipe,
   branch,
   config,
+  tap,
 } from "../src/ast.js";
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { chain } from "../src/chain.js";
@@ -192,5 +193,17 @@ describe("pipe execution", () => {
       constant({ data: largePayload }).getField("data"),
     );
     expect(result).toBe(largePayload);
+  });
+
+  it("tap runs side effect and passes input through", async () => {
+    const result = await runPipeline(constant({ x: 42 }).tap(drop));
+    expect(result).toEqual({ x: 42 });
+  });
+
+  it("tap standalone passes input through", async () => {
+    const result = await runPipeline(
+      pipe(constant("hello"), tap(constant("discarded"))),
+    );
+    expect(result).toBe("hello");
   });
 });

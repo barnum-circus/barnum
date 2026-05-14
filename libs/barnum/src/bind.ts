@@ -2,6 +2,7 @@ import {
   type Action,
   type ExtractInput,
   type ExtractOutput,
+  type Pipeable,
   type TypedAction,
   toAction,
   typedAction,
@@ -159,4 +160,20 @@ export function bindInput<TIn, TOut = any>(
   body: (input: VarRef<TIn>) => BodyResult<TOut>,
 ): TypedAction<TIn, TOut> {
   return bind([identity()], ([input]) => pipe(drop, body(input)));
+}
+
+// ---------------------------------------------------------------------------
+// tap — run a side effect, pass the original input through
+// ---------------------------------------------------------------------------
+
+/**
+ * Run an action for its side effects, then pass the original input through
+ * unchanged. The action's output is discarded.
+ *
+ * `tap(action)`: `T → T` (where action: `T → void`)
+ *
+ * Equivalent to: `bindInput<T, T>((input) => pipe(input.then(action), input))`
+ */
+export function tap<T>(action: Pipeable<T, any>): TypedAction<T, T> {
+  return bindInput<T, T>((input) => pipe(input.then(action).then(drop), input));
 }
