@@ -181,6 +181,20 @@ When you need both a handler's input and output downstream, `augment(handler)` m
 listFiles.iterate().map(augment(countLines)).collect()
 ```
 
+### Iteration is parallel by default
+
+`.iterate().map(action).collect()` dispatches all elements concurrently — like `Promise.all`, not a for-loop. If you need sequential processing (e.g., each step depends on the previous result, or you're rate-limited), use `.fold()`:
+
+```ts
+// Parallel: all files processed concurrently
+listFiles.iterate().map(processFile).collect()
+
+// Sequential: one at a time, with accumulator
+listFiles.iterate().fold(constant(initialState), processFileSequentially)
+```
+
+There is no sequential `.each()` or sequential `.map()`. If you want one-at-a-time execution, fold is the primitive.
+
 ### Prefer `.iterate().map()` over `forEach`
 
 `forEach` is a low-level AST node. The Iterator API is the user-facing equivalent with better composability — you can chain `.filter()`, `.take()`, `.flatMap()` before collecting.
@@ -245,6 +259,27 @@ classifyJudgment.branch({
   NeedsWork: applyFeedback.then(recur),
   Approved: drop,
 })
+```
+
+### Annotate return types when returning tagged unions
+
+When a handler returns a tagged union but only constructs one variant in a given code path, TypeScript narrows the return type to that single variant. The pipeline then fails to typecheck because the handler's output type is narrower than the full union expected by `.branch()` or `.unwrapOr()`.
+
+Fix: add an explicit `Promise<FullUnionType>` return type annotation to the `handle` function.
+
+```ts
+type AnalysisResult = Result<string, string>;
+
+// Avoid: TypeScript narrows to just the Ok variant
+handle: async ({ value }) => {
+  return { kind: "Result.Ok" as const, value: "done" };
+  // Inferred return: { kind: "Result.Ok", value: string } — not Result<string, string>
+}
+
+// Prefer: explicit annotation preserves the full union
+handle: async ({ value }): Promise<AnalysisResult> => {
+  return { kind: "Result.Ok" as const, value: "done" };
+}
 ```
 
 ### Use void returns for side-effect-only handlers
