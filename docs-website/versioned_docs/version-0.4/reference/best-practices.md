@@ -217,6 +217,70 @@ export const implement = createHandler({
 
 ---
 
+## Minimize work inside LLM handlers
+
+When a handler invokes an LLM agent (e.g., `callClaude`), the agent's effectiveness is bounded by the context it receives. Pre-read files in earlier pipeline steps and pass the content as input — don't make the agent spend tokens discovering information you already have.
+
+### Pre-read the file being modified
+
+If the agent's job is to modify a file, read it before the handler runs and pass the content in. The agent sees the full file immediately instead of burning a tool call to read it.
+
+```ts
+// Avoid: agent wastes a tool call reading the file
+export const refactor = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  handle: async ({ value }) => {
+    await callClaude({
+      prompt: `Refactor ${value.file}`,
+      allowedTools: ["Read", "Edit"],
+    });
+  },
+}, "refactor");
+
+// Prefer: pre-read in the pipeline, agent starts with full context
+export const readFile = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  outputValidator: z.object({ file: z.string(), content: z.string() }),
+  handle: async ({ value }) => ({
+    file: value.file,
+    content: readFileSync(value.file, "utf-8"),
+  }),
+}, "readFile");
+
+export const refactor = createHandler({
+  inputValidator: z.object({ file: z.string(), content: z.string() }),
+  handle: async ({ value }) => {
+    await callClaude({
+      prompt: `Refactor this file (${value.file}):\n\n${value.content}`,
+      allowedTools: ["Edit"],
+    });
+  },
+}, "refactor");
+```
+
+### Pre-read imports and dependents
+
+An agent modifying a file needs to understand its dependencies and its callers. Read these in the pipeline and include them:
+
+- **Files it imports** — so the agent knows the shape of dependencies without guessing.
+- **Files that import it** — so the agent understands downstream callers and avoids breaking changes.
+
+```ts
+// Pipeline reads context, agent receives it pre-loaded:
+pipe(
+  readTargetFile,
+  augment(resolveImports),   // { file, content } → { file, content, imports: FileContent[] }
+  augment(findDependents),   // → { ..., dependents: FileContent[] }
+  refactorWithContext,       // agent sees everything upfront
+)
+```
+
+### Why this matters
+
+Every tool call an LLM agent makes costs latency and tokens. A `Read` call the agent makes inside a handler is identical work the pipeline could have done deterministically in milliseconds. The agent should spend its budget on judgment and creativity — deciding *what* to change — not on mechanically gathering files it was always going to need.
+
+---
+
 ## Prefer postfix methods over standalone functions
 
 When a combinator is available as both a standalone function and a postfix method, **always prefer the postfix form.** Two reasons:
