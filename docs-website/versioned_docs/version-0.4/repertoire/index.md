@@ -6,6 +6,7 @@ For the underlying building blocks (loop, branch, race, etc.), see [Patterns](..
 
 | Workflow | Description |
 |---|---|
+| [Sequential file processing](./sequential-file-processing.md) | Process items one at a time, accumulating results (fold/reduce) |
 | [Adversarial review](./adversarial-review.md) | Implement → judge → revise loop until approved |
 | [Identify and refactor](./identify-and-refactor.md) | Find refactoring opportunities, implement in worktrees, review with an LLM |
 | [Code review](./code-review.md) | Parallel multi-check review (standards, security, performance) |

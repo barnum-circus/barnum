@@ -26,6 +26,7 @@ const sidebars: SidebarsConfig = {
       label: 'Repertoire',
       items: [
         'repertoire/index',
+        'repertoire/sequential-file-processing',
         'repertoire/adversarial-review',
         'repertoire/identify-and-refactor',
         'repertoire/code-review',
