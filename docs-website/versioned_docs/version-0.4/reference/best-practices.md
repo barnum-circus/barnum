@@ -389,19 +389,29 @@ getUserProfile.getField("email")
 
 This applies to every combinator that has a postfix form: `.then()`, `.iterate()`, `.map()`, `.flatMap()`, `.filter()`, `.collect()`, `.branch()`, `.drop()`, `.tag()`, `.flatten()`, `.getField()`, `.getIndex()`, `.pick()`, `.wrapInField()`, `.splitFirst()`, `.splitLast()`, `.mapErr()`, `.unwrapOr()`.
 
-## Prefer `.then()` over `pipe()`
+## `.then()` vs `pipe()` for chaining
 
-Postfix `.then()` is the primary way to chain steps. It reads naturally and infers types from context:
+Use `.then()` for two-step chains. Use `pipe()` when chaining three or more steps in sequence — it's flatter and easier to scan:
 
 ```ts
-// Avoid
-pipe(listFiles, Iterator.fromArray(), Iterator.map(processFile), Iterator.collect(), commit)
+// Two steps: .then() is fine
+listFiles.then(commit)
 
-// Prefer
-listFiles.iterate().map(processFile).collect().then(commit)
+// Three+ steps: use pipe()
+pipe(
+  listFiles,
+  processFiles,
+  commit,
+)
+
+// Avoid: long .then() chains
+listFiles.then(processFiles).then(validate).then(commit)
+
+// Avoid: mixing pipe and .then()
+pipe(listFiles, processFiles).then(commit)
 ```
 
-`pipe()` is available as an alternative but rarely needed — `.then()` chains work at any length.
+Postfix methods like `.iterate()`, `.map()`, `.collect()`, `.getField()`, `.branch()` are always preferred over their standalone equivalents regardless of chain length — they infer types from context and don't require explicit type parameters.
 
 ## Use `taggedUnionSchema` for handler validators
 
