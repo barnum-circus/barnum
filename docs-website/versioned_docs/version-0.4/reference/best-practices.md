@@ -95,6 +95,58 @@ export const countLines = createHandler({
 augment(countLines)  // { file } → { file, lineCount }
 ```
 
+### Don't accept pass-through fields in handler inputs
+
+Handlers should only accept the fields they actually use. A handler that accepts data and returns it unchanged is an anti-pattern — it means the handler is doing the pipeline's job of threading context. The telltale sign is `return { ...value, result }` or any handler whose output is a superset of its input with one new field tacked on.
+
+If a handler needs `file` but downstream steps also need `branch` and `worktreePath`, don't widen the handler's input to include all three. Use `bindInput` or `pick` in the pipeline to narrow the input before the handler and restore the full context after.
+
+```ts
+// Avoid: handler accepts fields it doesn't use, just to pass them through
+export const analyze = createHandler({
+  inputValidator: z.object({
+    file: z.string(),
+    branch: z.string(),        // not used by analyze
+    worktreePath: z.string(),  // not used by analyze
+  }),
+  outputValidator: z.object({
+    file: z.string(),          // echoed back unchanged
+    branch: z.string(),        // echoed back unchanged
+    worktreePath: z.string(),  // echoed back unchanged
+    issues: z.array(issueSchema),
+  }),
+  handle: async ({ value }) => {
+    const issues = await findIssues(value.file);
+    return { ...value, issues };  // spreading input into output = anti-pattern
+  },
+}, "analyze");
+```
+
+The handler's signature is now coupled to its caller's context. It can't be reused in a pipeline that doesn't have `branch` or `worktreePath`. Instead, keep the handler's input narrow and let the pipeline manage context:
+
+```ts
+// Prefer: handler only accepts what it needs, returns only what it computed
+export const analyze = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  outputValidator: z.array(issueSchema),
+  handle: async ({ value }) => {
+    return await findIssues(value.file);
+  },
+}, "analyze");
+
+// Pipeline narrows input and restores context:
+bindInput<{ file: string; branch: string; worktreePath: string }>((params) =>
+  params.pick("file").then(analyze)
+    .then(wrapInField("issues"))
+    // params still has branch and worktreePath available for later steps
+)
+
+// Or use augment for the simple case (input fields + handler output merged):
+augment(analyze)  // { file } → { file, issues }
+```
+
+This keeps handlers reusable, testable in isolation, and decoupled from the specific pipeline they appear in. The pipeline is the right place for context management — handlers are the right place for doing work.
+
 ---
 
 ## Pipeline composition
