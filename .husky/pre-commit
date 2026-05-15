@@ -45,6 +45,12 @@ for demo in demos/*/; do
     fi
 done
 
+# Auto-stage Cargo.lock if it's dirty. Any Cargo.toml change (deps, features,
+# version bumps) updates the lockfile — CI uses --locked so it must be committed.
+if ! git diff --quiet Cargo.lock 2>/dev/null; then
+    git add Cargo.lock
+fi
+
 # -- TypeScript checks (if TS files staged) --
 
 if [ -n "$TS_FILES" ]; then
