@@ -382,6 +382,22 @@ handle: async ({ value }): Promise<AnalysisResult> => {
 }
 ```
 
+### Use `null` not `undefined` for empty pipeline values
+
+Pipeline definitions are serialized to JSON. `undefined` has no JSON representation — `JSON.stringify({ value: undefined })` produces `{}`, which causes the Rust deserializer to fail with a missing field error. TypeScript won't catch this because `void` accepts `undefined` as a valid value.
+
+Use `null` for "no meaningful value" in pipeline data:
+
+```ts
+// Broken: undefined disappears during serialization
+Skip: bindInput<null, void>(() => constant(undefined))
+
+// Fixed: null serializes correctly
+Skip: bindInput<null, null>(() => constant(null))
+```
+
+This applies anywhere you construct pipeline values — `constant()`, handler return values, branch cases. If you mean "nothing," use `null`.
+
 ### Use void returns for side-effect-only handlers
 
 If a handler's purpose is a side effect (write a file, send a message, invoke an LLM with tools), return `void` from `handle`. The framework types it as `never` output — the next step starts fresh via `.drop()` or naturally from a new source. Don't return `null` and pass it along.
