@@ -150,6 +150,48 @@ augment(analyze)  // { file } → { file, issues }
 
 This keeps handlers reusable, testable in isolation, and decoupled from the specific pipeline they appear in. The pipeline is the right place for context management — handlers are the right place for doing work.
 
+### Pass data through the pipeline, not the file system
+
+The pipeline is the data channel between handlers. If handler A produces a result that handler B needs, return it from A and pass it to B through the pipeline — don't write it to a temp file and have B read it back.
+
+```ts
+// Avoid: using the file system as a data bus
+export const generateReport = createHandler({
+  handle: async ({ value }) => {
+    const report = await analyze(value.file);
+    writeFileSync("/tmp/report.json", JSON.stringify(report));
+  },
+}, "generateReport");
+
+export const publishReport = createHandler({
+  handle: async () => {
+    const report = JSON.parse(readFileSync("/tmp/report.json", "utf-8"));
+    await upload(report);
+  },
+}, "publishReport");
+
+// Prefer: data flows through the pipeline
+export const generateReport = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  outputValidator: reportSchema,
+  handle: async ({ value }) => {
+    return await analyze(value.file);
+  },
+}, "generateReport");
+
+export const publishReport = createHandler({
+  inputValidator: reportSchema,
+  handle: async ({ value }) => {
+    await upload(value);
+  },
+}, "publishReport");
+
+// Pipeline connects them:
+generateReport.then(publishReport)
+```
+
+File system writes are appropriate for **durable side effects** — checkpointing progress, writing final output artifacts, persisting state that survives process crashes. They are not appropriate for passing intermediate data between pipeline steps. Pipeline data is typed, validated, and visible to the framework for debugging and replay. File system state is opaque, fragile, and couples handlers to specific paths.
+
 ---
 
 ## Pipeline composition
