@@ -321,6 +321,31 @@ withResource({
 
 The `dispose` step runs whether `action` succeeds or fails — guaranteed cleanup without polluting handler logic.
 
+**`withResource` needs an input.** Internally it merges its pipeline input with the created resource (`all(create, identity()) → merge`). If there's no input flowing into `withResource` — e.g., it's the direct return of a `bindInput` — the merge receives null and panics. Pipe data into it:
+
+```ts
+// Broken: withResource has no input to merge
+bindInput<Params>((input) =>
+  withResource({
+    create: input.then(createBranch),  // creates resource, but no input for merge
+    action: ...,
+    dispose: ...,
+  })
+)
+
+// Fixed: pipe constructed input into withResource
+bindInput<Params>((input) =>
+  allObject({
+    file: input.getField("file"),
+    worktreePath: input.getField("worktreePath"),
+  }).then(withResource({
+    create: createBranch,
+    action: ...,
+    dispose: ...,
+  }))
+)
+```
+
 ---
 
 ## Handler contracts
