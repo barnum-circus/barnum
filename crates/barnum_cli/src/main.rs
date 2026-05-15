@@ -134,8 +134,18 @@ fn init_tracing(log_level: LogLevel) {
         .init();
 }
 
+/// Deserialize a Config from JSON with no recursion limit.
+/// The AST is right-folded (deeply nested Chain nodes), so complex pipelines
+/// exceed `serde_json`'s default limit of 128.
+fn deserialize_config(input: &str) -> Result<barnum_ast::Config, Box<dyn std::error::Error>> {
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    deserializer.disable_recursion_limit();
+    let config = serde::Deserialize::deserialize(&mut deserializer)?;
+    Ok(config)
+}
+
 fn check(input: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let config: barnum_ast::Config = serde_json::from_str(input)?;
+    let config = deserialize_config(input)?;
     let output = serde_json::to_string_pretty(&config)?;
     #[expect(clippy::print_stdout)]
     {
@@ -145,7 +155,7 @@ fn check(input: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let config: barnum_ast::Config = serde_json::from_str(input)?;
+    let config = deserialize_config(input)?;
     let flat_config = flatten(config)?;
     let mut workflow_state = WorkflowState::new(flat_config);
     let mut scheduler = Scheduler::new(executor.to_owned(), worker.to_owned());
