@@ -1,5 +1,13 @@
 # Best Practices
 
+Three principles drive every decision below:
+
+1. **Use the builtins.** The framework provides typed combinators for structuring data (`wrapInField`, `getField`, `pick`, `allObject`). Use them instead of reimplementing the same logic inside handlers.
+2. **Move logic into the pipeline.** Handlers do work — external calls, computation, side effects. Everything else (routing, merging, retrying, threading context) belongs in the pipeline definition where it's visible, composable, and reusable.
+3. **Compose.** Small, focused handlers with narrow inputs and scalar outputs combine freely. A handler that returns a flat value works with `wrapInField`, `allObject`, `fold`, and every other combinator. A handler that returns a bespoke object works only with itself.
+
+---
+
 ## Handler design
 
 Handlers are the leaf nodes — they do work. Everything else is plumbing. Keep them minimal and let the pipeline layer handle composition.
@@ -10,7 +18,7 @@ Handlers run in isolated subprocesses. You cannot call `.handle()` from inside o
 
 ### One job per handler
 
-A handler does one thing: transform data, call an external service, read a file, invoke an LLM. All plumbing — splitting fields, merging objects, routing to different paths — belongs in the pipeline layer using `bindInput`, `getField`, `wrapInField`, `augment`, `pick`, and `branch`.
+A handler does one thing: transform data, call an external service, read a file, invoke an LLM. All plumbing — splitting fields, merging objects, routing to different paths — belongs in the pipeline layer using `bindInput`, `getField`, `wrapInField`, `allObject`, `pick`, and `branch`.
 
 ```ts
 // Avoid: handler does plumbing + work
@@ -70,9 +78,39 @@ loop((recur, done) =>
 
 This separation means you can reuse `callApi` in contexts that don't want retries, or change the retry strategy without touching the handler.
 
+### Return scalar values, not wrapper objects
+
+A handler that computes one thing should return that thing directly — not an object wrapping it. Wrapping is the pipeline's job (`wrapInField`, `allObject`). Scalar outputs compose with every combinator; bespoke objects only work in one pipeline.
+
+```ts
+// Avoid: handler wraps its result in an object
+export const countLines = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  outputValidator: z.object({ lineCount: z.number() }),
+  handle: async ({ value }) => {
+    const content = readFileSync(value.file, "utf-8");
+    return { lineCount: content.split("\n").length };
+  },
+}, "countLines");
+
+// Prefer: return the value directly, let the pipeline structure it
+export const countLines = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  outputValidator: z.number(),
+  handle: async ({ value }) => {
+    const content = readFileSync(value.file, "utf-8");
+    return content.split("\n").length;
+  },
+}, "countLines");
+
+// Pipeline wraps/merges as needed:
+countLines.wrapInField("lineCount")    // → { lineCount: number }
+allObject({ lines: countLines, size: getFileSize })  // combine multiple
+```
+
 ### Don't return data the pipeline already knows
 
-If the file path was passed in as input, don't make the handler echo it back. The pipeline can merge it back via `augment`, `wrapInField`, or `bindInput`.
+If the file path was passed in as input, don't make the handler echo it back. The pipeline can merge it back via `wrapInField`, `allObject`, or `bindInput`.
 
 ```ts
 // Avoid: handler parrots its input back
@@ -94,8 +132,8 @@ export const countLines = createHandler({
   },
 }, "countLines");
 
-// Pipeline merges if needed:
-augment(countLines)  // { file } → { file, lineCount }
+// Pipeline structures the result:
+allObject({ file: identity(), lineCount: countLines })  // { file } → { file, lineCount }
 ```
 
 ### Don't accept pass-through fields in handler inputs
@@ -144,8 +182,8 @@ bindInput<{ file: string; branch: string; worktreePath: string }>((params) =>
     // params still has branch and worktreePath available for later steps
 )
 
-// Or use augment for the simple case (input fields + handler output merged):
-augment(analyze)  // { file } → { file, issues }
+// Or use allObject to combine input fields with handler output:
+allObject({ file: identity(), issues: analyze })
 ```
 
 This keeps handlers reusable, testable in isolation, and decoupled from the specific pipeline they appear in. The pipeline is the right place for context management — handlers are the right place for doing work.
@@ -234,13 +272,13 @@ bindInput<Params>((params) =>
 )
 ```
 
-### Use `augment` to carry context forward
+### Use `allObject` to carry context forward
 
-When you need both a handler's input and output downstream, `augment(handler)` merges them. Avoids handlers returning their own input.
+When you need both a handler's input and output downstream, use `allObject` to run the handler alongside `identity()` and collect the results into a named object.
 
 ```ts
-// augment(countLines): { file: string } → { file: string, lineCount: number }
-listFiles.iterate().map(augment(countLines)).collect()
+// { file: string } → { file: string, lineCount: number }
+listFiles.iterate().map(allObject({ file: getField("file"), lineCount: countLines })).collect()
 ```
 
 ### Iteration is parallel by default
@@ -419,11 +457,13 @@ An agent modifying a file needs to understand its dependencies and its callers. 
 
 ```ts
 // Pipeline reads context, agent receives it pre-loaded:
-pipe(
-  readTargetFile,
-  augment(resolveImports),   // { file, content } → { file, content, imports: FileContent[] }
-  augment(findDependents),   // → { ..., dependents: FileContent[] }
-  refactorWithContext,       // agent sees everything upfront
+readTargetFile.bindInput((fileAndContent) =>
+  allObject({
+    file: fileAndContent.getField("file"),
+    content: fileAndContent.getField("content"),
+    imports: fileAndContent.then(resolveImports),
+    dependents: fileAndContent.then(findDependents),
+  }).then(refactorWithContext)
 )
 ```
 
