@@ -154,6 +154,26 @@ This keeps handlers reusable, testable in isolation, and decoupled from the spec
 
 ## Pipeline composition
 
+### Prefer `allObject` over `all`
+
+`all` returns a positional tuple — callers access results by index, which is fragile and unreadable. `allObject` returns a named object:
+
+```ts
+// Avoid: positional tuple — what's [0]? what's [1]?
+all(listFiles, loadConfig, readManifest)
+// → [string[], Config, Manifest]
+
+// Prefer: named fields — self-documenting, refactor-safe
+allObject({
+  files: listFiles,
+  config: loadConfig,
+  manifest: readManifest,
+})
+// → { files: string[], config: Config, manifest: Manifest }
+```
+
+Named fields survive reordering and additions without breaking downstream `.getIndex()` calls. Use `all` only when feeding directly into something that expects a tuple (like `fold`'s `[acc, element]`).
+
 ### Use `bindInput` when multiple steps need the same value
 
 If a handler's output is consumed by one step but also needed later (e.g., a worktree path used for type-check, commit, and PR creation), wrap the section in `bindInput` rather than threading the value through every handler's input/output.
