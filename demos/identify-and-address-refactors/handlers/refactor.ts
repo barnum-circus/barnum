@@ -11,7 +11,14 @@ import {
   taggedUnionSchema,
   optionSchema,
 } from "@barnum/barnum/runtime";
-import { bindInput, pipe, loop, pick } from "@barnum/barnum/pipeline";
+import {
+  allObject,
+  bindInput,
+  getIndex,
+  pipe,
+  loop,
+  pick,
+} from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -374,26 +381,32 @@ export const applyFeedback = createHandler(
 import { typeCheckFix } from "./type-check-fix";
 import { createWorktree, createPR } from "./git";
 
-export type ImplementAndReviewParams = Refactor & {
-  worktreePath: string;
-  branch: string;
-};
+type WorktreeResource = { worktreePath: string; branch: string };
 
-export const implementAndReview = bindInput<ImplementAndReviewParams>(
-  (implementAndReviewParams) =>
-    pipe(
-      implementAndReviewParams
-        .pick("worktreePath", "description")
+export const implementAndReview = bindInput<[WorktreeResource, Refactor]>(
+  (params) => {
+    const resource = params
+      .then(getIndex<[WorktreeResource, Refactor], 0>(0))
+      .unwrap();
+    const refactor = params
+      .then(getIndex<[WorktreeResource, Refactor], 1>(1))
+      .unwrap();
+
+    return pipe(
+      allObject({
+        worktreePath: resource.getField("worktreePath"),
+        description: refactor.getField("description"),
+      })
         .then(implement)
         .drop(),
-      implementAndReviewParams.pick("worktreePath").then(typeCheckFix).drop(),
+      resource.pick("worktreePath").then(typeCheckFix).drop(),
 
       // Judge quality; revise and re-check if needed.
       loop((recur, done) =>
         judgeRefactor.then(classifyJudgment).branch({
           NeedsWork: applyFeedback
             .drop()
-            .then(implementAndReviewParams.pick("worktreePath"))
+            .then(resource.pick("worktreePath"))
             .then(typeCheckFix)
             .drop()
             .then(recur),
@@ -402,13 +415,17 @@ export const implementAndReview = bindInput<ImplementAndReviewParams>(
       ).drop(),
 
       // Commit and open a PR only after all fixes and revisions are done.
-      implementAndReviewParams.pick("worktreePath").then(commit).drop(),
+      resource.pick("worktreePath").then(commit).drop(),
       pipe(
-        implementAndReviewParams.pick("branch", "description"),
+        allObject({
+          branch: resource.getField("branch"),
+          description: refactor.getField("description"),
+        }),
         preparePRInput,
         createPR,
       ),
-    ),
+    );
+  },
 );
 
 export const createBranchWorktree = pipe(

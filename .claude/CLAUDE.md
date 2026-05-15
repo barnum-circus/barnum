@@ -64,6 +64,7 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 ## Type safety
 
 - **No `as` casts. Period.** Not to fix type inference, not for convenience, not ever. If a return type doesn't match, pass explicit type parameters to the leaf combinators so TypeScript infers the correct types. Use `.then()` chains instead of `chain()` — `.then()` preserves type parameters while `chain()` loses them. `as TypedAction<...>` silences the compiler instead of letting it catch real errors.
+- **Never merge objects with unknown fields.** If there's any possibility of key collision, or the merge can't be undone (you can't recover the original objects), pass tuples instead. Explicit, typed field extraction from a tuple is always safe. Blind `{ ...a, ...b }` or `Object.assign` is not.
 
 ## Core Values
 

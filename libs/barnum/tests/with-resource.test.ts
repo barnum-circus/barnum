@@ -1,11 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
-import {
-  constant,
-  withResource,
-  getField,
-  wrapInField,
-} from "../src/builtins/index.js";
+import { constant, identity, withResource } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 
 // ---------------------------------------------------------------------------
@@ -31,6 +26,22 @@ describe("with-resource type tests", () => {
     assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, number>>();
   });
+
+  it("action receives [TResource, TIn] tuple", () => {
+    const action = withResource<
+      { x: number },
+      { r: string },
+      [{ r: string }, { x: number }]
+    >({
+      create: constant({ r: "res" }),
+      action: identity(),
+      dispose: constant(null),
+    });
+    assertExact<IsExact<ExtractInput<typeof action>, { x: number }>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, [{ r: string }, { x: number }]>
+    >();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -42,37 +53,33 @@ describe("with-resource type tests", () => {
 
 describe("with-resource execution", () => {
   it("create acquires, action uses resource, returns action output", async () => {
-    // create: { host } → { conn: "acquired" }
-    // action: { conn, host } → getField("conn") → "acquired"
-    // dispose: constant(null) — cleanup, result discarded
+    // action receives [resource, input] tuple; constant ignores input
     const result = await runPipeline(
       pipe(
         constant({ host: "localhost" }),
         withResource({
           create: constant({ conn: "acquired" }),
-          action: getField("conn"),
+          action: constant("action-output"),
           dispose: constant(null),
         }),
       ),
     );
-    expect(result).toBe("acquired");
+    expect(result).toBe("action-output");
   });
 
-  it("resource fields merged with input for action", async () => {
-    // Verify the action receives both the resource AND the original input
-    // create: { x } → { r: "resource" }
-    // action: { r, x } → constant({r: ..., x: ...}) by picking both fields
+  it("action receives [resource, input] tuple", async () => {
+    // identity() passes the tuple through so we can assert its shape
     const result = await runPipeline(
       pipe(
         constant({ x: "input" }),
         withResource({
           create: constant({ r: "resource" }),
-          action: pipe(getField("x"), wrapInField("gotInput")),
+          action: identity(),
           dispose: constant(null),
         }),
       ),
     );
-    expect(result).toEqual({ gotInput: "input" });
+    expect(result).toEqual([{ r: "resource" }, { x: "input" }]);
   });
 
   it("dispose runs and result is discarded", async () => {
