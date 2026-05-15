@@ -7,7 +7,10 @@ import { type TypedAction, typedAction } from "../ast.js";
 export function constant<TValue>(value: TValue): TypedAction<any, TValue> {
   return typedAction({
     kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Constant", value } },
+    handler: {
+      kind: "Builtin",
+      builtin: { kind: "Constant", value: value ?? null },
+    },
   });
 }
 
