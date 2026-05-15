@@ -140,6 +140,7 @@ dependencies = [
  "barnum_engine",
  "barnum_event_loop",
  "clap",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
