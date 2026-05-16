@@ -453,6 +453,37 @@ withResource({
 
 The `dispose` step runs whether `action` succeeds or fails — guaranteed cleanup without polluting handler logic.
 
+### Use `earlyReturn` + `.unwrapOr()` for Rust's `?` operator
+
+When a pipeline has multiple fallible steps and you want to bail on the first failure, use `earlyReturn` with `.unwrapOr(ret)`. This mirrors Rust's `?` operator — propagate the error upward without nesting.
+
+```ts
+// Rust equivalent: let x = fallible_step()?;
+// Barnum: unwrapOr(ret) bails early if the Result is Err
+
+earlyReturn<FinalOutput>((ret) =>
+  pipe(
+    step1.unwrapOr(ret), // bail if step1 fails
+    step2.unwrapOr(ret), // bail if step2 fails
+    step3, // final step produces FinalOutput
+  ),
+);
+```
+
+This also works with `Option` — `.unwrapOr(ret)` bails on `None`:
+
+```ts
+earlyReturn<string>((ret) =>
+  pipe(
+    lookupUser, // → Option<User>
+    identity().unwrapOr(ret), // bail with None → earlyReturn
+    extractEmail, // only runs if Some
+  ),
+);
+```
+
+Without `earlyReturn`, you'd need deeply nested `.branch({ Ok: ..., Err: ... })` at every step. `earlyReturn` + `.unwrapOr()` keeps the pipeline flat.
+
 ---
 
 ## Handler contracts
