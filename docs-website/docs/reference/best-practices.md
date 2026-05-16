@@ -364,6 +364,20 @@ bindInput<Params>((params) =>
 );
 ```
 
+### Don't use `bindInput` if you never reference the bound variable
+
+`bindInput` captures the pipeline input as a reusable variable. If the body never references that variable, the `bindInput` is doing nothing — remove it.
+
+```ts
+// Pointless: param is never used
+bindInput<{ file: string }>((param) => constant("hello").then(processFile));
+
+// Just write the pipeline directly:
+constant("hello").then(processFile);
+```
+
+The purpose of `bindInput` is to access the input from multiple points in the body. If you only pass data forward linearly, `.then()` or `pipe()` already does that.
+
 ### Use `allObject` to carry context forward
 
 When you need both a handler's input and output downstream, use `allObject` to run the handler alongside `identity()` and collect the results into a named object.
