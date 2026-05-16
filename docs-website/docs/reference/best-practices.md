@@ -376,7 +376,15 @@ bindInput<{ file: string }>((param) => constant("hello").then(processFile));
 constant("hello").then(processFile);
 ```
 
-The purpose of `bindInput` is to access the input from multiple points in the body. If you only pass data forward linearly, `.then()` or `pipe()` already does that.
+Similarly, if the first thing the body does is feed the bound variable into the next step, you're just recreating the pipeline's natural data flow. `bindInput` is only useful when you need the input _again later_ — not when you're using it exactly once as the starting point.
+
+```ts
+// Pointless: param is used once, immediately, as input to the next step
+bindInput<{ file: string }>((param) => param.then(analyze).then(report));
+
+// The pipeline already passes its input forward:
+analyze.then(report);
+```
 
 ### Use `allObject` to carry context forward
 
