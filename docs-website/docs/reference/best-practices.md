@@ -20,6 +20,21 @@ Handlers run in isolated subprocesses. You cannot call `.handle()` from inside o
 
 A handler should never spawn a nested pipeline via `runPipeline`. If you think you need to, you're wrong — restructure the pipeline instead. The framework owns orchestration; handlers do work. A nested `runPipeline` bypasses scheduling, resource management, and error propagation. Whatever you're trying to express as a nested pipeline is expressible as pipeline-level composition (`pipe`, `withResource`, `loop`, `bindInput`).
 
+### Define handlers in separate files from `runPipeline`
+
+Never define handlers in the same file that calls `runPipeline`. The framework executes handlers by importing their module in a subprocess. If that module also contains a top-level `runPipeline` call, importing the handler re-triggers the entire pipeline — causing an infinite loop of pipeline spawns.
+
+```ts
+// run.ts — ONLY the pipeline definition and runPipeline call
+import { runPipeline, pipe } from "@barnum/barnum/pipeline";
+import { analyze } from "./handlers/analyze";
+runPipeline(pipe(constant({ file: "main.ts" }), analyze));
+
+// handlers/analyze.ts — ONLY the handler definition
+import { createHandler } from "@barnum/barnum/runtime";
+export const analyze = createHandler({ ... }, "analyze");
+```
+
 ### All data flows through the pipeline
 
 Each handler invocation runs in its own subprocess. Global variables, module-level caches, and in-memory state do not persist between handler calls — mutating a global inside one handler is invisible to every other handler. The pipeline is the only data channel between steps.
