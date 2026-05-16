@@ -438,6 +438,30 @@ export const analyze = createHandler({
 }, "analyze");
 ```
 
+### Factor shared data out of tagged union variants
+
+If every variant of a tagged union contains the same field, that field doesn't belong inside the union — it belongs alongside it. Move it into a tuple or object wrapping the union. This avoids redundant extraction logic in every branch case and makes the shared data accessible without dispatching.
+
+```ts
+// Avoid: every variant repeats the same field
+outputValidator: taggedUnionSchema("ReviewResult", {
+  Approved: z.object({ file: z.string(), approver: z.string() }),
+  Rejected: z.object({ file: z.string(), reason: z.string() }),
+});
+// Every branch case must extract `file` separately
+
+// Prefer: shared data lives outside the union
+outputValidator: z.object({
+  file: z.string(),
+  decision: taggedUnionSchema("ReviewDecision", {
+    Approved: z.object({ approver: z.string() }),
+    Rejected: z.object({ reason: z.string() }),
+  }),
+});
+// Pipeline can access `file` without branching:
+// result.getField("file") works regardless of decision
+```
+
 ### Namespace tagged union variants
 
 When a handler returns a decision (e.g., "needs work" vs "approved"), namespace the variants in `taggedUnionSchema`. This prevents collisions when multiple branch points exist in the same pipeline and makes branch dispatch unambiguous.
