@@ -475,8 +475,7 @@ This also works with `Option` — `.unwrapOr(ret)` bails on `None`:
 ```ts
 earlyReturn<string>((ret) =>
   pipe(
-    lookupUser, // → Option<User>
-    identity().unwrapOr(ret), // bail with None → earlyReturn
+    lookupUser.unwrapOr(ret), // bail on None
     extractEmail, // only runs if Some
   ),
 );
