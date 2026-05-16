@@ -663,6 +663,21 @@ getUserProfile.getField("email");
 
 This applies to every combinator that has a postfix form: `.then()`, `.iterate()`, `.map()`, `.flatMap()`, `.filter()`, `.collect()`, `.branch()`, `.drop()`, `.tag()`, `.flatten()`, `.getField()`, `.getIndex()`, `.pick()`, `.wrapInField()`, `.splitFirst()`, `.splitLast()`, `.mapErr()`, `.unwrapOr()`.
 
+### Extract postfix operations into named actions with `identity()`
+
+Every postfix method can be turned into a standalone named action by calling it on `identity()`. This is useful when the same operation appears in multiple places, or when you want to name a step for readability:
+
+```ts
+// Inline postfix:
+classify.branch({ Critical: escalate, Low: log });
+
+// Extracted to a named action:
+const route = identity<PrCategory>().branch({ Critical: escalate, Low: log });
+classify.then(route);
+```
+
+`identity<T>()` creates a typed starting point, so the postfix method infers all its types. The resulting action is a normal `TypedAction<PrCategory, ...>` you can use anywhere — pass to `.then()`, store in a variable, reuse across pipelines.
+
 ## `.then()` vs `pipe()` for chaining
 
 Use `.then()` for two-step chains. Use `pipe()` when chaining three or more steps in sequence — it's flatter and easier to scan:
