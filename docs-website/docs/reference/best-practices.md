@@ -16,6 +16,48 @@ Handlers are the leaf nodes — they do work. Everything else is plumbing. Keep 
 
 Handlers run in isolated subprocesses. You cannot call `.handle()` from inside one handler to invoke another. All composition happens in the pipeline definition via combinators (`pipe`, `.then()`, `bindInput`, etc.). If you need the output of one handler as input to another, chain them in the pipeline.
 
+### All data flows through the pipeline
+
+Each handler invocation runs in its own subprocess. Global variables, module-level caches, and in-memory state do not persist between handler calls — mutating a global inside one handler is invisible to every other handler. The pipeline is the only data channel between steps.
+
+```ts
+// Broken: global state doesn't survive across subprocess boundaries
+let lastResult: string | null = null;
+
+export const step1 = createHandler(
+  {
+    handle: async ({ value }) => {
+      lastResult = await compute(value); // this dies with the subprocess
+    },
+  },
+  "step1",
+);
+
+export const step2 = createHandler(
+  {
+    handle: async () => {
+      return lastResult; // always null — different subprocess
+    },
+  },
+  "step2",
+);
+
+// Fixed: return the value and let the pipeline carry it
+export const step1 = createHandler(
+  {
+    inputValidator: z.object({ input: z.string() }),
+    outputValidator: z.string(),
+    handle: async ({ value }) => {
+      return await compute(value.input);
+    },
+  },
+  "step1",
+);
+
+// Pipeline connects them:
+step1.then(step2);
+```
+
 ### One job per handler
 
 A handler does one thing: transform data, call an external service, read a file, invoke an LLM. All plumbing — splitting fields, merging objects, routing to different paths — belongs in the pipeline layer using `bindInput`, `getField`, `wrapInField`, `allObject`, `pick`, and `branch`.
@@ -50,30 +92,44 @@ A handler makes exactly one attempt and returns a `Result` on failure. Retries, 
 
 ```ts
 // Avoid: retry and timeout inside the handler
-export const callApi = createHandler({
-  handle: async ({ value }) => {
-    for (let i = 0; i < 3; i++) {
-      try { return await fetch(value.url, { signal: AbortSignal.timeout(5000) }); }
-      catch { await sleep(1000 * i); }
-    }
-    throw new Error("failed after retries");
+export const callApi = createHandler(
+  {
+    handle: async ({ value }) => {
+      for (let i = 0; i < 3; i++) {
+        try {
+          return await fetch(value.url, { signal: AbortSignal.timeout(5000) });
+        } catch {
+          await sleep(1000 * i);
+        }
+      }
+      throw new Error("failed after retries");
+    },
   },
-}, "callApi");
+  "callApi",
+);
 
 // Prefer: handler does one attempt, pipeline handles retry and timeout
-export const callApi = createHandler({
-  outputValidator: Result.schema(responseSchema, z.string()),
-  handle: async ({ value }) => {
-    try { return { kind: "Result.Ok", value: await fetch(value.url) }; }
-    catch (e) { return { kind: "Result.Err", value: e.message }; }
+export const callApi = createHandler(
+  {
+    outputValidator: Result.schema(responseSchema, z.string()),
+    handle: async ({ value }) => {
+      try {
+        return { kind: "Result.Ok", value: await fetch(value.url) };
+      } catch (e) {
+        return { kind: "Result.Err", value: e.message };
+      }
+    },
   },
-}, "callApi");
+  "callApi",
+);
 
 // Pipeline adds timeout and retries:
 loop((recur, done) =>
-  withTimeout(constant(5_000), callApi)
-    .branch({ Ok: done, Err: logAndWait.then(recur) })
-)
+  withTimeout(constant(5_000), callApi).branch({
+    Ok: done,
+    Err: logAndWait.then(recur),
+  }),
+);
 ```
 
 This separation means you can reuse `callApi` in contexts that don't want retries, or change the retry strategy without touching the handler.
@@ -84,28 +140,34 @@ A handler that computes one thing should return that thing directly — not an o
 
 ```ts
 // Avoid: handler wraps its result in an object
-export const countLines = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  outputValidator: z.object({ lineCount: z.number() }),
-  handle: async ({ value }) => {
-    const content = readFileSync(value.file, "utf-8");
-    return { lineCount: content.split("\n").length };
+export const countLines = createHandler(
+  {
+    inputValidator: z.object({ file: z.string() }),
+    outputValidator: z.object({ lineCount: z.number() }),
+    handle: async ({ value }) => {
+      const content = readFileSync(value.file, "utf-8");
+      return { lineCount: content.split("\n").length };
+    },
   },
-}, "countLines");
+  "countLines",
+);
 
 // Prefer: return the value directly, let the pipeline structure it
-export const countLines = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  outputValidator: z.number(),
-  handle: async ({ value }) => {
-    const content = readFileSync(value.file, "utf-8");
-    return content.split("\n").length;
+export const countLines = createHandler(
+  {
+    inputValidator: z.object({ file: z.string() }),
+    outputValidator: z.number(),
+    handle: async ({ value }) => {
+      const content = readFileSync(value.file, "utf-8");
+      return content.split("\n").length;
+    },
   },
-}, "countLines");
+  "countLines",
+);
 
 // Pipeline wraps/merges as needed:
-countLines.wrapInField("lineCount")    // → { lineCount: number }
-allObject({ lines: countLines, size: getFileSize })  // combine multiple
+countLines.wrapInField("lineCount"); // → { lineCount: number }
+allObject({ lines: countLines, size: getFileSize }); // combine multiple
 ```
 
 ### Don't return data the pipeline already knows
@@ -114,26 +176,32 @@ If the file path was passed in as input, don't make the handler echo it back. Th
 
 ```ts
 // Avoid: handler parrots its input back
-export const countLines = createHandler({
-  handle: async ({ value }) => {
-    const content = readFileSync(value.file, "utf-8");
-    return { file: value.file, lineCount: content.split("\n").length };
-    //       ^^^^^^^^^^^^^^^ pipeline already has this
+export const countLines = createHandler(
+  {
+    handle: async ({ value }) => {
+      const content = readFileSync(value.file, "utf-8");
+      return { file: value.file, lineCount: content.split("\n").length };
+      //       ^^^^^^^^^^^^^^^ pipeline already has this
+    },
   },
-}, "countLines");
+  "countLines",
+);
 
 // Prefer: handler returns only what it computed
-export const countLines = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  outputValidator: z.number(),
-  handle: async ({ value }) => {
-    const content = readFileSync(value.file, "utf-8");
-    return content.split("\n").length;
+export const countLines = createHandler(
+  {
+    inputValidator: z.object({ file: z.string() }),
+    outputValidator: z.number(),
+    handle: async ({ value }) => {
+      const content = readFileSync(value.file, "utf-8");
+      return content.split("\n").length;
+    },
   },
-}, "countLines");
+  "countLines",
+);
 
 // Pipeline structures the result:
-allObject({ file: identity(), lineCount: countLines })  // { file } → { file, lineCount }
+allObject({ file: identity(), lineCount: countLines }); // { file } → { file, lineCount }
 ```
 
 ### Don't accept pass-through fields in handler inputs
@@ -144,46 +212,51 @@ If a handler needs `file` but downstream steps also need `branch` and `worktreeP
 
 ```ts
 // Avoid: handler accepts fields it doesn't use, just to pass them through
-export const analyze = createHandler({
-  inputValidator: z.object({
-    file: z.string(),
-    branch: z.string(),        // not used by analyze
-    worktreePath: z.string(),  // not used by analyze
-  }),
-  outputValidator: z.object({
-    file: z.string(),          // echoed back unchanged
-    branch: z.string(),        // echoed back unchanged
-    worktreePath: z.string(),  // echoed back unchanged
-    issues: z.array(issueSchema),
-  }),
-  handle: async ({ value }) => {
-    const issues = await findIssues(value.file);
-    return { ...value, issues };  // spreading input into output = anti-pattern
+export const analyze = createHandler(
+  {
+    inputValidator: z.object({
+      file: z.string(),
+      branch: z.string(), // not used by analyze
+      worktreePath: z.string(), // not used by analyze
+    }),
+    outputValidator: z.object({
+      file: z.string(), // echoed back unchanged
+      branch: z.string(), // echoed back unchanged
+      worktreePath: z.string(), // echoed back unchanged
+      issues: z.array(issueSchema),
+    }),
+    handle: async ({ value }) => {
+      const issues = await findIssues(value.file);
+      return { ...value, issues }; // spreading input into output = anti-pattern
+    },
   },
-}, "analyze");
+  "analyze",
+);
 ```
 
 The handler's signature is now coupled to its caller's context. It can't be reused in a pipeline that doesn't have `branch` or `worktreePath`. Instead, keep the handler's input narrow and let the pipeline manage context:
 
 ```ts
 // Prefer: handler only accepts what it needs, returns only what it computed
-export const analyze = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  outputValidator: z.array(issueSchema),
-  handle: async ({ value }) => {
-    return await findIssues(value.file);
+export const analyze = createHandler(
+  {
+    inputValidator: z.object({ file: z.string() }),
+    outputValidator: z.array(issueSchema),
+    handle: async ({ value }) => {
+      return await findIssues(value.file);
+    },
   },
-}, "analyze");
+  "analyze",
+);
 
 // Pipeline narrows input and restores context:
-bindInput<{ file: string; branch: string; worktreePath: string }>((params) =>
-  params.pick("file").then(analyze)
-    .then(wrapInField("issues"))
-    // params still has branch and worktreePath available for later steps
-)
+bindInput<{ file: string; branch: string; worktreePath: string }>(
+  (params) => params.pick("file").then(analyze).then(wrapInField("issues")),
+  // params still has branch and worktreePath available for later steps
+);
 
 // Or use allObject to combine input fields with handler output:
-allObject({ file: identity(), issues: analyze })
+allObject({ file: identity(), issues: analyze });
 ```
 
 This keeps handlers reusable, testable in isolation, and decoupled from the specific pipeline they appear in. The pipeline is the right place for context management — handlers are the right place for doing work.
@@ -194,38 +267,50 @@ The pipeline is the data channel between handlers. If handler A produces a resul
 
 ```ts
 // Avoid: using the file system as a data bus
-export const generateReport = createHandler({
-  handle: async ({ value }) => {
-    const report = await analyze(value.file);
-    writeFileSync("/tmp/report.json", JSON.stringify(report));
+export const generateReport = createHandler(
+  {
+    handle: async ({ value }) => {
+      const report = await analyze(value.file);
+      writeFileSync("/tmp/report.json", JSON.stringify(report));
+    },
   },
-}, "generateReport");
+  "generateReport",
+);
 
-export const publishReport = createHandler({
-  handle: async () => {
-    const report = JSON.parse(readFileSync("/tmp/report.json", "utf-8"));
-    await upload(report);
+export const publishReport = createHandler(
+  {
+    handle: async () => {
+      const report = JSON.parse(readFileSync("/tmp/report.json", "utf-8"));
+      await upload(report);
+    },
   },
-}, "publishReport");
+  "publishReport",
+);
 
 // Prefer: data flows through the pipeline
-export const generateReport = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  outputValidator: reportSchema,
-  handle: async ({ value }) => {
-    return await analyze(value.file);
+export const generateReport = createHandler(
+  {
+    inputValidator: z.object({ file: z.string() }),
+    outputValidator: reportSchema,
+    handle: async ({ value }) => {
+      return await analyze(value.file);
+    },
   },
-}, "generateReport");
+  "generateReport",
+);
 
-export const publishReport = createHandler({
-  inputValidator: reportSchema,
-  handle: async ({ value }) => {
-    await upload(value);
+export const publishReport = createHandler(
+  {
+    inputValidator: reportSchema,
+    handle: async ({ value }) => {
+      await upload(value);
+    },
   },
-}, "publishReport");
+  "publishReport",
+);
 
 // Pipeline connects them:
-generateReport.then(publishReport)
+generateReport.then(publishReport);
 ```
 
 File system writes are appropriate for **durable side effects** — checkpointing progress, writing final output artifacts, persisting state that survives process crashes. They are not appropriate for passing intermediate data between pipeline steps. Pipeline data is typed, validated, and visible to the framework for debugging and replay. File system state is opaque, fragile, and couples handlers to specific paths.
@@ -240,7 +325,7 @@ File system writes are appropriate for **durable side effects** — checkpointin
 
 ```ts
 // Avoid: positional tuple — what's [0]? what's [1]?
-all(listFiles, loadConfig, readManifest)
+all(listFiles, loadConfig, readManifest);
 // → [string[], Config, Manifest]
 
 // Prefer: named fields — self-documenting, refactor-safe
@@ -248,7 +333,7 @@ allObject({
   files: listFiles,
   config: loadConfig,
   manifest: readManifest,
-})
+});
 // → { files: string[], config: Config, manifest: Manifest }
 ```
 
@@ -260,16 +345,19 @@ If a handler's output is consumed by one step but also needed later (e.g., a wor
 
 ```ts
 // Avoid: every handler accepts and returns worktreePath
-implement.then(typeCheck).then(commit).then(createPR)
+implement.then(typeCheck).then(commit).then(createPR);
 // Each handler must include worktreePath in its input AND output — coupling city
 
 // Prefer: bindInput captures the shared context
 bindInput<Params>((params) =>
-  params.pick("worktreePath", "description").then(implement).drop()
+  params
+    .pick("worktreePath", "description")
+    .then(implement)
+    .drop()
     .then(params.pick("worktreePath").then(typeCheckFix).drop())
     .then(params.pick("worktreePath").then(commit).drop())
-    .then(params.pick("branch", "description").then(createPR))
-)
+    .then(params.pick("branch", "description").then(createPR)),
+);
 ```
 
 ### Use `allObject` to carry context forward
@@ -278,7 +366,10 @@ When you need both a handler's input and output downstream, use `allObject` to r
 
 ```ts
 // { file: string } → { file: string, lineCount: number }
-listFiles.iterate().map(allObject({ file: getField("file"), lineCount: countLines })).collect()
+listFiles
+  .iterate()
+  .map(allObject({ file: getField("file"), lineCount: countLines }))
+  .collect();
 ```
 
 ### Iteration is parallel by default
@@ -287,10 +378,10 @@ listFiles.iterate().map(allObject({ file: getField("file"), lineCount: countLine
 
 ```ts
 // Parallel: all files processed concurrently
-listFiles.iterate().map(processFile).collect()
+listFiles.iterate().map(processFile).collect();
 
 // Sequential: one at a time, with accumulator
-listFiles.iterate().fold(constant(initialState), processFileSequentially)
+listFiles.iterate().fold(constant(initialState), processFileSequentially);
 ```
 
 There is no sequential `.each()` or sequential `.map()`. If you want one-at-a-time execution, fold is the primitive.
@@ -301,10 +392,10 @@ There is no sequential `.each()` or sequential `.map()`. If you want one-at-a-ti
 
 ```ts
 // Avoid: raw forEach, no ability to filter/take/transform
-forEach(processFile)
+forEach(processFile);
 
 // Prefer: full Iterator API
-listFiles.iterate().filter(isRelevant).take(10).map(processFile).collect()
+listFiles.iterate().filter(isRelevant).take(10).map(processFile).collect();
 ```
 
 ### Use `withResource` for anything that needs cleanup
@@ -316,11 +407,10 @@ withResource({
   create: createBranchWorktree,
   action: implementAndReview,
   dispose: deleteWorktree,
-})
+});
 ```
 
 The `dispose` step runs whether `action` succeeds or fails — guaranteed cleanup without polluting handler logic.
-
 
 ---
 
@@ -353,13 +443,13 @@ When a handler returns a decision (e.g., "needs work" vs "approved"), namespace 
 outputValidator: taggedUnionSchema("Judgment", {
   NeedsWork: feedbackSchema,
   Approved: z.null(),
-})
+});
 
 // Branch dispatches on the short names:
 classifyJudgment.branch({
   NeedsWork: applyFeedback.then(recur),
   Approved: drop,
-})
+});
 ```
 
 ### Annotate return types when returning tagged unions
@@ -375,12 +465,12 @@ type AnalysisResult = Result<string, string>;
 handle: async ({ value }) => {
   return { kind: "Result.Ok" as const, value: "done" };
   // Inferred return: { kind: "Result.Ok", value: string } — not Result<string, string>
-}
+};
 
 // Prefer: explicit annotation preserves the full union
 handle: async ({ value }): Promise<AnalysisResult> => {
   return { kind: "Result.Ok" as const, value: "done" };
-}
+};
 ```
 
 ### Use `null` not `undefined` for empty pipeline values
@@ -391,10 +481,10 @@ Use `null` for "no meaningful value" in pipeline data:
 
 ```ts
 // Broken: undefined disappears during serialization
-Skip: bindInput<null, void>(() => constant(undefined))
+Skip: bindInput<null, void>(() => constant(undefined));
 
 // Fixed: null serializes correctly
-Skip: bindInput<null, null>(() => constant(null))
+Skip: bindInput<null, null>(() => constant(null));
 ```
 
 This applies anywhere you construct pipeline values — `constant()`, handler return values, branch cases. If you mean "nothing," use `null`.
@@ -405,21 +495,27 @@ If a handler's purpose is a side effect (write a file, send a message, invoke an
 
 ```ts
 // Avoid: returning null as a meaningless value that gets threaded through
-export const implement = createHandler({
-  outputValidator: z.null(),
-  handle: async ({ value }) => {
-    await callClaude({ prompt: `Implement ${value.description}` });
-    return null;
+export const implement = createHandler(
+  {
+    outputValidator: z.null(),
+    handle: async ({ value }) => {
+      await callClaude({ prompt: `Implement ${value.description}` });
+      return null;
+    },
   },
-}, "implement");
+  "implement",
+);
 
 // Prefer: void return — framework knows there's no output
-export const implement = createHandler({
-  inputValidator: z.object({ description: z.string() }),
-  handle: async ({ value }) => {
-    await callClaude({ prompt: `Implement ${value.description}` });
+export const implement = createHandler(
+  {
+    inputValidator: z.object({ description: z.string() }),
+    handle: async ({ value }) => {
+      await callClaude({ prompt: `Implement ${value.description}` });
+    },
   },
-}, "implement");
+  "implement",
+);
 ```
 
 ---
@@ -434,35 +530,44 @@ If the agent's job is to modify a file, read it before the handler runs and pass
 
 ```ts
 // Avoid: agent wastes a tool call reading the file
-export const refactor = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  handle: async ({ value }) => {
-    await callClaude({
-      prompt: `Refactor ${value.file}`,
-      allowedTools: ["Read", "Edit"],
-    });
+export const refactor = createHandler(
+  {
+    inputValidator: z.object({ file: z.string() }),
+    handle: async ({ value }) => {
+      await callClaude({
+        prompt: `Refactor ${value.file}`,
+        allowedTools: ["Read", "Edit"],
+      });
+    },
   },
-}, "refactor");
+  "refactor",
+);
 
 // Prefer: pre-read in the pipeline, agent starts with full context
-export const readFile = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  outputValidator: z.object({ file: z.string(), content: z.string() }),
-  handle: async ({ value }) => ({
-    file: value.file,
-    content: readFileSync(value.file, "utf-8"),
-  }),
-}, "readFile");
-
-export const refactor = createHandler({
-  inputValidator: z.object({ file: z.string(), content: z.string() }),
-  handle: async ({ value }) => {
-    await callClaude({
-      prompt: `Refactor this file (${value.file}):\n\n${value.content}`,
-      allowedTools: ["Edit"],
-    });
+export const readFile = createHandler(
+  {
+    inputValidator: z.object({ file: z.string() }),
+    outputValidator: z.object({ file: z.string(), content: z.string() }),
+    handle: async ({ value }) => ({
+      file: value.file,
+      content: readFileSync(value.file, "utf-8"),
+    }),
   },
-}, "refactor");
+  "readFile",
+);
+
+export const refactor = createHandler(
+  {
+    inputValidator: z.object({ file: z.string(), content: z.string() }),
+    handle: async ({ value }) => {
+      await callClaude({
+        prompt: `Refactor this file (${value.file}):\n\n${value.content}`,
+        allowedTools: ["Edit"],
+      });
+    },
+  },
+  "refactor",
+);
 ```
 
 ### Pre-read imports and dependents
@@ -480,13 +585,13 @@ readTargetFile.bindInput((fileAndContent) =>
     content: fileAndContent.getField("content"),
     imports: fileAndContent.then(resolveImports),
     dependents: fileAndContent.then(findDependents),
-  }).then(refactorWithContext)
-)
+  }).then(refactorWithContext),
+);
 ```
 
 ### Why this matters
 
-Every tool call an LLM agent makes costs latency and tokens. A `Read` call the agent makes inside a handler is identical work the pipeline could have done deterministically in milliseconds. The agent should spend its budget on judgment and creativity — deciding *what* to change — not on mechanically gathering files it was always going to need.
+Every tool call an LLM agent makes costs latency and tokens. A `Read` call the agent makes inside a handler is identical work the pipeline could have done deterministically in milliseconds. The agent should spend its budget on judgment and creativity — deciding _what_ to change — not on mechanically gathering files it was always going to need.
 
 ---
 
@@ -500,10 +605,10 @@ When a combinator is available as both a standalone function and a postfix metho
 
 ```ts
 // Avoid: standalone requires type parameters and pipe wrapping
-pipe(getUserProfile, getField<UserProfile, "email">("email"))
+pipe(getUserProfile, getField<UserProfile, "email">("email"));
 
 // Prefer: postfix infers types from context
-getUserProfile.getField("email")
+getUserProfile.getField("email");
 ```
 
 This applies to every combinator that has a postfix form: `.then()`, `.iterate()`, `.map()`, `.flatMap()`, `.filter()`, `.collect()`, `.branch()`, `.drop()`, `.tag()`, `.flatten()`, `.getField()`, `.getIndex()`, `.pick()`, `.wrapInField()`, `.splitFirst()`, `.splitLast()`, `.mapErr()`, `.unwrapOr()`.
@@ -514,20 +619,16 @@ Use `.then()` for two-step chains. Use `pipe()` when chaining three or more step
 
 ```ts
 // Two steps: .then() is fine
-listFiles.then(commit)
+listFiles.then(commit);
 
 // Three+ steps: use pipe()
-pipe(
-  listFiles,
-  processFiles,
-  commit,
-)
+pipe(listFiles, processFiles, commit);
 
 // Avoid: long .then() chains
-listFiles.then(processFiles).then(validate).then(commit)
+listFiles.then(processFiles).then(validate).then(commit);
 
 // Avoid: mixing pipe and .then()
-pipe(listFiles, processFiles).then(commit)
+pipe(listFiles, processFiles).then(commit);
 ```
 
 Postfix methods like `.iterate()`, `.map()`, `.collect()`, `.getField()`, `.branch()` are always preferred over their standalone equivalents regardless of chain length — they infer types from context and don't require explicit type parameters.
@@ -541,18 +642,18 @@ When a handler returns a tagged union, use `taggedUnionSchema()`, `Option.schema
 outputValidator: z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("HasErrors"), value: z.array(errorSchema) }),
   z.object({ kind: z.literal("Clean"), value: z.null() }),
-])
+]);
 
 // Prefer
 outputValidator: taggedUnionSchema({
   HasErrors: z.array(errorSchema),
   Clean: z.null(),
-})
+});
 ```
 
 For `Option` and `Result` specifically:
 
 ```ts
-outputValidator: Option.schema(z.string())     // Option<string>
-outputValidator: Result.schema(z.string(), z.number())  // Result<string, number>
+outputValidator: Option.schema(z.string()); // Option<string>
+outputValidator: Result.schema(z.string(), z.number()); // Result<string, number>
 ```
