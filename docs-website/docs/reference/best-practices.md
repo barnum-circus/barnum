@@ -3,7 +3,7 @@
 Three principles drive every decision below:
 
 1. **Use the builtins.** The framework provides typed combinators for structuring data (`wrapInField`, `getField`, `pick`, `allObject`). Use them instead of reimplementing the same logic inside handlers.
-2. **Move logic into the pipeline.** Handlers do work — external calls, computation, side effects. Everything else (routing, merging, retrying, threading context) belongs in the pipeline definition where it's visible, composable, and reusable.
+2. **Move logic into the pipeline.** Handlers do work — external calls, computation, side effects. Everything else (routing, merging, retrying, threading context) belongs in the pipeline definition where it's visible, composable, and reusable. It's tempting to put "just a little extra logic" in a handler — a retry loop, an early bail-out, a conditional branch. But that logic grows, and once it's buried in a handler it's invisible to the framework: you can't change the retry strategy without editing the handler, you can't reuse the handler without its hardcoded control flow, and you can't see the workflow's structure by reading the pipeline. Keep handlers dumb and the pipeline smart.
 3. **Compose.** Small, focused handlers with narrow inputs and scalar outputs combine freely. A handler that returns a flat value works with `wrapInField`, `allObject`, `fold`, and every other combinator. A handler that returns a bespoke object works only with itself.
 
 ---
