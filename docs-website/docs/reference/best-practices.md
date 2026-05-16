@@ -16,6 +16,10 @@ Handlers are the leaf nodes — they do work. Everything else is plumbing. Keep 
 
 Handlers run in isolated subprocesses. You cannot call `.handle()` from inside one handler to invoke another. All composition happens in the pipeline definition via combinators (`pipe`, `.then()`, `bindInput`, etc.). If you need the output of one handler as input to another, chain them in the pipeline.
 
+### Do not call `runPipeline` from inside a handler
+
+A handler should never spawn a nested pipeline via `runPipeline`. If you think you need to, you're wrong — restructure the pipeline instead. The framework owns orchestration; handlers do work. A nested `runPipeline` bypasses scheduling, resource management, and error propagation. Whatever you're trying to express as a nested pipeline is expressible as pipeline-level composition (`pipe`, `withResource`, `loop`, `bindInput`).
+
 ### All data flows through the pipeline
 
 Each handler invocation runs in its own subprocess. Global variables, module-level caches, and in-memory state do not persist between handler calls — mutating a global inside one handler is invisible to every other handler. The pipeline is the only data channel between steps.
