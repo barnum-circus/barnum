@@ -517,24 +517,26 @@ classifyJudgment.branch({
 });
 ```
 
-### Annotate return types when returning tagged unions
+### Always annotate `handle` return types
 
-When a handler returns a tagged union but only constructs one variant in a given code path, TypeScript narrows the return type to that single variant. The pipeline then fails to typecheck because the handler's output type is narrower than the full union expected by `.branch()` or `.unwrapOr()`.
+Always add an explicit return type to `handle`. Two reasons:
 
-Fix: add an explicit `Promise<FullUnionType>` return type annotation to the `handle` function.
+1. **No `as const` needed.** Without a return type, TypeScript widens `"Result.Ok"` to `string` unless you write `as const`. With an explicit return type, TypeScript checks the literal against the annotation directly — no casting ceremony.
+
+2. **No narrowing surprises.** When a handler returns a tagged union but only constructs one variant in a given code path, TypeScript narrows the inferred return to that single variant. The pipeline then fails to typecheck because the output is narrower than the full union expected by `.branch()` or `.unwrapOr()`.
 
 ```ts
 type AnalysisResult = Result<string, string>;
 
-// Avoid: TypeScript narrows to just the Ok variant
+// Avoid: needs `as const`, and if only one branch is returned, TypeScript narrows
 handle: async ({ value }) => {
   return { kind: "Result.Ok" as const, value: "done" };
-  // Inferred return: { kind: "Result.Ok", value: string } — not Result<string, string>
+  // Inferred: { kind: "Result.Ok", value: string } — not Result<string, string>
 };
 
-// Prefer: explicit annotation preserves the full union
+// Prefer: explicit return type — no `as const`, no narrowing issues
 handle: async ({ value }): Promise<AnalysisResult> => {
-  return { kind: "Result.Ok" as const, value: "done" };
+  return { kind: "Result.Ok", value: "done" };
 };
 ```
 
