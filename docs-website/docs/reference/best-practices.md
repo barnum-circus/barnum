@@ -769,3 +769,29 @@ For `Option` and `Result` specifically:
 outputValidator: Option.schema(z.string()); // Option<string>
 outputValidator: Result.schema(z.string(), z.number()); // Result<string, number>
 ```
+
+**Critical:** `Result.schema(ok, err)` and `taggedUnionSchema("Result", { Ok: ok, Err: err })` are NOT the same. Only `Result.schema()` produces a type compatible with `.unwrapOr()`, `.mapErr()`, and other Result-aware postfix methods. `taggedUnionSchema("Result", ...)` produces a generic tagged union that requires `.branch()` dispatch — the Result-specific combinators won't recognize it.
+
+### `.branch()` requires exhaustive variants
+
+Every variant in the tagged union must be handled. If a handler returns `taggedUnionSchema({ Pass: ..., Fail: ..., Skip: ... })`, the `.branch()` call must include all three cases. Missing a variant is a type error (and a runtime panic if the missing variant is produced).
+
+```ts
+// Type error: missing "Skip" case
+classify.branch({ Pass: deploy, Fail: rollback });
+
+// Correct: all variants handled
+classify.branch({ Pass: deploy, Fail: rollback, Skip: drop });
+```
+
+### Branded types work in handler schemas
+
+`z.string().brand("BranchName")` produces a branded type that survives pipeline serialization. The brand is reapplied by zod at each validation boundary (handler input/output). Use brands to distinguish semantically different strings at the type level.
+
+```ts
+const branchNameSchema = z.string().brand("BranchName");
+type BranchName = z.infer<typeof branchNameSchema>;
+
+// Now BranchName is not assignable to/from plain string
+inputValidator: z.object({ branch: branchNameSchema });
+```
