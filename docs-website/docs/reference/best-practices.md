@@ -543,6 +543,89 @@ export const analyze = createHandler({
 }, "analyze");
 ```
 
+### Return `Option` or `Result` — never separate the check from the use
+
+If a handler might not produce a value, return `Option<T>`. If it might fail, return `Result<T, E>`. The pipeline then handles the absence structurally via `.branch()`, `.unwrapOr()`, or `earlyReturn`. The compiler enforces that every consumer handles the empty/error case.
+
+The alternative — a handler that returns a boolean or status flag, followed by a second handler that assumes the value exists — separates the check from the use. The invariant ("I checked, so it's safe") lives in the textual proximity of two pipeline steps, not in the type system. Refactors can move them apart, concurrent branches can invalidate the check, and the compiler can't help.
+
+```ts
+// Avoid: check-then-act — the invariant is informal
+export const isEmpty = createHandler({
+  inputValidator: z.object({ queueDir: z.string() }),
+  outputValidator: z.boolean(),
+  handle: async ({ value }) => {
+    const files = readdirSync(value.queueDir);
+    return files.length === 0;
+  },
+}, "isEmpty");
+
+export const readFirst = createHandler({
+  inputValidator: z.object({ queueDir: z.string() }),
+  outputValidator: itemSchema, // assumes non-empty — partial function disguised as total
+  handle: async ({ value }) => {
+    const files = readdirSync(value.queueDir);
+    return JSON.parse(readFileSync(join(value.queueDir, files[0]), "utf-8"));
+  },
+}, "readFirst");
+
+// Pipeline: isEmpty guards readFirst, but the compiler doesn't know they're related
+isEmpty.branch({ true: readFirst, false: sleep(5000) })
+```
+
+```ts
+// Prefer: one handler returns Option<T> — partiality is in the type
+export const dequeue = createHandler({
+  inputValidator: z.object({ queueDir: z.string() }),
+  outputValidator: Option.schema(itemSchema),
+  handle: async ({ value }): Promise<Option<Item>> => {
+    const files = readdirSync(value.queueDir).sort();
+    if (files.length === 0) return { kind: "Option.None", value: null };
+    const path = join(value.queueDir, files[0]);
+    const item = JSON.parse(readFileSync(path, "utf-8"));
+    unlinkSync(path);
+    return { kind: "Option.Some", value: item };
+  },
+}, "dequeue");
+
+// Pipeline: the compiler forces you to handle None
+dequeue.branch({
+  Some: processItem,
+  None: sleep(5_000),
+})
+```
+
+The typed version fuses the check and the use into a single atomic operation. There's no window where the invariant can be invalidated, no informal proof for the reader to re-verify, and no way to forget the empty case.
+
+This generalizes: anywhere you'd write "check condition, then act assuming condition holds," ask whether a single operation can return a type that encodes both outcomes. `Option` for presence/absence, `Result` for success/failure, a tagged union for multi-way decisions. Push the invariant into the type so the compiler enforces it instead of you.
+
+### Panic on impossible states — don't handle them "gracefully"
+
+If your handler reaches a state that should be structurally impossible — a tagged union variant you didn't expect, a null where the type says non-null, a missing file that a previous step guaranteed exists — throw. Don't return a default, don't log and continue, don't return `None` when the contract says `Some`. A "graceful" response to an impossible state is a lie that propagates corruption downstream.
+
+```ts
+// Avoid: silently swallowing an impossible state
+handle: async ({ value }) => {
+  const item = lookupById(value.id);
+  if (!item) {
+    console.warn(`Item ${value.id} not found, skipping`);
+    return { kind: "Option.None", value: null }; // this can't happen — upstream guarantees existence
+  }
+  return { kind: "Option.Some", value: item };
+}
+
+// Prefer: crash immediately — the bug is upstream, not here
+handle: async ({ value }) => {
+  const item = lookupById(value.id);
+  if (!item) {
+    throw new Error(`Invariant violation: item ${value.id} must exist (guaranteed by previous step)`);
+  }
+  return item;
+}
+```
+
+A panic is a signal to the developer that an assumption is broken. A graceful fallback hides the broken assumption and lets it compound. The earlier you crash, the closer the stack trace is to the actual bug. Use `Result`/`Option` for states that *can* legitimately occur; use `throw` for states that *cannot*.
+
 ### Factor shared data out of tagged union variants
 
 If every variant of a tagged union contains the same field, that field doesn't belong inside the union — it belongs alongside it. Move it into a tuple or object wrapping the union. This avoids redundant extraction logic in every branch case and makes the shared data accessible without dispatching.
