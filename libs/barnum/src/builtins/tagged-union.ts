@@ -70,12 +70,12 @@ export function extractPrefix(): TypedAction {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a boolean to `Option<void>`.
+ * Convert a boolean to `Option<null>`.
  *
  * `true`  → `{ kind: "Option.Some", value: null }`
  * `false` → `{ kind: "Option.None", value: null }`
  */
-export function asOption(): TypedAction<boolean, Option<void>> {
+export function asOption(): TypedAction<boolean, Option<null>> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "AsOption" } },

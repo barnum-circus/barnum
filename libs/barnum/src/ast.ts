@@ -208,7 +208,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, TElement[][]>,
   ): TypedAction<TIn, TElement[]>;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
-  drop(): TypedAction<In, void>;
+  drop(): TypedAction<In, null>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
   tag<
     TEnumName extends string,
@@ -368,10 +368,10 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<TValue, TError>>,
   ): TypedAction<TIn, Option<TError>>;
 
-  /** Convert boolean to Option<void>. `boolean → Option<void>` */
+  /** Convert boolean to Option<null>. `boolean → Option<null>` */
   asOption<TIn>(
     this: TypedAction<TIn, boolean>,
-  ): TypedAction<TIn, Option<void>>;
+  ): TypedAction<TIn, Option<null>>;
 
   /** Test if the value is Ok. `Result<T,E> → boolean` */
   isOk<TIn, TValue, TError>(
@@ -1279,9 +1279,9 @@ export function buildRestartBranchAction(
  */
 export function loop<TBreak = void, TRecur = void>(
   bodyFn: (
-    recur: TypedAction<TRecur, never>,
+    recur: TypedAction<VoidToNull<TRecur>, never>,
     done: TypedAction<VoidToNull<TBreak>, never>,
-  ) => Pipeable<TRecur, never>,
+  ) => Pipeable<VoidToNull<TRecur>, never>,
 ): TypedAction<PipeIn<TRecur>, VoidToNull<TBreak>> {
   const restartHandlerId = allocateRestartHandlerId();
 
@@ -1290,7 +1290,7 @@ export function loop<TBreak = void, TRecur = void>(
     restart_handler_id: restartHandlerId,
   };
 
-  const recurAction = typedAction<TRecur, never>(
+  const recurAction = typedAction<VoidToNull<TRecur>, never>(
     toAction(chain(toAction(tag("Continue", "LoopResult")), toAction(perform))),
   );
 

@@ -291,6 +291,7 @@ export const commit = createHandler(
 
 export const judgeRefactor = createHandler(
   {
+    inputValidator: z.null(),
     outputValidator: JudgmentResultValidator,
     handle: async (): Promise<JudgmentResult> => {
       console.error("[judge-refactor] Reviewing changes...");

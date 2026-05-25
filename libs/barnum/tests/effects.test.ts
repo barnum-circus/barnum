@@ -107,10 +107,10 @@ describe("race type tests", () => {
     expect(action.kind).toBe("Chain");
   });
 
-  it("sleep: any → void (like drop)", () => {
+  it("sleep: any → null", () => {
     const action = sleep(1000);
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, void>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, null>>();
   });
 
   it("sleep produces Invoke AST", () => {

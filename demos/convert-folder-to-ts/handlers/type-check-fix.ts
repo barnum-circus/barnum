@@ -53,6 +53,7 @@ const TypeErrorValidator = z.object({ file: z.string(), message: z.string() });
 
 export const typeCheck = createHandler(
   {
+    inputValidator: z.null(),
     outputValidator: z.array(TypeErrorValidator),
     handle: async (): Promise<TypeError[]> => {
       const outDir = path.join(baseDir, "out");

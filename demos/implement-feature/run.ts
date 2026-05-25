@@ -53,7 +53,7 @@ runPipeline(
       setup,
       description.then(withRetry(3, implement)).drop(),
 
-      withMaxAttempts<void>(3, (recur, done) =>
+      withMaxAttempts<null>(3, (recur, done) =>
         pipe(
           allObject({
             bestPractices: withRetry(3, reviewBestPractices),

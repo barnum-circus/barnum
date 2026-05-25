@@ -64,7 +64,7 @@ describe("branch type tests", () => {
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        { file: string; fixed: boolean }[] | void
+        { file: string; fixed: boolean }[] | null
       >
     >();
     expect(action.kind).toBe("Chain");

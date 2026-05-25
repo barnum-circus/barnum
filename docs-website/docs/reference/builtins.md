@@ -364,7 +364,7 @@ function recur<TIn, TOut>(
 Delay for the number of milliseconds specified by the input. Cancellable during race teardown.
 
 ```ts
-function sleep(): TypedAction<number, void>
+function sleep(): TypedAction<number, null>
 ```
 
 **Postfix:** No.
@@ -469,10 +469,10 @@ function identity<TValue = any>(): TypedAction<TValue, TValue>
 
 ### `drop`
 
-Discard the pipeline value. Produces `never`. A value, not a function.
+Discard the pipeline value. Produces `null`. A value, not a function.
 
 ```ts
-const drop: TypedAction<any, never>
+const drop: TypedAction<any, null>
 ```
 
 **Postfix:** Yes — `.drop()`. **Prefer postfix** — no `pipe` wrapper needed.

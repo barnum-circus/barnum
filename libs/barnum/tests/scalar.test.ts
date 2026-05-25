@@ -32,9 +32,9 @@ describe("scalar type tests", () => {
     expect(action.kind).toBe("Invoke");
   });
 
-  it("drop: any -> void", () => {
+  it("drop: any -> null", () => {
     assertExact<IsExact<ExtractInput<typeof drop>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof drop>, void>>();
+    assertExact<IsExact<ExtractOutput<typeof drop>, null>>();
     expect(drop.kind).toBe("Invoke");
   });
 

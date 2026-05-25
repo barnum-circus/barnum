@@ -36,7 +36,7 @@ runPipeline(
         ),
 
       // An error occurred — log it and retry the loop
-      logError.then(recur),
+      logError.drop().then(recur),
     ),
   ),
 );
@@ -45,7 +45,7 @@ runPipeline(
 // that build sub-pipelines, keeping the main pipeline flat and readable.
 function stepBWithTimeout(
   throwError: TypedAction<string, never>,
-): TypedAction<void, void> {
+): TypedAction<void, null> {
   return withTimeout(constant(2_000), stepB.unwrapOr(throwError))
     .mapErr(constant("stepB: timed out"))
     .unwrapOr(throwError)

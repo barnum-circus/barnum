@@ -22,20 +22,20 @@ function assertExact<_T extends true>(): void {}
 // ---------------------------------------------------------------------------
 
 describe("AsOption type tests", () => {
-  it("asOption() standalone: boolean → Option<void>", () => {
+  it("asOption() standalone: boolean → Option<null>", () => {
     const action = asOption();
     assertExact<IsExact<ExtractInput<typeof action>, boolean>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<void>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<null>>>();
   });
 
   it(".asOption() postfix: infers from preceding output", () => {
     const action = constant(true).asOption();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<void>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<null>>>();
   });
 
   it("asOption() composes in pipe", () => {
     const action = pipe(constant(true), asOption());
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<void>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<null>>>();
   });
 });
 

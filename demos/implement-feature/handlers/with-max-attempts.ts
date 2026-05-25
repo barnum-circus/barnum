@@ -21,15 +21,15 @@ import { checkRetries } from "./steps";
 export function withMaxAttempts<TBreak>(
   maxAttempts: number,
   bodyFn: (
-    recur: TypedAction<void, never>,
+    recur: TypedAction<null, never>,
     done: TypedAction<TBreak, never>,
-  ) => Pipeable<void, never>,
-): TypedAction<void, TBreak> {
-  return earlyReturn<TBreak, void, never>((ret) =>
+  ) => Pipeable<null, never>,
+): TypedAction<null, TBreak> {
+  return earlyReturn<TBreak, null, never>((ret) =>
     constant(maxAttempts - 1).then(
       loop<never, number>((recur, _done) =>
         bindInput<number, never>((attemptsRemaining) => {
-          const guardedRecur: TypedAction<void, never> = attemptsRemaining
+          const guardedRecur: TypedAction<null, never> = attemptsRemaining
             .then(checkRetries)
             .branch({
               Retry: recur,
