@@ -626,6 +626,46 @@ handle: async ({ value }) => {
 
 A panic is a signal to the developer that an assumption is broken. A graceful fallback hides the broken assumption and lets it compound. The earlier you crash, the closer the stack trace is to the actual bug. Use `Result`/`Option` for states that *can* legitimately occur; use `throw` for states that *cannot*.
 
+### Return tagged unions, not booleans
+
+A boolean return is a closed, two-valued type with no payload and no extensibility. A tagged union with two variants carries the same information but is self-documenting at call sites, can carry data per variant, and extends to three or more cases without a breaking change.
+
+```ts
+// Avoid: boolean — opaque at the call site, can't carry data, can't extend
+export const checkCapacity = createHandler({
+  outputValidator: z.boolean(),
+  handle: async ({ value }) => {
+    return readdirSync(value.queueDir).length < value.maxSize;
+  },
+}, "checkCapacity");
+
+// Pipeline: what does true mean? What does false mean?
+checkCapacity.branch({ true: produce, false: sleep(60_000) })
+```
+
+```ts
+// Prefer: tagged union — self-documenting, extensible, can carry data
+export const checkCapacity = createHandler({
+  outputValidator: taggedUnionSchema("Capacity", {
+    HasCapacity: z.object({ remaining: z.number() }),
+    Full: z.null(),
+  }),
+  handle: async ({ value }): Promise<Capacity> => {
+    const count = readdirSync(value.queueDir).length;
+    if (count >= value.maxSize) return { kind: "Capacity.Full", value: null };
+    return { kind: "Capacity.HasCapacity", value: { remaining: value.maxSize - count } };
+  },
+}, "checkCapacity");
+
+// Pipeline: variants are named, and Full can later become Degraded/Full/Overloaded without breakage
+checkCapacity.branch({
+  HasCapacity: produce,
+  Full: sleep(60_000),
+})
+```
+
+When a third state appears (and it will — "degraded," "rate-limited," "shutting down"), a boolean forces a breaking change everywhere. A tagged union just adds a variant. Start with the union.
+
 ### Factor shared data out of tagged union variants
 
 If every variant of a tagged union contains the same field, that field doesn't belong inside the union — it belongs alongside it. Move it into a tuple or object wrapping the union. This avoids redundant extraction logic in every branch case and makes the shared data accessible without dispatching.
