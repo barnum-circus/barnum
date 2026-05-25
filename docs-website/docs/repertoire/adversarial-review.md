@@ -30,7 +30,7 @@ const JudgeResult = z.discriminatedUnion("kind", [
 export const implement = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }) => {
-    await callClaude({
+    await invokeLanguageModel({
       prompt: `Refactor ${file} to improve readability and reduce complexity.`,
       allowedTools: ["Read", "Edit"],
     });
@@ -42,7 +42,7 @@ export const judge = createHandler({
   inputValidator: z.string(),
   outputValidator: JudgeResult,
   handle: async ({ value: file }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Review the recent changes to ${file} (git diff HEAD~1). Return JSON: { "kind": "Approved", "value": null } or { "kind": "NeedsWork", "value": { "feedback": "..." } }`,
       allowedTools: ["Bash"],
     });
@@ -54,7 +54,7 @@ export const revise = createHandler({
   inputValidator: z.object({ feedback: z.string() }),
   outputValidator: z.string(),
   handle: async ({ value }) => {
-    await callClaude({
+    await invokeLanguageModel({
       prompt: `Address this feedback: ${value.feedback}`,
       allowedTools: ["Read", "Edit"],
     });

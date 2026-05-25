@@ -66,12 +66,12 @@ The Rust binary spawns TypeScript workers. The executor is resolved as:
 1. If running under Bun (`process.versions.bun` is set), uses `bun` directly.
 2. Otherwise, resolves `tsx/cli` from node_modules and runs as `node <tsx-path>`.
 
-## `callClaude()`
+## `invokeLanguageModel()`
 
 A utility for invoking an LLM from within handlers. Spawns a Claude CLI subprocess.
 
 ```ts
-async function callClaude(args: {
+async function invokeLanguageModel(args: {
   prompt: string;
   allowedTools?: string[];
   cwd?: string;
@@ -85,7 +85,7 @@ async function callClaude(args: {
 Returns the agent's text output as a string.
 
 ```ts
-const result = await callClaude({
+const result = await invokeLanguageModel({
   prompt: `Review ${filePath} for security issues`,
   allowedTools: ["Read"],
 });

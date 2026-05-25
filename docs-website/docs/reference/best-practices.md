@@ -87,7 +87,7 @@ A handler does one thing: transform data, call an external service, read a file,
 // Avoid: handler does plumbing + work
 export const analyzeAndRoute = createHandler({
   handle: async ({ value }) => {
-    const result = await callClaude({ prompt: `Analyze ${value.file}` });
+    const result = await invokeLanguageModel({ prompt: `Analyze ${value.file}` });
     // Don't route inside the handler — that's pipeline work
     if (result.severity === "critical") { ... }
     return { ...value, result };  // Don't merge input back in — pipeline does that
@@ -99,7 +99,7 @@ export const analyze = createHandler({
   inputValidator: z.object({ file: z.string() }),
   outputValidator: analysisSchema,
   handle: async ({ value }) => {
-    return await callClaude({ prompt: `Analyze ${value.file}` });
+    return await invokeLanguageModel({ prompt: `Analyze ${value.file}` });
   },
 }, "analyze");
 
@@ -634,7 +634,7 @@ export const implement = createHandler(
   {
     outputValidator: z.null(),
     handle: async ({ value }) => {
-      await callClaude({ prompt: `Implement ${value.description}` });
+      await invokeLanguageModel({ prompt: `Implement ${value.description}` });
       return null;
     },
   },
@@ -646,7 +646,7 @@ export const implement = createHandler(
   {
     inputValidator: z.object({ description: z.string() }),
     handle: async ({ value }) => {
-      await callClaude({ prompt: `Implement ${value.description}` });
+      await invokeLanguageModel({ prompt: `Implement ${value.description}` });
     },
   },
   "implement",
@@ -657,7 +657,7 @@ export const implement = createHandler(
 
 ## Minimize work inside LLM handlers
 
-When a handler invokes an LLM agent (e.g., `callClaude`), the agent's effectiveness is bounded by the context it receives. Pre-read files in earlier pipeline steps and pass the content as input — don't make the agent spend tokens discovering information you already have.
+When a handler invokes an LLM agent (e.g., `invokeLanguageModel`), the agent's effectiveness is bounded by the context it receives. Pre-read files in earlier pipeline steps and pass the content as input — don't make the agent spend tokens discovering information you already have.
 
 ### Pre-read the file being modified
 
@@ -669,7 +669,7 @@ export const refactor = createHandler(
   {
     inputValidator: z.object({ file: z.string() }),
     handle: async ({ value }) => {
-      await callClaude({
+      await invokeLanguageModel({
         prompt: `Refactor ${value.file}`,
         allowedTools: ["Read", "Edit"],
       });
@@ -695,7 +695,7 @@ export const refactor = createHandler(
   {
     inputValidator: z.object({ file: z.string(), content: z.string() }),
     handle: async ({ value }) => {
-      await callClaude({
+      await invokeLanguageModel({
         prompt: `Refactor this file (${value.file}):\n\n${value.content}`,
         allowedTools: ["Edit"],
       });

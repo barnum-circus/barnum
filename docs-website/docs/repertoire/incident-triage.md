@@ -49,7 +49,7 @@ export const collectRecentDeploys = createHandler({
     })),
   }),
   handle: async ({ value }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Find all deploys to ${value.service} and related services in the 24 hours before ${value.alertTime}. Use the deploy tracker CLI to query recent deployments.`,
       allowedTools: ["Bash"],
     });
@@ -69,7 +69,7 @@ export const queryBusinessIntelligence = createHandler({
     featureFlags: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
   }),
   handle: async ({ value }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Query the BI dashboard for impact data related to ${value.service} around ${value.alertTime}. Get: approximate revenue impact, number of affected users, and any recently changed feature flags.`,
       allowedTools: ["Bash", "Read"],
     });

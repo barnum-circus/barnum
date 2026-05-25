@@ -20,7 +20,7 @@ export const courtCaseAnalysis = createHandler({
   inputValidator: z.string(),
   outputValidator: z.object({ category: z.literal("courtCases"), findings: z.array(z.string()) }),
   handle: async ({ value: contract }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Analyze this contract for relevant court case precedents. Return JSON: { "category": "courtCases", "findings": ["..."] }\n\n${contract}`,
     });
     return JSON.parse(response);
@@ -31,7 +31,7 @@ export const financialAnalysis = createHandler({
   inputValidator: z.string(),
   outputValidator: z.object({ category: z.literal("financial"), findings: z.array(z.string()) }),
   handle: async ({ value: contract }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Analyze this contract for financial risks and claims. Return JSON: { "category": "financial", "findings": ["..."] }\n\n${contract}`,
     });
     return JSON.parse(response);
@@ -42,7 +42,7 @@ export const liabilityAnalysis = createHandler({
   inputValidator: z.string(),
   outputValidator: z.object({ category: z.literal("liability"), findings: z.array(z.string()) }),
   handle: async ({ value: contract }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Analyze this contract for liability exposure. Return JSON: { "category": "liability", "findings": ["..."] }\n\n${contract}`,
     });
     return JSON.parse(response);
@@ -56,7 +56,7 @@ export const synthesize = createHandler({
     z.object({ category: z.literal("liability"), findings: z.array(z.string()) }),
   ]),
   handle: async ({ value: analyses }) => {
-    await callClaude({
+    await invokeLanguageModel({
       prompt: `Synthesize these parallel analyses into a final recommendation:\n${JSON.stringify(analyses, null, 2)}`,
     });
   },

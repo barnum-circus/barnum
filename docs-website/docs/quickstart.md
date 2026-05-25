@@ -82,7 +82,7 @@ Spawn `claude` as a subprocess. No SDK dependency, works with any Claude Code in
 // handlers/lib.ts
 import { spawn } from "child_process";
 
-export function callClaude(args: {
+export function invokeLanguageModel(args: {
   prompt: string;
   allowedTools?: string[];
 }): Promise<string> {
@@ -117,7 +117,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
 
-export async function callClaude(args: {
+export async function invokeLanguageModel(args: {
   prompt: string;
 }): Promise<string> {
   const response = await client.messages.create({
@@ -140,7 +140,7 @@ With either option, replace the stub in `migrateComponent`:
 export const migrateComponent = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }) => {
-    await callClaude({
+    await invokeLanguageModel({
       prompt: `Migrate ${file} from class-based React components to functional components using hooks. Preserve all behavior exactly.`,
       allowedTools: ["Read", "Edit"],  // CLI only — SDK doesn't use tools this way
     });

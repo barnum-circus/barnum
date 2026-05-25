@@ -105,7 +105,7 @@ export const analyze = createHandler({
   inputValidator: z.object({ file: z.string() }),
   outputValidator: z.array(RefactorValidator),
   handle: async ({ value }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Analyze ${value.file} for refactoring opportunities.`,
       allowedTools: ["Read"],
     });
@@ -125,7 +125,7 @@ export const implement = createHandler({
     description: z.string(),
   }),
   handle: async ({ value }) => {
-    await callClaude({
+    await invokeLanguageModel({
       prompt: `Implement this refactor: ${value.description}`,
       allowedTools: ["Read", "Edit"],
       cwd: value.worktreePath,
@@ -177,7 +177,7 @@ export const migrate = createHandlerWithConfig({
   inputValidator: z.object({ file: z.string() }),
   stepConfigValidator: z.object({ to: z.string() }),
   handle: async ({ value, stepConfig }) => {
-    await callClaude({
+    await invokeLanguageModel({
       prompt: `Convert ${value.file} to ${stepConfig.to}.`,
       allowedTools: ["Read", "Edit"],
     });

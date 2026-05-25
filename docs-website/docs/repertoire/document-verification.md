@@ -30,7 +30,7 @@ export const extractClaims = createHandler({
   inputValidator: z.string(),
   outputValidator: z.array(Claim),
   handle: async ({ value: document }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Extract all verifiable factual claims from this document. Return JSON array: [{ "claim": "...", "source": "..." }]\n\n${document}`,
     });
     return JSON.parse(response);
@@ -41,7 +41,7 @@ export const verifyClaim = createHandler({
   inputValidator: Claim,
   outputValidator: Verdict,
   handle: async ({ value }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Verify this claim: "${value.claim}" (source: ${value.source}). Research whether it's true. Return JSON: { "claim": "...", "verified": true/false, "evidence": "..." }`,
     });
     return JSON.parse(response);

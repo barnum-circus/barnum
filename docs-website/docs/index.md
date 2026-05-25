@@ -76,7 +76,7 @@ Each handler executes in its own isolated Node.js subprocess. The Rust runtime m
 - [Patterns](./patterns/) — the building blocks: [parallel execution](./patterns/parallel-execution), [branching](./patterns/branching), [looping](./patterns/looping), [error handling](./patterns/error-handling), [timeout](./patterns/timeout), [racing](./patterns/racing), [context and variables](./patterns/context-and-variables), [early return](./patterns/early-return)
 - [Repertoire](./repertoire/) — real-world workflows: [adversarial review](./repertoire/adversarial-review), [code review](./repertoire/code-review), [codebase migration](./repertoire/codebase-migration), [incident triage](./repertoire/incident-triage), and [more](./repertoire/)
 - [Builtins reference](./reference/builtins) — every combinator with its TypeScript type signature and postfix availability
-- [CLI reference](./reference/cli) — how to run workflows, binary resolution, `callClaude()`
+- [CLI reference](./reference/cli) — how to run workflows, binary resolution, `invokeLanguageModel()`
 - [Architecture](./architecture/) — the TypeScript AST, Rust compiler, algebraic effect handlers, and validation system
 
 ## Demos

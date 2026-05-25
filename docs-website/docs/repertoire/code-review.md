@@ -31,7 +31,7 @@ export const checkStandards = createHandler({
   inputValidator: z.string(),
   outputValidator: z.object({ file: z.string(), issues: z.array(z.string()) }),
   handle: async ({ value: file }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Review ${file} for coding standards violations: naming conventions, documentation, error handling. Return JSON: { "file": "...", "issues": ["..."] }`,
       allowedTools: ["Read"],
     });
@@ -43,7 +43,7 @@ export const checkSecurity = createHandler({
   inputValidator: z.string(),
   outputValidator: z.object({ file: z.string(), issues: z.array(z.string()) }),
   handle: async ({ value: file }) => {
-    const response = await callClaude({
+    const response = await invokeLanguageModel({
       prompt: `Review ${file} for security issues: injection, XSS, secrets, unsafe patterns. Return JSON: { "file": "...", "issues": ["..."] }`,
       allowedTools: ["Read"],
     });
