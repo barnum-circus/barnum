@@ -340,6 +340,42 @@ File system writes are appropriate for **durable side effects** — checkpointin
 
 ## Pipeline composition
 
+### Always annotate type parameters on `loop`, `earlyReturn`, and `defineRecursiveFunctions`
+
+These combinators cannot infer their type parameters from usage — TypeScript sees the callback body but can't work backwards to determine what `TBreak`, `TEarlyReturn`, or the function signatures should be. If you omit the type parameters, the output type silently degrades to `any`, and every downstream step loses type checking.
+
+```ts
+// Broken: TBreak defaults to any — entire pipeline is untyped from here on
+const process = loop((recur, done) =>
+  fetchNext.branch({
+    HasItem: pipe(handle, recur),
+    Empty: done,
+  }),
+);
+// process: TypedAction<any, any> — no type safety
+
+// Fixed: annotate TBreak explicitly
+const process = loop<ProcessResult>((recur, done) =>
+  fetchNext.branch({
+    HasItem: pipe(handle, recur),
+    Empty: done,
+  }),
+);
+// process: TypedAction<any, ProcessResult> — output is typed
+```
+
+The same applies to `earlyReturn`:
+
+```ts
+// Broken: TEarlyReturn is any
+earlyReturn((ret) => step1.unwrapOr(ret).then(step2));
+
+// Fixed
+earlyReturn<ErrorReport>((ret) => step1.unwrapOr(ret).then(step2));
+```
+
+And `defineRecursiveFunctions` — every function's input and output types must be annotated in the definition tuple, or all call sites produce `any`.
+
 ### Prefer `allObject` over `all`
 
 `all` returns a positional tuple — callers access results by index, which is fragile and unreadable. `allObject` returns a named object:
