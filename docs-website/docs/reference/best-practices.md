@@ -888,19 +888,24 @@ classify.then(route);
 
 ## `.then()` vs `pipe()` for chaining
 
-Use `.then()` for two-step chains. Use `pipe()` when chaining three or more steps in sequence — it's flatter and easier to scan:
+**Two steps: use `.then()`.** It reads left-to-right, stays on one line, and doesn't require an import.
+
+**Three or more steps: use `pipe()`.** It's flatter than nested `.then()` chains and each step occupies its own line.
 
 ```ts
-// Two steps: .then() is fine
+// Two steps: .then() — always preferred
 listFiles.then(commit);
 
-// Three+ steps: use pipe()
+// Three+ steps: pipe() — one step per line, easy to scan
 pipe(listFiles, processFiles, commit);
 
-// Avoid: long .then() chains
+// Avoid: long .then() chains — hard to scan, awkward to add steps
 listFiles.then(processFiles).then(validate).then(commit);
 
-// Avoid: mixing pipe and .then()
+// Avoid: pipe for two items — .then() is simpler
+pipe(listFiles, commit);
+
+// Avoid: mixing pipe and .then() — pick one
 pipe(listFiles, processFiles).then(commit);
 ```
 
