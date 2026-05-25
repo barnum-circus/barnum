@@ -81,7 +81,7 @@ Current handler DAGs are pure data transformations. They receive `{ payload, sta
 
 `receive` needs exactly that: when the channel is empty, the branch suspends. It resumes only when another branch sends a value. This coordination between concurrent branches is not expressible with handler DAGs.
 
-### Why not build on ResumeHandle?
+### Why not build on ResumeHandle?!
 
 A channel *looks* like a ResumeHandle with two operations (send performs, receive performs, handler manages a buffer). Three engine limitations prevent this:
 
