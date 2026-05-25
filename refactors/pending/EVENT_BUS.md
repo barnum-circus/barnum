@@ -11,34 +11,34 @@ The event bus fills this gap: a scoped, bounded channel between concurrent branc
 ```ts
 eventBus<TEvent, TIn, TOut>(
   body: (ctx: {
-    push: TypedAction<TEvent, void>;
-    get: TypedAction<never, TEvent>;
+    send: TypedAction<TEvent, void>;
+    receive: TypedAction<never, TEvent>;
   }) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut>
 ```
 
 HOAS pattern — same as `withState`, `bind`, `loop`. The callback receives effect tokens scoped to this channel.
 
-- **`push`** — enqueue a value. Input is `TEvent`. Output is `void`. Never blocks (the channel is unbounded).
-- **`get`** — dequeue the next value. Input is `never` (doesn't consume the pipeline value). Output is `TEvent`. Suspends until a value is available.
+- **`send`** — enqueue a value. Input is `TEvent`. Output is `void`. Never blocks (the channel is unbounded).
+- **`receive`** — dequeue the next value. Input is `never` (doesn't consume the pipeline value). Output is `TEvent`. Suspends until a value is available.
 
 ### Example: producer/consumer
 
 ```ts
-eventBus<CiEvent, PrUrl, void>(({ push, get }) =>
+eventBus<CiEvent, PrUrl, void>(({ send, receive }) =>
   all(
-    // producer: polls CI, pushes events
+    // producer: polls CI, sends events
     loop((recur) =>
       pipe(
         pollCiStatus,
-        push,
+        send,
         sleep(30_000).then(recur),
       ),
     ),
     // consumer: processes events as they arrive
     loop((recur) =>
       pipe(
-        get,
+        receive,
         handleCiEvent,
         recur,
       ),
@@ -47,21 +47,21 @@ eventBus<CiEvent, PrUrl, void>(({ push, get }) =>
 )
 ```
 
-The producer and consumer run concurrently inside `all()`. The producer pushes events whenever CI status changes. The consumer's `get` suspends until the next event arrives — no polling, no sleep, no `Option` check.
+The producer and consumer run concurrently inside `all()`. The producer sends events whenever CI status changes. The consumer's `receive` suspends until the next event arrives — no polling, no sleep, no `Option` check.
 
 ### Example: fan-in from multiple sources
 
 ```ts
-eventBus<PrEvent, PrUrl, PrResult>(({ push, get }) =>
+eventBus<PrEvent, PrUrl, PrResult>(({ send, receive }) =>
   all(
     // source 1: CI status
-    loop((recur) => pipe(pollCi, push, sleep(30_000).then(recur))),
+    loop((recur) => pipe(pollCi, send, sleep(30_000).then(recur))),
     // source 2: review comments
-    loop((recur) => pipe(pollReviews, push, sleep(60_000).then(recur))),
+    loop((recur) => pipe(pollReviews, send, sleep(60_000).then(recur))),
     // single consumer
     loop<PrResult>((recur, done) =>
       pipe(
-        get,
+        receive,
         branch({
           CiCompleted: pipe(handleCi, recur),
           ReviewSubmitted: pipe(handleReview, recur),
@@ -73,15 +73,15 @@ eventBus<PrEvent, PrUrl, PrResult>(({ push, get }) =>
 )
 ```
 
-Multiple producers push into the same bus. One consumer processes events sequentially in arrival order.
+Multiple producers send into the same bus. One consumer processes events sequentially in arrival order.
 
 ## Why this requires a new executor primitive
 
 Current handler DAGs are pure data transformations. They receive `{ payload, state }` and immediately produce `{ kind: "Resume", value, state_update }`. A handler cannot say "don't resume yet — park this branch until something else happens."
 
-`get` needs exactly that: when the channel is empty, the branch suspends. It resumes only when another branch pushes a value. This coordination between concurrent branches is not expressible with handler DAGs.
+`receive` needs exactly that: when the channel is empty, the branch suspends. It resumes only when another branch sends a value. This coordination between concurrent branches is not expressible with handler DAGs.
 
-The closest analogy in the existing system is `sleep` — a built-in action that the Rust executor handles directly (it parks the task on a timer, not on a handler DAG). The event bus is a scoped version of the same idea: a built-in action that parks the task on a channel.
+The closest analogy in the existing system is `sleep` — a built-in action that the Rust executor handles directly (it parks the task on a timer, not on a handler DAG). The event bus is the same idea: a built-in action that parks the task on a channel.
 
 ## How it compiles
 
@@ -95,11 +95,11 @@ EventBusHandle {
   body: Action,
 }
 
-EventBusPush {
+EventBusSend {
   event_bus_id: EventBusId,
 }
 
-EventBusGet {
+EventBusReceive {
   event_bus_id: EventBusId,
 }
 ```
@@ -111,14 +111,14 @@ EventBusGet {
 ```ts
 function eventBus<TEvent, TIn, TOut>(
   body: (ctx: {
-    push: TypedAction<TEvent, void>;
-    get: TypedAction<never, TEvent>;
+    send: TypedAction<TEvent, void>;
+    receive: TypedAction<never, TEvent>;
   }) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut> {
   const event_bus_id = allocateEventBusId();
-  const push = typedAction({ kind: "EventBusPush", event_bus_id });
-  const get = typedAction({ kind: "EventBusGet", event_bus_id });
-  const bodyAction = toAction(body({ push, get }));
+  const send = typedAction({ kind: "EventBusSend", event_bus_id });
+  const receive = typedAction({ kind: "EventBusReceive", event_bus_id });
+  const bodyAction = toAction(body({ send, receive }));
   return typedAction({ kind: "EventBusHandle", event_bus_id, body: bodyAction });
 }
 ```
@@ -127,21 +127,21 @@ function eventBus<TEvent, TIn, TOut>(
 
 When the executor enters an `EventBusHandle` frame, it creates an unbounded FIFO queue (a `tokio::sync::mpsc::unbounded_channel` or equivalent).
 
-**Push**: The executor enqueues the value and immediately resumes the branch with `void`. If any branches are parked on `get`, one is woken with the value (FIFO wake order).
+**Send**: The executor enqueues the value and immediately resumes the branch with `void`. If any branches are parked on `receive`, one is woken with the value (FIFO wake order).
 
-**Get**: The executor checks the queue. If non-empty, it dequeues the front value and resumes immediately. If empty, it parks the branch — the branch does not advance until a push arrives.
+**Receive**: The executor checks the queue. If non-empty, it dequeues the front value and resumes immediately. If empty, it parks the branch — the branch does not advance until a send arrives.
 
-**Teardown**: When the `EventBusHandle` frame completes (all branches of the body finish), the channel is dropped. If any branches are still parked on `get` when the frame tears down (because another branch caused the `all` to complete via `race` semantics), the parked branches are cancelled as part of normal frame teardown.
+**Teardown**: When the `EventBusHandle` frame completes (all branches of the body finish), the channel is dropped. If any branches are still parked on `receive` when the frame tears down (because another branch caused the `all` to complete via `race` semantics), the parked branches are cancelled as part of normal frame teardown.
 
 ## Semantics
 
-**FIFO ordering.** Values dequeue in push order. If multiple branches push concurrently, their values interleave in executor scheduling order (nondeterministic, but each push's position is stable once enqueued).
+**FIFO ordering.** Values dequeue in send order. If multiple branches send concurrently, their values interleave in executor scheduling order (nondeterministic, but each send's position is stable once enqueued).
 
-**Unbounded buffer.** Push never blocks. The queue grows without limit. This matches the "fire-and-forget producer" pattern where the consumer may lag. A bounded variant (where push blocks when the buffer is full) is a possible future extension but adds backpressure complexity.
+**Unbounded buffer.** Send never blocks. The queue grows without limit. This matches the "fire-and-forget producer" pattern where the consumer may lag. A bounded variant (where send blocks when the buffer is full) is a possible future extension but adds backpressure complexity.
 
-**Single-consumer get.** Each `get` dequeues exactly one value. If multiple branches call `get` concurrently, each gets a different value (no broadcast). This is MPSC (multi-producer, single-consumer) semantics, though nothing prevents multiple consumers — they just compete for values.
+**Single-consumer receive.** Each `receive` dequeues exactly one value. If multiple branches call `receive` concurrently, each gets a different value (no broadcast). This is MPSC (multi-producer, single-consumer) semantics, though nothing prevents multiple consumers — they just compete for values.
 
-**Scoped lifetime.** The channel exists only within the `EventBusHandle` frame. `push` and `get` tokens cannot escape (they're lexically scoped by the HOAS pattern, same as `withState`).
+**Scoped lifetime.** The channel exists only within the `EventBusHandle` frame. `send` and `receive` tokens cannot escape (they're lexically scoped by the HOAS pattern, same as `withState`).
 
 ## Relationship to existing primitives
 
@@ -150,16 +150,16 @@ When the executor enters an `EventBusHandle` frame, it creates an unbounded FIFO
 | `withState` | Shared mutable cell | No — get/set always resume immediately |
 | `bind` | Immutable captured values | No — read always resumes immediately |
 | `sleep` | Timer-based suspension | Yes — executor parks until timer fires |
-| **`eventBus`** | **Channel between branches** | **Yes — get parks until push delivers** |
+| **`eventBus`** | **Channel between branches** | **Yes — receive parks until send delivers** |
 
 The event bus fills the gap between "shared state" (immediate, racy) and "external handler" (leaves the engine entirely). It provides intra-workflow coordination with proper suspension semantics.
 
 ## Open questions
 
-1. **Bounded vs unbounded.** The design above is unbounded (push never blocks). A bounded channel adds backpressure but introduces deadlock risk if producer and consumer are in the same `all()` and the buffer fills. Unbounded is simpler and matches most use cases. Worth adding a capacity parameter later?
+1. **Bounded vs unbounded.** The design above is unbounded (send never blocks). A bounded channel adds backpressure but introduces deadlock risk if producer and consumer are in the same `all()` and the buffer fills. Unbounded is simpler and matches most use cases. Worth adding a capacity parameter later?
 
-2. **Multiple consumers.** The MPSC semantics mean multiple `get` branches compete. Should there be a broadcast variant where every consumer sees every event? Or is that a separate primitive (`eventBroadcast`)?
+2. **Multiple consumers.** The MPSC semantics mean multiple `receive` branches compete. Should there be a broadcast variant where every consumer sees every event? Or is that a separate primitive (`eventBroadcast`)?
 
-3. **Ordering guarantees.** Within a single sequential pipeline, push ordering is deterministic. Across concurrent branches in `all()`, ordering depends on executor scheduling. Is this acceptable, or do users need a sequence number?
+3. **Ordering guarantees.** Within a single sequential pipeline, send ordering is deterministic. Across concurrent branches in `all()`, ordering depends on executor scheduling. Is this acceptable, or do users need a sequence number?
 
-4. **Interaction with `race`.** If the body is wrapped in `race` and one branch finishes, parked `get` branches are cancelled. This is correct (same as any cancelled branch), but worth documenting.
+4. **Interaction with `race`.** If the body is wrapped in `race` and one branch finishes, parked `receive` branches are cancelled. This is correct (same as any cancelled branch), but worth documenting.
