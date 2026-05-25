@@ -14,5 +14,6 @@ Patterns are the technical building blocks of Barnum workflows. Each pattern iso
 | [Context and variables](./context-and-variables.md) | `bind`, `bindInput` | Share data across pipeline steps |
 | [Early return](./early-return.md) | `earlyReturn` | Exit a scope before it finishes |
 | [Recursion](./recursion.md) | `defineRecursiveFunctions` | Mutual and general recursion |
+| [Filesystem event bus](./filesystem-event-bus.md) | `all` + `loop` + handlers | Producer/consumer via shared directory |
 
 For real-world workflows that combine these patterns, see the [Repertoire](../repertoire/index.md).

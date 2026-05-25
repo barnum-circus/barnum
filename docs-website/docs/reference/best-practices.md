@@ -22,7 +22,9 @@ A handler should never spawn a nested pipeline via `runPipeline`. If you think y
 
 ### Define handlers in separate files from `runPipeline`
 
-Never define handlers in the same file that calls `runPipeline`. The framework executes handlers by importing their module in a subprocess. If that module also contains a top-level `runPipeline` call, importing the handler re-triggers the entire pipeline — causing an infinite loop of pipeline spawns.
+**This will fork bomb your machine.** The framework executes handlers by importing their module in a subprocess. If that module also contains a top-level `runPipeline` call, importing the handler re-triggers the entire pipeline — which invokes handlers — which imports the module — which triggers the pipeline again. Each invocation spawns subprocesses exponentially until the system runs out of file descriptors or memory.
+
+Never define handlers in the same file that calls `runPipeline`.
 
 ```ts
 // run.ts — ONLY the pipeline definition and runPipeline call

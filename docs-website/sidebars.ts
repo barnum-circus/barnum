@@ -19,6 +19,7 @@ const sidebars: SidebarsConfig = {
         'patterns/context-and-variables',
         'patterns/early-return',
         'patterns/recursion',
+        'patterns/filesystem-event-bus',
       ],
     },
     {
