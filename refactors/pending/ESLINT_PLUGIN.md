@@ -24,9 +24,11 @@ export const analyze = createHandler({ ... }, "analyze");
 runPipeline(pipe(analyze, report)); // ← lint error here
 ```
 
-Detection: check if any file-level scope contains both call expressions matching `createHandler`/`createHandlerWithConfig` and `runPipeline`. Report on the `runPipeline` call.
+The constraint is specifically about top-level `runPipeline` calls — a `runPipeline` that executes on module load. An exported function that *contains* `runPipeline` is fine (it doesn't execute on import). The rule should only flag `runPipeline` calls that are at module scope (top-level statements, not inside a function/arrow/method body).
 
-Error message: `"runPipeline and handler definitions must be in separate files. Combining them causes a fork bomb — importing the handler re-triggers the pipeline.""`
+Detection: check if a file contains both a `createHandler`/`createHandlerWithConfig` call (anywhere) and a `runPipeline` call at module scope (not nested inside a function expression, arrow function, or method). Report on the `runPipeline` call.
+
+Error message: `"Top-level runPipeline in the same file as a handler definition causes a fork bomb — importing the handler re-triggers the pipeline. Move the handler to a separate file, or wrap runPipeline in a function that isn't called on import."`
 
 ### `barnum/require-type-params`
 
