@@ -81,6 +81,18 @@ Current handler DAGs are pure data transformations. They receive `{ payload, sta
 
 `receive` needs exactly that: when the channel is empty, the branch suspends. It resumes only when another branch sends a value. This coordination between concurrent branches is not expressible with handler DAGs.
 
+### Why not build on ResumeHandle?
+
+A channel *looks* like a ResumeHandle with two operations (send performs, receive performs, handler manages a buffer). Three engine limitations prevent this:
+
+1. **Concurrent performs.** `all(branch_that_sends, branch_that_receives)` means both branches perform on the same handler simultaneously. The engine assumes one in-flight ResumePerform per handler — the second perform does not execute independently. (`defineRecursiveFunctions` documents this exact limitation.)
+
+2. **Handler state.** A channel handler needs mutable state (the buffer, parked receivers) that persists across performs. Current handlers are stateless data transforms — they dispatch and resume, retaining nothing between invocations.
+
+3. **Selective resumption.** When the buffer is empty, the handler must park the receiver and NOT resume it. Later, when a send arrives, the handler must wake the parked receiver. Current handlers always immediately produce a Resume response.
+
+Fixing all three would make ResumeHandle powerful enough to express channels, but that's a larger engine overhaul. A dedicated primitive sidesteps all three: the executor manages the queue directly (like `sleep` manages a timer directly), with no handler DAG in the loop.
+
 The closest analogy in the existing system is `sleep` — a built-in action that the Rust executor handles directly (it parks the task on a timer, not on a handler DAG). The event bus is the same idea: a built-in action that parks the task on a channel.
 
 ## How it compiles
@@ -156,7 +168,7 @@ The event bus fills the gap between "shared state" (immediate, racy) and "extern
 
 ## Open questions
 
-1. **Bounded vs unbounded.** The design above is unbounded (send never blocks). A bounded channel adds backpressure but introduces deadlock risk if producer and consumer are in the same `all()` and the buffer fills. Unbounded is simpler and matches most use cases. Worth adding a capacity parameter later?
+1. **Bounded vs unbounded.** The design above is unbounded (send never blocks). A bounded channel adds backpressure but introduces deadlock risk: if producer and consumer are in the same `all()` and the buffer fills, send blocks waiting for the consumer to drain, but the consumer can't drain because `all()` waits for all branches. Deadlock. Unbounded avoids this entirely. Worth adding a capacity parameter later, or is unbounded always correct for intra-`all()` communication?
 
 2. **Multiple consumers.** The MPSC semantics mean multiple `receive` branches compete. Should there be a broadcast variant where every consumer sees every event? Or is that a separate primitive (`eventBroadcast`)?
 
