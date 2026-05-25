@@ -22,7 +22,59 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Gate for TypeScript jobs - skips if no JS/TS files changed
+  gate-ts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for TS/JS changes
+        id: check
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "Running: tag push"
+            exit 0
+          fi
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '**/package.json' '**/tsconfig.json' 'pnpm-lock.yaml')
+            if [[ -n "$CHANGES" ]]; then
+              echo "Running: PR has TS/JS changes"
+              echo "$CHANGES"
+            else
+              echo "Skipping: PR has no TS/JS changes"
+              echo "skip=true" >> $GITHUB_OUTPUT
+            fi
+            exit 0
+          fi
+
+          BEFORE="${{ github.event.before }}"
+          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
+            echo "Running: new branch or cannot determine previous commit"
+            exit 0
+          fi
+
+          echo "Comparing HEAD against before: $BEFORE"
+          if ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "Running: before commit unreachable (force push)"
+            exit 0
+          fi
+          CHANGES=$(git diff --name-only $BEFORE HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '**/package.json' '**/tsconfig.json' 'pnpm-lock.yaml')
+          if [[ -n "$CHANGES" ]]; then
+            echo "Running: TS/JS changes detected"
+            echo "$CHANGES"
+          else
+            echo "Skipping: no TS/JS changes"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
   typecheck:
+    needs: gate-ts
+    if: needs.gate-ts.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -75,7 +127,7 @@ jobs:
 
   demo-tests:
     needs: [typecheck, build-linux-x64]
-    if: needs.build-linux-x64.result == 'success'
+    if: "!cancelled() && !failure() && needs.build-linux-x64.result == 'success'"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -256,8 +308,8 @@ jobs:
         run: cargo test --locked --workspace -- --test-threads=1
 
   build-macos-x64:
-    needs: [gate-rust, typecheck, vitest, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [gate-rust, vitest, test]
+    if: "!cancelled() && !failure() && needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))"
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
@@ -295,8 +347,8 @@ jobs:
           path: target/x86_64-apple-darwin/release/barnum
 
   build-macos-arm64:
-    needs: [gate-rust, typecheck, vitest, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [gate-rust, vitest, test]
+    if: "!cancelled() && !failure() && needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))"
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
@@ -376,8 +428,8 @@ jobs:
           path: target/x86_64-unknown-linux-musl/release/barnum
 
   build-linux-arm64:
-    needs: [gate-rust, typecheck, vitest, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [gate-rust, vitest, test]
+    if: "!cancelled() && !failure() && needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -418,8 +470,8 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/barnum
 
   build-windows-x64:
-    needs: [gate-rust, typecheck, vitest, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [gate-rust, vitest, test]
+    if: "!cancelled() && !failure() && needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))"
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
@@ -515,7 +567,7 @@ jobs:
           commit_message: 'Deploy docs from barnum@${{ github.sha }}'
 
   publish:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
+    if: "!cancelled() && !failure() && needs.build-linux-x64.result == 'success' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))"
     needs: [typecheck, vitest, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
