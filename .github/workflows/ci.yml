@@ -570,7 +570,9 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
-          scope: '@barnum'
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
 
       - uses: pnpm/action-setup@v4
 
@@ -593,32 +595,6 @@ jobs:
           cd libs/barnum
           npm version $VERSION --no-git-tag-version --allow-same-version
 
-      - name: Diagnose npm auth
-        run: |
-          echo "=== Token present? ==="
-          if [ -n "$NODE_AUTH_TOKEN" ]; then echo "Yes (${#NODE_AUTH_TOKEN} chars)"; else echo "NO TOKEN"; fi
-
-          echo "=== .npmrc contents ==="
-          cat ~/.npmrc 2>/dev/null || echo "no ~/.npmrc"
-          cat .npmrc 2>/dev/null || echo "no ./.npmrc"
-
-          echo "=== npm whoami ==="
-          npm whoami 2>&1 || true
-
-          echo "=== npm org ls barnum ==="
-          npm org ls barnum 2>&1 || true
-
-          echo "=== npm view @barnum/barnum ==="
-          npm view @barnum/barnum 2>&1 || true
-
-          echo "=== npm config (scope) ==="
-          npm config get @barnum:registry 2>&1 || true
-        working-directory: libs/barnum
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Publish barnum to npm (dry-run)
         run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }} --ignore-scripts --dry-run
         working-directory: libs/barnum
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
