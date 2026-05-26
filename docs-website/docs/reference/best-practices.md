@@ -12,6 +12,21 @@ Three principles drive every decision below:
 
 Handlers are the leaf nodes — they do work. Everything else is plumbing. Keep them minimal and let the pipeline layer handle composition.
 
+### Handlers must be exported, and the export name must match the string identifier
+
+The framework resolves handlers by importing their module and looking up the named export matching the string identifier (the second argument to `createHandler`). The worker does `mod[exportName]` — if the export is missing or isn't a handler, it fails with `worker: <module>:<export> is not a barnum handler` and the workflow terminates.
+
+```ts
+// Broken: not exported
+const analyze = createHandler({ ... }, "analyze");
+
+// Broken: export name doesn't match identifier
+export const analyzeFile = createHandler({ ... }, "analyze");
+
+// Correct: exported and names match
+export const analyze = createHandler({ ... }, "analyze");
+```
+
 ### Handlers cannot call other handlers
 
 Handlers run in isolated subprocesses. You cannot call `.handle()` from inside one handler to invoke another. All composition happens in the pipeline definition via combinators (`pipe`, `.then()`, `bindInput`, etc.). If you need the output of one handler as input to another, chain them in the pipeline.
