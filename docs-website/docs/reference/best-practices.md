@@ -544,6 +544,42 @@ Without `earlyReturn`, you'd need deeply nested `.branch({ Ok: ..., Err: ... })`
 
 Zod schemas exist to validate data that crosses the serialization boundary between the pipeline runtime and handler subprocesses. They are not general-purpose type enforcement — TypeScript's type system handles that. You need schemas on handler `inputValidator`/`outputValidator` because data is JSON-serialized over stdin/stdout between processes. You don't need schemas for internal helper functions, pipeline-level constants, or anything that stays within a single process.
 
+### Supported Zod types in handler schemas
+
+Handler schemas are converted to JSON Schema (Draft 7) for the Rust runtime. Only types that survive the TS → JSON → Rust boundary are allowed. The conversion uses `zod`'s `toJSONSchema()` with `unrepresentable: "throw"`.
+
+**Primitives:** `z.string()`, `z.number()`, `z.boolean()`, `z.null()`, `z.unknown()`, `z.any()`
+
+**Literals:** `z.literal("hello")`, `z.literal(42)`, `z.literal(true)`, `z.literal(null)`
+
+**Enums:** `z.enum(["a", "b", "c"])`
+
+**Containers:** `z.object()`, `z.array()`, `z.tuple()`, `z.record()`
+
+**Composition:** `z.union()`, `z.nullable()`, `.optional()`
+
+**Modifiers:**
+- String: `.min()`, `.max()`, `.length()`, `.regex()`, `.email()`, `.url()`, `.startsWith()`, `.endsWith()`
+- Number: `.min()`, `.max()`, `.gt()`, `.lt()`, `.int()`, `.multipleOf()`
+- Array: `.min()`, `.max()`
+- `.default()`, `.brand()`
+
+**Rejected (throws at pipeline construction time):**
+
+| Type | Reason |
+|------|--------|
+| `z.undefined()`, `z.void()` | No JSON representation |
+| `z.bigint()` | No JSON representation |
+| `z.symbol()` | No JSON representation |
+| `z.date()` | No JSON representation |
+| `z.function()` | No JSON representation |
+| `z.map()`, `z.set()` | No JSON representation |
+| `.transform()` | Output type differs from input; not expressible in schema |
+| `z.intersection()` | Produces broken `allOf` with `additionalProperties: false` on Draft 7 — use `.extend()` or `.merge()` instead |
+| `.refine()`, `.superRefine()` | Silently stripped from JSON Schema — validation would pass on the Rust side for values that should fail |
+
+`z.unknown()` and `z.any()` both produce `{}` (empty schema — accepts any JSON value). Use `z.unknown()` when the handler genuinely accepts arbitrary input.
+
 ### Always provide validators
 
 Always provide `inputValidator` and `outputValidator` on handlers even though they're optional. They serve as machine-checked documentation of the handler's contract and catch shape mismatches at runtime boundaries.
