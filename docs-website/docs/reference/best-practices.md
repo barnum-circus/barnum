@@ -591,29 +591,45 @@ There is no sequential `.each()` or sequential `.map()`. If you want one-at-a-ti
 
 ### Bounded concurrency: process N items at a time
 
-`.iterate().map()` runs ALL elements concurrently. For bounded concurrency (e.g., process a list of 100 files but only 5 at a time), split the list into batches and process each batch:
+`.iterate().map()` runs ALL elements concurrently. For bounded concurrency (e.g., process a list of 100 files but only 5 at a time), use a `{ current: T[], rest: T[] }` structure and loop:
 
 ```ts
-// initBatches splits [T] into { batch: T[], rest: T[] } with batch.length <= N
-// advanceOrFinish takes the remaining items and produces either:
-//   Continue: { batch: T[], rest: T[] }  (more to process)
-//   Done: null                           (all batches processed)
+// Shape flowing through the loop:
+//   { current: T[], rest: T[] }
+// where current.length <= N (the concurrency bound)
 
-loop<{ batch: Item[]; rest: Item[] }, null>((recur, done) =>
+// A handler that splits the next batch off `rest`:
+//   T[] → Option<{ current: T[], rest: T[] }>
+//   Returns None when the input array is empty (done).
+//   Returns Some({ current: first N items, rest: remainder }).
+export const splitBatch = createHandler({
+  inputValidator: z.array(itemSchema),
+  outputValidator: optionSchema(z.object({
+    current: z.array(itemSchema),
+    rest: z.array(itemSchema),
+  })),
+  handle: async ({ value: items }): Promise<Option<{ current: Item[], rest: Item[] }>> => {
+    if (items.length === 0) return none();
+    return some({ current: items.slice(0, BATCH_SIZE), rest: items.slice(BATCH_SIZE) });
+  },
+}, "splitBatch");
+
+// Pipeline: loop until all batches processed
+loop<{ current: Item[]; rest: Item[] }, null>((recur, done) =>
   pipe(
-    getField("batch"),
+    getField("current"),
     identity<Item[]>().iterate().map(processItem).collect(),
-    drop,                    // discard batch results (or accumulate if needed)
-    getField("rest"),        // get remaining items
-    advanceOrFinish,         // split next batch or signal done
+    drop,
+    getField("rest"),
+    splitBatch,
   ).branch({
-    Continue: recur,
-    Done: done,
+    Some: recur,
+    None: done,
   }),
 );
 ```
 
-The key insight: each iteration of the loop processes one batch concurrently (via `.iterate().map()`), then advances to the next batch. The batch size controls max concurrency.
+The pattern: each iteration processes `current` concurrently (via `.iterate().map()`), then splits the next batch from `rest`. When `rest` is empty, the loop terminates. The batch size (length of `current`) controls max concurrency.
 
 ### Prefer `.iterate().map()` over `forEach`
 
