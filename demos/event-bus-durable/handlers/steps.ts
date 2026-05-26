@@ -38,6 +38,13 @@ const EventSchema = z.object({
 
 type Event = z.infer<typeof EventSchema>;
 
+const ClaimedEventSchema = z.object({
+  id: z.string(),
+  item: EventSchema,
+});
+
+export type ClaimedEvent = z.infer<typeof ClaimedEventSchema>;
+
 // --- Helpers ---
 
 function randomBetween(min: number, max: number): number {
@@ -123,29 +130,25 @@ export const produceEvent = createHandler(
 export const dequeueEvent = createHandler(
   {
     inputValidator: z.null(),
-    outputValidator: optionSchema(EventSchema),
-    handle: async (): Promise<Option<Event>> => {
+    outputValidator: optionSchema(ClaimedEventSchema),
+    handle: async (): Promise<Option<{ id: string; item: Event }>> => {
       const files = readdirSync(QUEUE_DIR)
         .filter((f) => f.endsWith(".unclaimed.json"))
         .sort();
 
       for (const file of files) {
+        const id = file.replace(".unclaimed.json", "");
         const filepath = join(QUEUE_DIR, file);
-        const claimedPath = filepath.replace(
-          ".unclaimed.json",
-          ".claimed.json",
-        );
+        const pendingPath = join(QUEUE_DIR, `${id}.pending.json`);
         try {
-          renameSync(filepath, claimedPath);
+          renameSync(filepath, pendingPath);
         } catch {
           continue;
         }
-        const event = JSON.parse(readFileSync(claimedPath, "utf-8"));
-        unlinkSync(claimedPath);
-        log(
-          `[dequeue] dequeued event ${event.id} (queue: ${queueSize()} remaining)`,
-        );
-        return some(event);
+        const raw = JSON.parse(readFileSync(pendingPath, "utf-8"));
+        const item = EventSchema.parse(raw);
+        log(`[dequeue] claimed ${item.id} (queue: ${queueSize()} remaining)`);
+        return some({ id, item });
       }
       return none();
     },
@@ -170,12 +173,30 @@ export const consumeEvent = createHandler(
   "consumeEvent",
 );
 
+export const completeEvent = createHandler(
+  {
+    inputValidator: z.object({ id: z.string() }),
+    outputValidator: z.null(),
+    handle: async ({ value: { id } }) => {
+      const pendingPath = join(QUEUE_DIR, `${id}.pending.json`);
+      const donePath = join(QUEUE_DIR, `${id}.done.json`);
+      renameSync(pendingPath, donePath);
+      log(`[complete] marked ${id} done`);
+      return null;
+    },
+  },
+  "completeEvent",
+);
+
 export const isDone = createHandler(
   {
     inputValidator: z.null(),
     outputValidator: z.boolean(),
     handle: async () => {
-      return producedCount() >= MAX_EVENTS && queueSize() === 0;
+      const pending = readdirSync(QUEUE_DIR).filter(
+        (f) => f.endsWith(".unclaimed.json") || f.endsWith(".pending.json"),
+      ).length;
+      return producedCount() >= MAX_EVENTS && pending === 0;
     },
   },
   "isDone",
