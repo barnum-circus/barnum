@@ -355,11 +355,16 @@ File system writes are appropriate for **durable side effects** — checkpointin
 
 ## Pipeline composition
 
-### Always annotate type parameters on `loop`, `earlyReturn`, and `defineRecursiveFunctions`
+### Always annotate type parameters on `loop`, `earlyReturn`, `bindInput`, and `defineRecursiveFunctions`
 
-These combinators cannot infer their type parameters from usage — TypeScript sees the callback body but can't work backwards to determine what `TBreak`, `TEarlyReturn`, or the function signatures should be. If you omit the type parameters, the output type silently degrades to `any`, and every downstream step loses type checking.
+These combinators cannot infer their type parameters from usage. If you omit them, the output type silently degrades to `any` and every downstream step loses type checking.
+
+**Why TypeScript can't infer these.** TypeScript infers generic type parameters from *arguments* (outside-in). But these combinators' type parameters only manifest as the *types of callback parameters* — the `recur`/`done` actions in `loop`, the `ret` action in `earlyReturn`, the `VarRef` in `bindInput`. TypeScript doesn't do bidirectional inference from "how the callback body uses its parameters" back to "what the enclosing function's type parameters must be." The type parameter determines what gets *passed into* the callback, not what gets *returned from* it — so TS has nothing to infer from.
 
 ```ts
+// loop: TBreak determines done's type, TContinue determines recur's type
+// TS can't look at "done is used in the Empty branch" and work backwards
+
 // Broken: TBreak defaults to any — entire pipeline is untyped from here on
 const process = loop((recur, done) =>
   fetchNext.branch({
@@ -382,11 +387,31 @@ const process = loop<ProcessResult>((recur, done) =>
 The same applies to `earlyReturn`:
 
 ```ts
+// earlyReturn: TEarlyReturn determines ret's type
+// TS can't infer it from "ret is passed to .unwrapOr()"
+
 // Broken: TEarlyReturn is any
 earlyReturn((ret) => step1.unwrapOr(ret).then(step2));
 
 // Fixed
 earlyReturn<ErrorReport>((ret) => step1.unwrapOr(ret).then(step2));
+```
+
+And `bindInput`:
+
+```ts
+// bindInput: TIn determines the VarRef<TIn> type passed to the callback
+// TS can't infer it from "claimed.getField('item') is called in the body"
+
+// Broken: TIn is any — claimed.getField() and claimed.pick() return any
+bindInput((claimed) =>
+  pipe(claimed.getField("item"), consumeEvent, claimed.pick("id"), completeEvent),
+);
+
+// Fixed: annotate TIn so VarRef methods are fully typed
+bindInput<ClaimedEvent, null>((claimed) =>
+  pipe(claimed.getField("item"), consumeEvent, claimed.pick("id"), completeEvent),
+);
 ```
 
 And `defineRecursiveFunctions` — every function's input and output types must be annotated in the definition tuple, or all call sites produce `any`.
