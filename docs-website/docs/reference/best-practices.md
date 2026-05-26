@@ -591,45 +591,7 @@ There is no sequential `.each()` or sequential `.map()`. If you want one-at-a-ti
 
 ### Bounded concurrency: process N items at a time
 
-`.iterate().map()` runs ALL elements concurrently. For bounded concurrency (e.g., process a list of 100 files but only 5 at a time), use a `{ current: T[], rest: T[] }` structure and loop:
-
-```ts
-// Shape flowing through the loop:
-//   { current: T[], rest: T[] }
-// where current.length <= N (the concurrency bound)
-
-// A handler that splits the next batch off `rest`:
-//   T[] → Option<{ current: T[], rest: T[] }>
-//   Returns None when the input array is empty (done).
-//   Returns Some({ current: first N items, rest: remainder }).
-export const splitBatch = createHandler({
-  inputValidator: z.array(itemSchema),
-  outputValidator: optionSchema(z.object({
-    current: z.array(itemSchema),
-    rest: z.array(itemSchema),
-  })),
-  handle: async ({ value: items }): Promise<Option<{ current: Item[], rest: Item[] }>> => {
-    if (items.length === 0) return none();
-    return some({ current: items.slice(0, BATCH_SIZE), rest: items.slice(BATCH_SIZE) });
-  },
-}, "splitBatch");
-
-// Pipeline: loop until all batches processed
-loop<{ current: Item[]; rest: Item[] }, null>((recur, done) =>
-  pipe(
-    getField("current"),
-    identity<Item[]>().iterate().map(processItem).collect(),
-    drop,
-    getField("rest"),
-    splitBatch,
-  ).branch({
-    Some: recur,
-    None: done,
-  }),
-);
-```
-
-The pattern: each iteration processes `current` concurrently (via `.iterate().map()`), then splits the next batch from `rest`. When `rest` is empty, the loop terminates. The batch size (length of `current`) controls max concurrency.
+`.iterate().map()` runs ALL elements concurrently. For bounded concurrency (max N in flight at a time), see the [Bounded Concurrency pattern](/patterns/bounded-concurrency).
 
 ### Prefer `.iterate().map()` over `forEach`
 
