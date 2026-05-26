@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Result, Option } from "./ast.js";
+import type { Result, Option, LoopResult } from "./ast.js";
 
 export function resultSchema<TValue, TError>(
   okSchema: z.ZodType<TValue>,
@@ -18,4 +18,14 @@ export function optionSchema<TValue>(
     z.object({ kind: z.literal("Option.Some"), value: valueSchema }),
     z.object({ kind: z.literal("Option.None"), value: z.null() }),
   ]) as z.ZodType<Option<TValue>>;
+}
+
+export function loopResultSchema<TContinue, TBreak>(
+  continueSchema: z.ZodType<TContinue>,
+  breakSchema: z.ZodType<TBreak>,
+): z.ZodType<LoopResult<TContinue, TBreak>> {
+  return z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("LoopResult.Continue"), value: continueSchema }),
+    z.object({ kind: z.literal("LoopResult.Break"), value: breakSchema }),
+  ]) as z.ZodType<LoopResult<TContinue, TBreak>>;
 }

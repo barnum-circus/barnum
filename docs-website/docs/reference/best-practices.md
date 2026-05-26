@@ -591,7 +591,7 @@ There is no sequential `.each()` or sequential `.map()`. If you want one-at-a-ti
 
 ### Bounded concurrency: process N items at a time
 
-`.iterate().map()` runs ALL elements concurrently. For bounded concurrency (max N in flight at a time), see the [Bounded Concurrency pattern](/patterns/bounded-concurrency).
+`.iterate().map()` runs ALL elements concurrently. For bounded concurrency (max N in flight at a time), see the [Bounded Concurrency pattern](../patterns/bounded-concurrency.md).
 
 ### Prefer `.iterate().map()` over `forEach`
 

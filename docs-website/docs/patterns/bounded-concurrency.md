@@ -33,19 +33,15 @@ export const initBatches = createHandler({
 }, "initBatches");
 
 // Advance to the next batch. Returns Continue with a new batch state,
-// or Done when rest is empty.
+// or Break when rest is empty.
 export const advanceOrFinish = createHandler({
   inputValidator: batchStateSchema,
-  outputValidator: taggedUnionSchema("Advance", {
-    Continue: batchStateSchema,
-    Done: z.null(),
-  }),
-  handle: async ({ value: state }): Promise<Advance> => {
+  handle: async ({ value: state }): Promise<LoopResult<BatchState, null>> => {
     if (state.rest.length === 0) {
-      return { kind: "Advance.Done", value: null };
+      return { kind: "LoopResult.Break", value: null };
     }
     return {
-      kind: "Advance.Continue",
+      kind: "LoopResult.Continue",
       value: {
         batch: state.rest.slice(0, BATCH_SIZE),
         rest: state.rest.slice(BATCH_SIZE),
@@ -55,7 +51,9 @@ export const advanceOrFinish = createHandler({
 }, "advanceOrFinish");
 ```
 
-### Pipeline
+### Pipeline (fire-and-forget)
+
+When each item handles its own side effects (writes to disk, sends a message, etc.) and you don't need the results back:
 
 ```ts
 pipe(
@@ -69,12 +67,40 @@ pipe(
         advanceOrFinish,
       ).branch({
         Continue: recur,
-        Done: done,
+        Break: done,
       }),
     ),
   ),
 );
 ```
+
+After `.collect()`, `state` (the VarRef) discards the batch results and re-injects the captured batch state for `advanceOrFinish`.
+
+### Pipeline (accumulating results)
+
+When you need the combined results of all batches:
+
+```ts
+pipe(
+  getItems,
+  initBatches,
+  loop<Result[], BatchState>((recur, done) =>
+    bindInput<BatchState, never>((state) =>
+      pipe(
+        state.getField("batch").iterate().map(processItem).collect(),
+        wrapInField("batchResults"),
+        allObject({ state, batchResults: getField("batchResults") }),
+        advanceOrFinish,  // appends batchResults to accumulated results
+      ).branch({
+        Continue: recur,
+        Break: done,
+      }),
+    ),
+  ),
+);
+```
+
+In this variant, `advanceOrFinish` takes `{ state, batchResults }`, concatenates `batchResults` onto an accumulated array, and returns `Break` with the final results when `rest` is empty. The batch state grows to `{ batch, rest, results }`.
 
 ## How it works
 
@@ -82,11 +108,11 @@ pipe(
 2. Each loop iteration:
    - `bindInput` captures the `BatchState` as a VarRef
    - `state.getField("batch").iterate().map().collect()` processes the current batch concurrently
-   - `state` (the VarRef) discards the collect result and re-injects the captured batch state
-   - `advanceOrFinish` checks `rest` — if non-empty, slices the next batch and returns `Continue`; if empty, returns `Done`
-3. `Continue` feeds the new `BatchState` back into the loop. `Done` terminates it.
+   - The VarRef reaches back to the original state for `advanceOrFinish`
+   - `advanceOrFinish` checks `rest` — if non-empty, slices the next batch and returns `Continue`; if empty, returns `Break`
+3. `Continue` feeds the new `BatchState` back into the loop. `Break` terminates it.
 
-The VarRef is essential here — after `.collect()` produces the batch results, you need to "reach back" to the original state to advance. Without `bindInput`, the state is lost after the map.
+The VarRef is essential — after `.collect()` produces batch results, you need to "reach back" to the original state to advance. Without `bindInput`, the state is lost after the map.
 
 ## Properties
 

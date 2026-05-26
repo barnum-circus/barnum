@@ -9,8 +9,8 @@ export {
 } from "./handler.js";
 
 // Schema builders
-export { resultSchema, optionSchema } from "./schemas.js";
+export { resultSchema, optionSchema, loopResultSchema } from "./schemas.js";
 export { taggedUnionSchema } from "./builtins/index.js";
 
 // Types only
-export type { Result, Option, TaggedUnion } from "./ast.js";
+export type { Result, Option, LoopResult, TaggedUnion } from "./ast.js";
