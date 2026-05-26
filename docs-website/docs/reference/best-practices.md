@@ -540,6 +540,10 @@ Without `earlyReturn`, you'd need deeply nested `.branch({ Ok: ..., Err: ... })`
 
 ## Handler contracts
 
+### Zod schemas are for serialization boundaries
+
+Zod schemas exist to validate data that crosses the serialization boundary between the pipeline runtime and handler subprocesses. They are not general-purpose type enforcement — TypeScript's type system handles that. You need schemas on handler `inputValidator`/`outputValidator` because data is JSON-serialized over stdin/stdout between processes. You don't need schemas for internal helper functions, pipeline-level constants, or anything that stays within a single process.
+
 ### Always provide validators
 
 Always provide `inputValidator` and `outputValidator` on handlers even though they're optional. They serve as machine-checked documentation of the handler's contract and catch shape mismatches at runtime boundaries.
