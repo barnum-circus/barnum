@@ -730,7 +730,7 @@ function unwrapMethod(this: TypedAction): TypedAction {
         Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
         Option: branch({
           Some: identity(),
-          None: panic("called unwrap on None"),
+          None: chain(drop, panic("called unwrap on None")),
         }),
       }),
     ),

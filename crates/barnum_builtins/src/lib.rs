@@ -238,7 +238,7 @@ pub async fn execute_builtin(
         }
 
         BuiltinKind::Panic { message } => Err(BuiltinError::Panic {
-            message: message.clone(),
+            message: format!("{message}: {input}"),
         }),
 
         BuiltinKind::Slice { start, end } => {
