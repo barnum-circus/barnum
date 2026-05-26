@@ -69,27 +69,8 @@ process.stdout.on("error", (error: NodeJS.ErrnoException) => {
 ### 1. `ProcessGroup` newtype
 
 ```rust
-// crates/barnum_typescript_handler/src/lib.rs (or a shared types crate)
-
 #[derive(Debug, Clone, Copy)]
-pub struct ProcessGroup(u32);
-
-impl ProcessGroup {
-    /// Create a process group using the current process's PID as the pgid.
-    pub fn current() -> Self {
-        Self(std::process::id())
-    }
-
-    /// Kill all processes in this group.
-    pub fn kill_all(self, signal: i32) {
-        unsafe { libc::killpg(self.0 as i32, signal); }
-    }
-
-    /// The raw pgid value, for passing to `.process_group()`.
-    pub fn pgid(self) -> u32 {
-        self.0
-    }
-}
+pub struct ProcessGroup(pub u32);
 ```
 
 ### 2. Scheduler holds the process group
@@ -118,7 +99,7 @@ let mut child = Command::new("sh")
     .stdin(std::process::Stdio::piped())
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
-    .process_group(process_group.pgid())  // <-- one line added
+    .process_group(process_group.0)  // <-- one line added
     .spawn()
     .expect("failed to spawn handler process");
 ```
@@ -136,7 +117,7 @@ let process_group = ProcessGroup::current();
 // Ctrl+C
 tokio::spawn(async move {
     tokio::signal::ctrl_c().await.ok();
-    process_group.kill_all(libc::SIGTERM);
+    unsafe { libc::killpg(process_group.0 as i32, libc::SIGTERM); }
     std::process::exit(130);
 });
 
@@ -144,7 +125,7 @@ tokio::spawn(async move {
 let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
 tokio::spawn(async move {
     sigterm.recv().await;
-    process_group.kill_all(libc::SIGTERM);
+    unsafe { libc::killpg(process_group.0 as i32, libc::SIGTERM); }
     std::process::exit(143);
 });
 ```
