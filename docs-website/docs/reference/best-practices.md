@@ -35,6 +35,31 @@ Handlers run in isolated subprocesses. You cannot call `.handle()` from inside o
 
 A handler should never spawn a nested pipeline via `runPipeline`. If you think you need to, you're wrong — restructure the pipeline instead. The framework owns orchestration; handlers do work. A nested `runPipeline` bypasses scheduling, resource management, and error propagation. Whatever you're trying to express as a nested pipeline is expressible as pipeline-level composition (`pipe`, `withResource`, `loop`, `bindInput`).
 
+### `createHandler` must be called at module top-level
+
+`createHandler` uses V8 stack introspection to locate the handler's source module at definition time. If you define a handler inside a function, class method, or dynamic scope, the stack trace doesn't resolve to the correct module path and the handler fails to load at runtime.
+
+```ts
+// Broken: handler defined inside a function — stack introspection fails
+function makeHandlers() {
+  return {
+    analyze: createHandler({ ... }, "analyze"),
+  };
+}
+
+// Broken: handler defined inside a conditional
+if (process.env.MODE === "production") {
+  export const analyze = createHandler({ ... }, "analyze");
+}
+
+// Correct: top-level module scope
+export const analyze = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  outputValidator: z.array(issueSchema),
+  handle: async ({ value }) => { ... },
+}, "analyze");
+```
+
 ### Define handlers in separate files from `runPipeline`
 
 **This will fork bomb your machine.** The framework executes handlers by importing their module in a subprocess. If that module also contains a top-level `runPipeline` call, importing the handler re-triggers the entire pipeline — which invokes handlers — which imports the module — which triggers the pipeline again. Each invocation spawns subprocesses exponentially until the system runs out of file descriptors or memory.
@@ -477,6 +502,24 @@ allObject({
 
 Named fields survive reordering and additions without breaking downstream `.getIndex()` calls. Use `all` only when feeding directly into something that expects a tuple (like `fold`'s `[acc, element]`).
 
+### `bindInput` captures the input as a `VarRef` — the body starts fresh
+
+`bindInput<TIn, TOut>(fn)` captures the current pipeline value as a `VarRef<TIn>` and passes it to the callback. **The body's pipeline input is `any` — it does NOT receive the captured value as its natural input.** You must explicitly inject values using the VarRef's methods (`.getField()`, `.pick()`, or using the ref directly as the first step in a `pipe`).
+
+A `VarRef<T>` is just a `TypedAction<any, T>` — a pipeline step that always produces the captured value regardless of what's flowing through the pipeline. `constant(x)` creates one too. There's nothing magical about VarRefs — they're actions you can use anywhere in the body to "reach back" to the captured input.
+
+```ts
+// The body doesn't implicitly receive `params` as input — you must use the VarRef:
+bindInput<Params, null>((params) =>
+  pipe(
+    params.pick("file"),        // ← explicitly inject from the captured value
+    analyze,
+    params.pick("branch"),      // ← reach back to captured value mid-pipeline
+    commit,
+  ),
+);
+```
+
 ### Use `bindInput` when multiple steps need the same value
 
 If a handler's output is consumed by one step but also needed later (e.g., a worktree path used for type-check, commit, and PR creation), wrap the section in `bindInput` rather than threading the value through every handler's input/output.
@@ -545,6 +588,32 @@ listFiles.iterate().fold(constant(initialState), processFileSequentially);
 ```
 
 There is no sequential `.each()` or sequential `.map()`. If you want one-at-a-time execution, fold is the primitive.
+
+### Bounded concurrency: process N items at a time
+
+`.iterate().map()` runs ALL elements concurrently. For bounded concurrency (e.g., process a list of 100 files but only 5 at a time), split the list into batches and process each batch:
+
+```ts
+// initBatches splits [T] into { batch: T[], rest: T[] } with batch.length <= N
+// advanceOrFinish takes the remaining items and produces either:
+//   Continue: { batch: T[], rest: T[] }  (more to process)
+//   Done: null                           (all batches processed)
+
+loop<{ batch: Item[]; rest: Item[] }, null>((recur, done) =>
+  pipe(
+    getField("batch"),
+    identity<Item[]>().iterate().map(processItem).collect(),
+    drop,                    // discard batch results (or accumulate if needed)
+    getField("rest"),        // get remaining items
+    advanceOrFinish,         // split next batch or signal done
+  ).branch({
+    Continue: recur,
+    Done: done,
+  }),
+);
+```
+
+The key insight: each iteration of the loop processes one batch concurrently (via `.iterate().map()`), then advances to the next batch. The batch size controls max concurrency.
 
 ### Prefer `.iterate().map()` over `forEach`
 
@@ -1058,6 +1127,21 @@ outputValidator: Result.schema(z.string(), z.number()); // Result<string, number
 ```
 
 **Critical:** `Result.schema(ok, err)` and `taggedUnionSchema("Result", { Ok: ok, Err: err })` are NOT the same. Only `Result.schema()` produces a type compatible with `.unwrapOr()`, `.mapErr()`, and other Result-aware postfix methods. `taggedUnionSchema("Result", ...)` produces a generic tagged union that requires `.branch()` dispatch — the Result-specific combinators won't recognize it.
+
+### `Result.Err` and `Option.Some` both use `.value` — not `.error` or `.data`
+
+All tagged union variants use the field name `value` for their payload, including error cases. This is consistent (every variant is `{ kind: string, value: T }`) but potentially surprising for `Result.Err`:
+
+```ts
+// The error payload is in .value, NOT .error:
+{ kind: "Result.Ok", value: "success data" }
+{ kind: "Result.Err", value: "error message" }  // ← .value, not .error
+
+{ kind: "Option.Some", value: 42 }
+{ kind: "Option.None", value: null }
+```
+
+This uniformity means all tagged unions share the same shape — `branch()`, `getField("value")`, and serialization work identically regardless of which variant is active.
 
 ### `.branch()` requires exhaustive variants
 
