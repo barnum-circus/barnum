@@ -11,14 +11,18 @@ Consumer claims an item via rename, reads it, then deletes it. Simple, but if th
 ### Queue functions
 
 ```ts
-export function enqueue<T>(dir: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
+export function enqueue<T>(dir: string, id: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
   schema.parse(item);
   mkdirSync(dir, { recursive: true });
+  // Idempotent: skip if this ID already exists in any state
+  const existing = readdirSync(dir).find(f => f.includes(id));
+  if (existing) {
+    return some(null);
+  }
   const unclaimed = readdirSync(dir).filter(f => f.endsWith(".unclaimed.json"));
   if (unclaimed.length >= maxSize) {
     return none();
   }
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   writeFileSync(join(dir, `${id}.unclaimed.json`), JSON.stringify(item));
   return some(null);
 }
@@ -84,14 +88,18 @@ The consumer claims an item via `renameSync` (atomic on POSIX), processes it, th
 ### Queue functions
 
 ```ts
-export function enqueue<T>(dir: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
+export function enqueue<T>(dir: string, id: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
   schema.parse(item);
   mkdirSync(dir, { recursive: true });
+  // Idempotent: skip if this ID already exists in any state
+  const existing = readdirSync(dir).find(f => f.includes(id));
+  if (existing) {
+    return some(null);
+  }
   const unclaimed = readdirSync(dir).filter(f => f.endsWith(".unclaimed.json"));
   if (unclaimed.length >= maxSize) {
     return none();
   }
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   writeFileSync(join(dir, `${id}.unclaimed.json`), JSON.stringify(item));
   return some(null);
 }
@@ -183,9 +191,10 @@ Use this when losing an in-flight item is unacceptable, or when you want an audi
 
 Both strategies share:
 
+- **Idempotent enqueue.** `enqueue` checks whether the ID already exists in any state before writing. Safe to retry after crash.
 - **Backpressure.** `enqueue` returns `None` when full. The pipeline branches on it.
 - **Atomic claiming.** `renameSync` is atomic on POSIX. First consumer to rename wins; others get ENOENT and try the next file. Safe for multiple concurrent consumers.
-- **FIFO.** Timestamp prefix on filenames. Lexicographic sort gives ordering.
+- **FIFO.** Lexicographic sort on filenames gives ordering.
 - **Validation.** Both `enqueue` and `dequeue` validate against the Zod schema.
 - **Debuggable.** `ls` the queue directory to see item states at a glance via suffixes.
 
