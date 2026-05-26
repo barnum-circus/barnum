@@ -4,7 +4,6 @@ use barnum_ast::flat::flatten;
 use barnum_engine::WorkflowState;
 use barnum_event_loop::{ProcessGroup, Scheduler, run_workflow};
 use clap::{Parser, Subcommand, ValueEnum};
-use tokio::signal::unix::{SignalKind, signal};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -177,28 +176,39 @@ async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn st
 ///
 /// Children are spawned into a dedicated process group. On signal, `killpg()`
 /// terminates them all with a single syscall.
+///
+/// On non-Unix platforms this is a no-op (process groups are a Unix concept).
 fn install_signal_handlers(process_group: ProcessGroup) {
-    let pgid = process_group.0;
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
 
-    // Ctrl+C
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::killpg(pgid.cast_signed(), libc::SIGTERM);
-        }
-        std::process::exit(130);
-    });
+        let pgid = process_group.0;
 
-    // SIGTERM
-    #[allow(clippy::expect_used)]
-    let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-    tokio::spawn(async move {
-        sigterm.recv().await;
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::killpg(pgid.cast_signed(), libc::SIGTERM);
-        }
-        std::process::exit(143);
-    });
+        // Ctrl+C
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::killpg(pgid.cast_signed(), libc::SIGTERM);
+            }
+            std::process::exit(130);
+        });
+
+        // SIGTERM
+        #[allow(clippy::expect_used)]
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::spawn(async move {
+            sigterm.recv().await;
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::killpg(pgid.cast_signed(), libc::SIGTERM);
+            }
+            std::process::exit(143);
+        });
+    }
+
+    #[cfg(not(unix))]
+    let _ = process_group;
 }

@@ -67,15 +67,20 @@ pub async fn execute_typescript(
     value: &Value,
     pgid: u32,
 ) -> Result<Value, TypeScriptHandlerError> {
-    let mut child = Command::new("sh")
-        .arg("-c")
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(format!("{executor} {worker_path} {module} {func}"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .process_group(i32::try_from(pgid).expect("pgid exceeds i32"))
-        .spawn()
-        .expect("failed to spawn handler process");
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(unix)]
+    cmd.process_group(i32::try_from(pgid).expect("pgid exceeds i32"));
+
+    #[cfg(not(unix))]
+    let _ = pgid;
+
+    let mut child = cmd.spawn().expect("failed to spawn handler process");
 
     // Write input to stdin and close it
     let mut stdin = child.stdin.take().expect("no stdin");
