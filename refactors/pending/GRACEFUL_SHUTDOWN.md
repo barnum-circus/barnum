@@ -238,61 +238,73 @@ let execution = scheduler.dispatch(&dispatch_event, handler);
 workflow_state.set_invoke_execution(dispatch_event.task_id, execution);
 ```
 
-### 4. Clear PID on completion
+### 4. Process group for bulk kill
 
-In the `run_workflow` loop, when a completion is received and processed, clear the PID from the frame. This happens naturally when the frame is removed from the arena during `complete()`. No explicit cleanup needed — the frame (and its PID field) is deallocated.
+Spawn all subprocess children into a dedicated process group. On signal, one `killpg()` call terminates them all — no PID list, no bookkeeping, no races.
+
+```rust
+// At workflow start, create a new process group.
+// Use barnum's own PID as the pgid (standard pattern).
+let pgid = std::process::id();
+```
+
+```rust
+// crates/barnum_typescript_handler/src/lib.rs — spawn_typescript
+use std::os::unix::process::CommandExt;
+
+let mut child = Command::new("sh")
+    .arg("-c")
+    .arg(format!("{executor} {worker_path} {module} {func}"))
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .process_group(pgid)  // <-- one line
+    .spawn()
+    .expect("failed to spawn handler process");
+```
 
 ### 5. SIGTERM/SIGINT handler
-
-Install signal handlers in the CLI entry point. On signal, kill every tracked subprocess PID:
 
 ```rust
 // crates/barnum_cli/src/main.rs
 use tokio::signal::unix::{signal, SignalKind};
 
-// Standalone PID list maintained by run_workflow at dispatch/completion.
-// WorkflowState stays a plain struct — no concurrency primitives baked in.
-let pid_list: Arc<Mutex<Vec<Pid>>> = Arc::new(Mutex::new(Vec::new()));
+let pgid = std::process::id();
 
 // Ctrl+C
-let pids = Arc::clone(&pid_list);
 tokio::spawn(async move {
     tokio::signal::ctrl_c().await.ok();
-    for &pid in pids.lock().unwrap().iter() {
-        pid.kill(libc::SIGTERM);
-    }
+    unsafe { libc::killpg(pgid as i32, libc::SIGTERM); }
     std::process::exit(130);
 });
 
 // SIGTERM
-let pids = Arc::clone(&pid_list);
 let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
 tokio::spawn(async move {
     sigterm.recv().await;
-    for &pid in pids.lock().unwrap().iter() {
-        pid.kill(libc::SIGTERM);
-    }
+    unsafe { libc::killpg(pgid as i32, libc::SIGTERM); }
     std::process::exit(143);
 });
 ```
 
-`run_workflow` maintains the `pid_list`:
-- On dispatch: match `execution`, if `Subprocess(pid)` push `pid`, if `Inline` do nothing
-- On completion: remove the pid
-
-This keeps WorkflowState as a plain struct. The shared PID list is a local concern of the event loop, not an engine concept.
+No `Arc<Mutex<Vec<Pid>>>`. No dispatch/completion bookkeeping. No spawn-registration race. Children are in the group from the moment they exist.
 
 ### 6. Worker-side EPIPE handling stays
 
-Keep the existing EPIPE suppression in `worker.ts` as belt-and-suspenders. If the signal handler misses a child (race between spawn and PID registration), EPIPE still provides eventual cleanup.
+Keep the existing EPIPE suppression in `worker.ts` as belt-and-suspenders.
 
 ## Edge cases
 
-- **Race: signal arrives between spawn and PID registration.** The child exists but isn't in the list yet. EPIPE fallback handles it.
-- **Race: child exits naturally the same instant as signal.** `kill()` on a dead PID returns ESRCH. Safe — ignore the error.
-- **`sh -c` wrapper PID vs actual node PID.** `child.id()` returns the PID of `sh`. On most systems, `sh -c <single command>` exec's the command (replaces itself), so the PID is the actual node process. If it doesn't exec (e.g., the command has pipes/redirects), killing the shell sends SIGTERM to it, which terminates the shell and its child gets SIGHUP. Either way, cleanup happens.
-- **Frame torn down before signal.** If a race is won and losing frames are deallocated, their PIDs are removed from the list at completion time. No stale PIDs remain to accidentally kill a recycled PID. If a frame is torn down between signal and kill iteration, EPIPE handles it.
+- **Child exits naturally the same instant as signal.** `killpg()` on a group with dead members is fine — dead PIDs are already removed from the group by the OS.
+- **`sh -c` wrapper.** All processes in the group get the signal — both the shell and its child. No reliance on exec behavior.
+- **Grandchildren.** If a handler spawns its own subprocesses, they inherit the process group and are also killed. This is desirable.
+
+## What `Execution` is still for
+
+The `Execution` enum on the Invoke frame is NOT for bulk kill — that's handled by the process group. `Execution` exists for:
+- Individual task cancellation (future: timeout a single handler)
+- Knowing whether a frame is inline or subprocess (introspection, logging, debugging)
 
 ## Open questions
 
-1. **`kill_all()` for non-signal contexts?** Workflow timeout, fatal validation error, or user cancellation could all use the same kill-all-children mechanism. The signal handler is just one caller. Worth exposing as a method on whatever owns the PID list.
+1. **`kill_all()` for non-signal contexts?** Workflow timeout, fatal validation error, or user cancellation could all use `killpg()`. The signal handler is just one caller.
