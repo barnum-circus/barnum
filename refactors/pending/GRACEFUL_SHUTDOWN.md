@@ -141,55 +141,66 @@ pub async fn execute_typescript(
 
 **Recommendation: Option A.** The split makes the lifecycle explicit — spawn is synchronous (or nearly so), await is async. The scheduler owns the spawn step and naturally sees the PID. Option B threads a channel through for no structural benefit.
 
-### 2. PID registry in Scheduler
+### 2. Store PID in WorkflowState alongside existing task tracking
 
-Add a `HashMap<TaskId, u32>` to `Scheduler` tracking in-flight child PIDs. Wrap in `Arc<Mutex<_>>` so both the main loop (for signal handler access) and the spawned tokio tasks (for cleanup on completion) can access it.
+`WorkflowState` already tracks in-flight tasks via `task_to_frame: BTreeMap<TaskId, FrameId>`. The PID belongs here — it's just another piece of metadata about an in-flight task. Add a parallel map:
 
 ```rust
-pub struct Scheduler {
-    result_tx: mpsc::UnboundedSender<(TaskId, Result<Value, HandlerError>)>,
-    result_rx: mpsc::UnboundedReceiver<(TaskId, Result<Value, HandlerError>)>,
-    executor: String,
-    worker_path: String,
-    in_flight_pids: Arc<Mutex<HashMap<TaskId, u32>>>,
+// crates/barnum_engine/src/lib.rs
+pub struct WorkflowState {
+    // ... existing fields ...
+    task_to_frame: BTreeMap<TaskId, FrameId>,
+    task_pids: BTreeMap<TaskId, u32>,  // NEW: child PID per in-flight task
 }
 ```
 
-- On dispatch: `in_flight_pids.insert(task_id, pid)`
-- On completion received (in `run_workflow` loop): `in_flight_pids.remove(&task_id)`
+- On dispatch (after spawn): `workflow_state.register_task_pid(task_id, pid)`
+- On completion (existing path in `run_workflow`): `workflow_state.remove_task_pid(task_id)`
+- On signal: `workflow_state.all_task_pids()` → kill each one
+
+The `task_pids` map is only populated for TypeScript handlers (builtins run inline in tokio tasks, no subprocess). The signal handler iterates it to kill children.
+
+This keeps PID tracking co-located with the existing in-flight task tracking — one source of truth for "what's running right now."
 
 ### 3. SIGTERM handler
 
-Install a signal handler (via `tokio::signal` or `ctrlc` crate) in the CLI entry point (`crates/barnum_cli/src/main.rs`). On SIGTERM/SIGINT:
+Install a signal handler (via `tokio::signal`) in the CLI entry point (`crates/barnum_cli/src/main.rs`). On SIGTERM/SIGINT:
 
-1. Lock `in_flight_pids`
+1. Read all PIDs from `workflow_state.all_task_pids()`
 2. For each PID: `unsafe { libc::kill(pid as i32, libc::SIGTERM) }`
 3. Exit the process
 
+Since `run_workflow` owns `&mut WorkflowState`, the signal handler needs shared access. Wrap in `Arc<Mutex<_>>` at the call site (or use a separate `Arc<Mutex<BTreeMap<TaskId, u32>>>` that WorkflowState exposes — keeping the engine crate free of Arc/Mutex).
+
 ```rust
-// In main.rs, before run_workflow:
-let pids = scheduler.in_flight_pids();
+// In main.rs or run_workflow wrapper:
+use tokio::signal::unix::{signal, SignalKind};
+
+let task_pids: Arc<Mutex<BTreeMap<TaskId, u32>>> = workflow_state.task_pids_handle();
+
+// Ctrl+C
+let pids = Arc::clone(&task_pids);
 tokio::spawn(async move {
     tokio::signal::ctrl_c().await.ok();
-    let pids = pids.lock().unwrap();
-    for &pid in pids.values() {
+    for &pid in pids.lock().unwrap().values() {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
     }
     std::process::exit(130); // 128 + SIGINT
 });
-```
 
-For SIGTERM specifically (not just Ctrl+C):
-
-```rust
-use tokio::signal::unix::{signal, SignalKind};
-
+// SIGTERM
+let pids = Arc::clone(&task_pids);
 let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
 tokio::spawn(async move {
     sigterm.recv().await;
-    // kill children, exit
+    for &pid in pids.lock().unwrap().values() {
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+    }
+    std::process::exit(143); // 128 + SIGTERM
 });
 ```
+
+Alternative: if we don't want `Arc<Mutex>` threading through WorkflowState, store the PID map as a standalone `Arc<Mutex<BTreeMap<TaskId, u32>>>` owned by `run_workflow` and passed to both the dispatch path and the signal handler. WorkflowState doesn't need to own it — it just needs to be co-located with the dispatch/completion path.
 
 ### 4. Worker-side EPIPE handling stays
 
@@ -209,3 +220,14 @@ Keep the existing EPIPE suppression in `worker.ts` as a belt-and-suspenders fall
 2. **Graceful timeout?** Send SIGTERM, wait N ms, then SIGKILL stragglers? Or just SIGTERM and exit immediately? For handler subprocesses that are stateless (no persistent side effects), immediate SIGTERM is fine. Handlers that write to disk (like the queue demos) might leave partial state — but that's already the crash-recovery concern that the claim-and-complete strategy addresses.
 
 3. **Should the scheduler expose a `kill_all()` method** for use in non-signal contexts (e.g., workflow timeout, fatal error)? Probably yes — the signal handler is just one caller.
+
+4. **Exact placement of PID storage.** `FrameKind::Invoke` (`crates/barnum_engine/src/frame.rs:101`) is the leaf frame for in-flight handler tasks. It currently stores just `handler: HandlerId`. Adding `pid: Option<u32>` here is natural — `None` for builtins (no subprocess), `Some(pid)` for TypeScript handlers. The frame tree already carries all in-flight state; PID is just one more field. No parallel map needed.
+
+```rust
+Invoke {
+    handler: HandlerId,
+    pid: Option<u32>,  // None for builtins, Some for TypeScript subprocesses
+},
+```
+
+The signal handler walks the frame arena, filters for `Invoke` frames with `Some(pid)`, and kills each one.
