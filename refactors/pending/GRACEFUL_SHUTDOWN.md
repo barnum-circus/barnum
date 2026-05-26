@@ -66,51 +66,7 @@ process.stdout.on("error", (error: NodeJS.ErrnoException) => {
 
 ## Proposed changes
 
-### 0. `HandlerSlot<TBuiltin, TExternal>` — the shared shape
-
-The real union throughout the system is "builtin (inline) vs external (subprocess)." Define it once, parameterize the payload:
-
-```rust
-// crates/barnum_ast/src/lib.rs (or a shared crate)
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HandlerSlot<TBuiltin, TExternal> {
-    Builtin(TBuiltin),
-    External(TExternal),
-}
-
-impl<TBuiltin, TExternal> HandlerSlot<TBuiltin, TExternal> {
-    pub fn map_external<U>(self, f: impl FnOnce(TExternal) -> U) -> HandlerSlot<TBuiltin, U> {
-        match self {
-            HandlerSlot::Builtin(b) => HandlerSlot::Builtin(b),
-            HandlerSlot::External(e) => HandlerSlot::External(f(e)),
-        }
-    }
-
-    pub fn map_builtin<U>(self, f: impl FnOnce(TBuiltin) -> U) -> HandlerSlot<U, TExternal> {
-        match self {
-            HandlerSlot::Builtin(b) => HandlerSlot::Builtin(f(b)),
-            HandlerSlot::External(e) => HandlerSlot::External(e),
-        }
-    }
-}
-```
-
-Usages across the codebase:
-
-| Context | Type | Meaning |
-|---------|------|---------|
-| Handler definitions | `HandlerSlot<BuiltinHandler, TypeScriptHandler>` | What the handler IS |
-| Invoke frame runtime | `HandlerSlot<(), Pid>` | Per-invocation subprocess state |
-| Dispatch return | `HandlerSlot<(), Pid>` | What the scheduler spawned |
-
-The existing `HandlerKind` becomes a type alias:
-
-```rust
-pub type HandlerKind = HandlerSlot<BuiltinHandler, TypeScriptHandler>;
-```
-
-### 0.5. `Pid` newtype
+### 0. `Pid` newtype and `Execution` enum
 
 ```rust
 // crates/barnum_engine/src/lib.rs (or a shared types crate)
@@ -123,21 +79,31 @@ impl Pid {
         unsafe { libc::kill(self.0 as libc::pid_t, signal); }
     }
 }
+
+/// Distinguishes builtin (inline) execution from external (subprocess) execution.
+/// Separate from `HandlerKind` — that enum tracks handler *identity* (TypeScript, Python,
+/// Builtin, ...). This enum tracks execution *model*: does the handler run inline in the
+/// engine's process, or does it spawn a child process?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Execution<TBuiltin, TExternal> {
+    Inline(TBuiltin),
+    Subprocess(TExternal),
+}
 ```
 
-### 1. Store runtime state on the Invoke frame
+`HandlerKind` is open and extensible (TS, Python, Builtin, future languages). `Execution` is closed and binary — every handler either runs inline or spawns a subprocess, regardless of what language it's written in.
 
-The Invoke frame carries per-invocation state using `HandlerSlot`:
+### 1. Store execution state on the Invoke frame
 
 ```rust
 // crates/barnum_engine/src/frame.rs
 Invoke {
     handler: HandlerId,
-    runtime: HandlerSlot<(), Pid>,
+    execution: Execution<(), Pid>,
 }
 ```
 
-Builtins structurally cannot carry a PID. External handlers always carry one. No `Option`, no impossible states.
+`Inline(())` for builtins (run inside the engine's tokio runtime). `Subprocess(pid)` for any handler kind that spawns a child process. The invariant is maintained by the dispatch code — builtins always return `Execution::Inline(())`, subprocess handlers always return `Execution::Subprocess(pid)`.
 
 ### 2. Extract PID from spawned child
 
@@ -226,25 +192,24 @@ pub async fn await_typescript(
 }
 ```
 
-### 3. Scheduler returns `HandlerSlot<(), Pid>`, run_workflow stores it
+### 3. Scheduler returns `Execution<(), Pid>`, run_workflow stores it
 
-`Scheduler::dispatch` returns `HandlerSlot<(), Pid>`. The Scheduler doesn't touch WorkflowState. `run_workflow` (which already has `&mut WorkflowState`) stores the result directly on the frame's `runtime` field:
+`Scheduler::dispatch` returns `Execution<(), Pid>`. The Scheduler doesn't touch WorkflowState:
 
 ```rust
 // crates/barnum_event_loop/src/lib.rs — Scheduler::dispatch
 
-/// Returns the per-invocation runtime state: () for builtins, Pid for externals.
 pub fn dispatch(
     &self,
     dispatch_event: &DispatchEvent,
     handler: &HandlerKind,
-) -> HandlerSlot<(), Pid> {
+) -> Execution<(), Pid> {
     match handler {
-        HandlerSlot::Builtin(_) => {
+        HandlerKind::Builtin(_) => {
             // ... existing builtin dispatch (tokio::spawn inline) ...
-            HandlerSlot::Builtin(())
+            Execution::Inline(())
         }
-        HandlerSlot::External(ts) => {
+        HandlerKind::TypeScript(ts) => {
             let module = ts.module.lookup().to_owned();
             let func = ts.func.lookup().to_owned();
             let value = dispatch_event.value.clone();
@@ -263,7 +228,7 @@ pub fn dispatch(
                 let _ = result_tx.send((task_id, result));
             });
 
-            HandlerSlot::External(pid)
+            Execution::Subprocess(pid)
         }
     }
 }
@@ -271,8 +236,8 @@ pub fn dispatch(
 
 ```rust
 // In run_workflow's dispatch path:
-let runtime = scheduler.dispatch(&dispatch_event, handler);
-workflow_state.set_invoke_runtime(dispatch_event.task_id, runtime);
+let execution = scheduler.dispatch(&dispatch_event, handler);
+workflow_state.set_invoke_execution(dispatch_event.task_id, execution);
 ```
 
 ### 4. Clear PID on completion
@@ -281,7 +246,7 @@ In the `run_workflow` loop, when a completion is received and processed, clear t
 
 ### 5. SIGTERM/SIGINT handler
 
-Install signal handlers in the CLI entry point. On signal, walk the frame arena and kill every `Invoke` frame with an `External(pid)` runtime:
+Install signal handlers in the CLI entry point. On signal, kill every tracked subprocess PID:
 
 ```rust
 // crates/barnum_cli/src/main.rs
@@ -314,7 +279,7 @@ tokio::spawn(async move {
 ```
 
 `run_workflow` maintains the `pid_list`:
-- On dispatch: if `runtime` is `HandlerSlot::External(pid)`, push `pid`
+- On dispatch: if `execution` is `Execution::Subprocess(pid)`, push `pid`
 - On completion: remove the pid
 
 This keeps WorkflowState as a plain struct. The shared PID list is a local concern of the event loop, not an engine concept.
@@ -328,7 +293,7 @@ Keep the existing EPIPE suppression in `worker.ts` as belt-and-suspenders. If th
 - **Race: signal arrives between spawn and PID registration.** The child exists but isn't in the list yet. EPIPE fallback handles it.
 - **Race: child exits naturally the same instant as signal.** `kill()` on a dead PID returns ESRCH. Safe — ignore the error.
 - **`sh -c` wrapper PID vs actual node PID.** `child.id()` returns the PID of `sh`. On most systems, `sh -c <single command>` exec's the command (replaces itself), so the PID is the actual node process. If it doesn't exec (e.g., the command has pipes/redirects), killing the shell sends SIGTERM to it, which terminates the shell and its child gets SIGHUP. Either way, cleanup happens.
-- **Frame torn down before signal.** If a race is won and losing frames are deallocated, their PIDs are gone from the arena. The orphaned workers hit EPIPE and self-terminate. No stale PIDs in the list to accidentally kill a recycled PID.
+- **Frame torn down before signal.** If a race is won and losing frames are deallocated, their PIDs are removed from the list at completion time. No stale PIDs remain to accidentally kill a recycled PID. If a frame is torn down between signal and kill iteration, EPIPE handles it.
 
 ## Open questions
 
