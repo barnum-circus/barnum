@@ -156,6 +156,7 @@ fn check(input: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn std::error::Error>> {
     let process_group = ProcessGroup(std::process::id());
+    become_process_group_leader(process_group);
     install_signal_handlers(process_group);
 
     let config = deserialize_config(input)?;
@@ -170,6 +171,38 @@ async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn st
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     Ok(())
+}
+
+/// Make this process a process group leader so its PID is a valid PGID.
+///
+/// Children are spawned with `process_group(pgid)` which calls `setpgid(0, pgid)`
+/// in the child. That syscall requires `pgid` to be an existing process group in
+/// the same session. By calling `setpgid(0, 0)` here, barnum becomes a group
+/// leader and its PID becomes a valid PGID for children to join.
+///
+/// On non-Unix platforms this is a no-op.
+fn become_process_group_leader(process_group: ProcessGroup) {
+    #[cfg(unix)]
+    {
+        #[allow(unsafe_code)]
+        let result = unsafe { libc::setpgid(0, 0) };
+        assert!(
+            result == 0,
+            "setpgid(0, 0) failed: {}",
+            std::io::Error::last_os_error()
+        );
+        // Sanity check: our pgid should now equal our pid.
+        #[allow(unsafe_code, clippy::expect_used)]
+        {
+            debug_assert_eq!(
+                unsafe { libc::getpgid(0) },
+                i32::try_from(process_group.0).expect("pgid exceeds i32"),
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    let _ = process_group;
 }
 
 /// Install signal handlers that kill all subprocess children on SIGTERM/SIGINT.

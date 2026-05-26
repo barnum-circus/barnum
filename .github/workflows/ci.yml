@@ -558,7 +558,7 @@ jobs:
 
   publish:
     if: "!cancelled() && !failure() && needs.build-linux-x64.result == 'success' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))"
-    needs: [typecheck, vitest, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
+    needs: [typecheck, vitest, demo-tests, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
