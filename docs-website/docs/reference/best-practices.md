@@ -411,19 +411,25 @@ loop<null, null>((recur, done) =>
 
 `constant()` is appropriate when you need to introduce a value that doesn't exist in the current pipeline context — e.g., `constant({ producerId })` to inject a captured closure variable.
 
-### Use `drop` instead of `constant(null)` to discard a value
+### Use `.drop()` instead of `constant(null)` to discard a value
 
-When you genuinely need to discard the current pipeline value and produce `null` (e.g., to feed a handler that accepts `null` after a step whose output you don't need), use `drop` — not `constant(null)`. Both are `any → null`, but `drop` communicates intent: "I'm done with this value." `constant(null)` reads as "I'm introducing a null," which obscures the fact that a discard is happening.
+When you need to discard the current pipeline value and produce `null`, use the postfix `.drop()` method — not `constant(null)`. Both are `any → null`, but `.drop()` communicates intent: "I'm done with this value." `constant(null)` reads as "I'm introducing a null," which obscures that a discard is happening.
 
 ```ts
 // Avoid: constant(null) hides the discard
 processEvent.then(constant(null)).then(dequeueEvent);
 
-// Prefer: drop explicitly communicates intent
-processEvent.then(drop).then(dequeueEvent);
-
-// Even better if you can use .drop() postfix:
+// Prefer: .drop() postfix — reads as "process, discard result, then dequeue"
 processEvent.drop().then(dequeueEvent);
+```
+
+The freestanding `drop` is for positions where there's no preceding action to call `.drop()` on — e.g., as the body of a branch case that discards its input:
+
+```ts
+classify.branch({
+  Relevant: processItem,
+  Irrelevant: drop,
+})
 ```
 
 ### Prefer `allObject` over `all`
