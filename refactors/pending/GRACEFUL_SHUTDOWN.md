@@ -295,8 +295,4 @@ Keep the existing EPIPE suppression in `worker.ts` as belt-and-suspenders. If th
 
 ## Open questions
 
-1. **Process group vs individual PID tracking?** Spawning all children into a shared process group means one `killpg()` call instead of iterating. Requires `.process_group(pgid)` on spawn or barnum calling `setsid` at startup. Simpler kill path, but adds spawn-time complexity. Individual PID kill is straightforward and the number of concurrent handlers is small (typically < 20).
-
-2. **Graceful timeout?** SIGTERM then wait N ms then SIGKILL? For stateless handler subprocesses, immediate SIGTERM is sufficient. Handlers with persistent side effects (disk writes) are already addressed by crash-recovery patterns (claim-and-complete).
-
-3. **`kill_all()` for non-signal contexts?** Workflow timeout, fatal validation error, or user cancellation could all use the same kill-all-children mechanism. The signal handler is just one caller. Worth exposing as a method on whatever owns the PID list.
+1. **`kill_all()` for non-signal contexts?** Workflow timeout, fatal validation error, or user cancellation could all use the same kill-all-children mechanism. The signal handler is just one caller. Worth exposing as a method on whatever owns the PID list.
