@@ -1,20 +1,14 @@
 # Filesystem Event Bus
 
-When two concurrent branches need to communicate, a shared filesystem directory works as a message bus. The producer writes JSON files; the consumer reads and deletes them. No engine extensions required — this uses `all`, `loop`, `branch`, and a reusable queue abstraction.
+When two concurrent branches need to communicate, a shared filesystem directory works as a message bus. The producer writes JSON files; the consumer reads and processes them. No engine extensions required — this uses `all`, `loop`, `branch`, and a reusable queue abstraction.
 
-## The queue abstraction
+## Strategy 1: Delete on dequeue
 
-A generic filesystem queue with typed enqueue/dequeue operations:
+The simplest approach. Consumer reads the oldest file and deletes it atomically. If the consumer crashes after dequeue but before finishing, the item is lost.
+
+### Queue functions
 
 ```ts
-// shared/queue.ts
-
-import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Option } from "@barnum/barnum/pipeline";
-import { none, some } from "@barnum/barnum/runtime";
-import type { z } from "zod";
-
 export function enqueue<T>(dir: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
   schema.parse(item);
   mkdirSync(dir, { recursive: true });
@@ -29,71 +23,28 @@ export function enqueue<T>(dir: string, maxSize: number, item: T, schema: z.ZodT
 
 export function dequeue<T>(dir: string, schema: z.ZodType<T>): Option<T> {
   mkdirSync(dir, { recursive: true });
-  const files = readdirSync(dir)
-    .filter(f => f.endsWith(".json") && !f.endsWith(".claimed.json"))
-    .sort();
+  const files = readdirSync(dir).filter(f => f.endsWith(".json")).sort();
+  if (files.length === 0) return none();
 
-  for (const file of files) {
-    const filepath = join(dir, file);
-    const claimedPath = filepath.replace(".json", ".claimed.json");
-    try {
-      renameSync(filepath, claimedPath);
-    } catch {
-      continue;
-    }
-    const raw = JSON.parse(readFileSync(claimedPath, "utf-8"));
-    unlinkSync(claimedPath);
-    return some(schema.parse(raw));
-  }
-  return none();
-}
-
-export function clearQueue(dir: string): void {
-  mkdirSync(dir, { recursive: true });
-  const files = readdirSync(dir).filter(f => f.endsWith(".json"));
-  for (const file of files) {
-    unlinkSync(join(dir, file));
-  }
+  const filepath = join(dir, files[0]);
+  const raw = JSON.parse(readFileSync(filepath, "utf-8"));
+  unlinkSync(filepath);
+  return some(schema.parse(raw));
 }
 ```
 
-## Typed handlers
-
-Each pipeline defines handlers that call the queue functions with a concrete schema and directory:
-
-```ts
-const QUEUE_DIR = join(import.meta.dirname, "../queue");
-const MAX_SIZE = 5;
-
-export const enqueueEvent = createHandler({
-  inputValidator: EventSchema,
-  outputValidator: optionSchema(z.null()),
-  handle: async ({ value }): Promise<Option<null>> => {
-    return enqueue(QUEUE_DIR, MAX_SIZE, value, EventSchema);
-  },
-}, "enqueueEvent");
-
-export const dequeueEvent = createHandler({
-  inputValidator: z.null(),
-  outputValidator: optionSchema(EventSchema),
-  handle: async (): Promise<Option<Event>> => {
-    return dequeue(QUEUE_DIR, EventSchema);
-  },
-}, "dequeueEvent");
-```
-
-## Producer/consumer pipeline
+### Pipeline
 
 ```ts
 all(
-  // producer: generate events, enqueue with backpressure
+  // producer
   loop((recur, done) =>
     pipe(generateEvent, enqueueEvent).branch({
-      Some: recur,   // enqueued or full (backpressure) — keep going
-      None: done,    // done producing
+      Some: recur,
+      None: done,
     }),
   ),
-  // consumer: dequeue and process until done
+  // consumer
   loop((recur, done) =>
     dequeueEvent.branch({
       Some: processEvent.then(recur),
@@ -106,16 +57,129 @@ all(
 )
 ```
 
-Both loops run concurrently inside `all()`. The producer enqueues items; `enqueue` returns `None` when the queue is full (backpressure). The consumer dequeues and processes until the queue is empty and all producers are done.
+Use this when items are cheap to reproduce or losing an in-flight item is acceptable.
+
+## Strategy 2: Claim and complete
+
+Three states tracked via filename suffix:
+
+| Suffix | Meaning |
+|--------|---------|
+| `.json` | Unclaimed — available for dequeue |
+| `.pending.json` | Claimed — being processed |
+| `.done.json` | Completed |
+
+The consumer claims an item via `renameSync` (atomic on POSIX), processes it, then marks it complete with another rename. If the consumer crashes mid-processing, the `.pending.json` file survives and can be detected for recovery.
+
+### Queue functions
+
+```ts
+export function enqueue<T>(dir: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
+  schema.parse(item);
+  mkdirSync(dir, { recursive: true });
+  const unclaimed = readdirSync(dir).filter(
+    f => f.endsWith(".json") && !f.endsWith(".pending.json") && !f.endsWith(".done.json"),
+  );
+  if (unclaimed.length >= maxSize) {
+    return none();
+  }
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  writeFileSync(join(dir, `${id}.json`), JSON.stringify(item));
+  return some(null);
+}
+
+export function dequeue<T>(dir: string, schema: z.ZodType<T>): Option<{ id: string; item: T }> {
+  mkdirSync(dir, { recursive: true });
+  const files = readdirSync(dir)
+    .filter(f => f.endsWith(".json") && !f.endsWith(".pending.json") && !f.endsWith(".done.json"))
+    .sort();
+
+  for (const file of files) {
+    const id = file.replace(".json", "");
+    const filepath = join(dir, file);
+    const pendingPath = join(dir, `${id}.pending.json`);
+    try {
+      renameSync(filepath, pendingPath);
+    } catch {
+      continue; // another consumer claimed it first
+    }
+    const raw = JSON.parse(readFileSync(pendingPath, "utf-8"));
+    return some({ id, item: schema.parse(raw) });
+  }
+  return none();
+}
+
+export function complete(dir: string, id: string): void {
+  const pendingPath = join(dir, `${id}.pending.json`);
+  const donePath = join(dir, `${id}.done.json`);
+  renameSync(pendingPath, donePath);
+}
+```
+
+### Typed handlers
+
+```ts
+export const dequeueEvent = createHandler({
+  inputValidator: z.null(),
+  outputValidator: optionSchema(ClaimedEventSchema),
+  handle: async (): Promise<Option<{ id: string; item: Event }>> => {
+    return dequeue(QUEUE_DIR, EventSchema);
+  },
+}, "dequeueEvent");
+
+export const completeEvent = createHandler({
+  inputValidator: z.object({ id: z.string() }),
+  outputValidator: z.null(),
+  handle: async ({ value: { id } }) => {
+    complete(QUEUE_DIR, id);
+    return null;
+  },
+}, "completeEvent");
+```
+
+### Pipeline
+
+The consumer uses `bindInput` to thread the claimed event's `id` through processing and into the completion step:
+
+```ts
+all(
+  makeProducerLoop(0),
+  makeProducerLoop(1),
+  makeProducerLoop(2),
+  // consumer
+  loop((recur) =>
+    constant(null).then(dequeueEvent).branch({
+      Some: bindInput<ClaimedEvent, never>((claimed) =>
+        pipe(
+          claimed.getField("item"),
+          consumeEvent,
+          claimed.pick("id"),
+          completeEvent,
+          recur,
+        ),
+      ),
+      None: sleep(500).then(recur),
+    }),
+  ),
+)
+```
+
+Use this when losing an in-flight item is unacceptable, when you need multiple concurrent consumers, or when you want an audit trail of completed items.
 
 ## Properties
 
-- **Backpressure.** `enqueue` returns `None` when full. The pipeline branches on it — sleep and retry, or stop.
-- **Atomic claiming.** `renameSync` is atomic on POSIX. First consumer to rename wins; others get ENOENT and try the next file. Safe for multiple concurrent consumers.
+Both strategies share:
+
+- **Backpressure.** `enqueue` returns `None` when full. The pipeline branches on it.
 - **FIFO.** Timestamp prefix on filenames. Lexicographic sort gives ordering.
-- **Validation.** Both `enqueue` and `dequeue` validate against the Zod schema. Bad data never hits disk; corrupted files fail at dequeue.
-- **Debuggable.** `ls` the queue directory to see pending items. `cat` any file to inspect.
-- **Crash-recoverable.** Files persist across restarts — unprocessed items survive a crash.
+- **Validation.** Both `enqueue` and `dequeue` validate against the Zod schema.
+- **Debuggable.** `ls` the queue directory to see pending items.
+
+Strategy 2 additionally provides:
+
+- **Atomic claiming.** `renameSync` is atomic on POSIX. First consumer to rename wins; others get ENOENT and try the next file. Safe for multiple concurrent consumers.
+- **Crash recovery.** `.pending.json` files indicate items that were claimed but never completed.
+- **Audit trail.** `.done.json` files record what was processed.
 
 ## Limitations
 
