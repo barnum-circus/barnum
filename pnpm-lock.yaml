@@ -93,6 +93,24 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  demos/event-bus-durable:
+    dependencies:
+      '@barnum/barnum':
+        specifier: workspace:*
+        version: link:../../libs/barnum
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+
   demos/identify-and-address-refactors:
     dependencies:
       '@barnum/barnum':
@@ -6913,7 +6931,7 @@ snapshots:
 
   '@docusaurus/react-loadable@5.5.2(react@18.3.1)':
     dependencies:
-      '@types/react': 18.3.28
+      '@types/react': 19.2.14
       prop-types: 15.8.1
       react: 18.3.1
 

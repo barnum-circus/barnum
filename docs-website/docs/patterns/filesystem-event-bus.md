@@ -48,14 +48,14 @@ export function dequeue<T>(dir: string, schema: z.ZodType<T>): Option<T> {
 ```ts
 all(
   // producer
-  loop((recur, done) =>
+  loop<null, null>((recur, done) =>
     pipe(generateEvent, enqueueEvent).branch({
       Some: recur,
       None: done,
     }),
   ),
   // consumer
-  loop((recur, done) =>
+  loop<null, null>((recur, done) =>
     dequeueEvent.branch({
       Some: processEvent.then(recur),
       None: isDone.then(asOption()).branch({
@@ -148,12 +148,8 @@ export const completeEvent = createHandler({
 The consumer uses `bindInput` to thread the claimed event's `id` through processing and into the completion step:
 
 ```ts
-all(
-  makeProducerLoop(0),
-  makeProducerLoop(1),
-  makeProducerLoop(2),
-  // consumer
-  loop((recur) =>
+function makeConsumerLoop(): TypedAction<null, null> {
+  return loop<null, null>((recur, done) =>
     constant(null).then(dequeueEvent).branch({
       Some: bindInput<ClaimedEvent, never>((claimed) =>
         pipe(
@@ -164,9 +160,20 @@ all(
           recur,
         ),
       ),
-      None: sleep(500).then(recur),
+      None: isDone.then(asOption()).branch({
+        Some: done,
+        None: sleep(50).then(recur),
+      }),
     }),
-  ),
+  );
+}
+
+all(
+  makeProducerLoop(0),
+  makeProducerLoop(1),
+  makeProducerLoop(2),
+  makeConsumerLoop(),
+  makeConsumerLoop(),
 )
 ```
 
