@@ -80,18 +80,16 @@ impl Pid {
     }
 }
 
-/// Distinguishes builtin (inline) execution from external (subprocess) execution.
-/// Separate from `HandlerKind` — that enum tracks handler *identity* (TypeScript, Python,
-/// Builtin, ...). This enum tracks execution *model*: does the handler run inline in the
-/// engine's process, or does it spawn a child process?
+/// Tracks the execution state of an in-flight handler invocation.
+/// Builtins run inline (no child process). Subprocess handlers spawn a child.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Execution<TBuiltin, TExternal> {
-    Inline(TBuiltin),
-    Subprocess(TExternal),
+pub enum Execution {
+    Inline,
+    Subprocess(Pid),
 }
 ```
 
-`HandlerKind` is open and extensible (TS, Python, Builtin, future languages). `Execution` is closed and binary — every handler either runs inline or spawns a subprocess, regardless of what language it's written in.
+`HandlerKind` stays as-is — it tracks handler identity (TypeScript, Builtin, future languages). `Execution` tracks runtime state of a specific invocation.
 
 ### 1. Store execution state on the Invoke frame
 
@@ -99,11 +97,11 @@ pub enum Execution<TBuiltin, TExternal> {
 // crates/barnum_engine/src/frame.rs
 Invoke {
     handler: HandlerId,
-    execution: Execution<(), Pid>,
+    execution: Execution,
 }
 ```
 
-`Inline(())` for builtins (run inside the engine's tokio runtime). `Subprocess(pid)` for any handler kind that spawns a child process. The invariant is maintained by the dispatch code — builtins always return `Execution::Inline(())`, subprocess handlers always return `Execution::Subprocess(pid)`.
+`Inline` for builtins (run inside the engine's tokio runtime). `Subprocess(pid)` for any handler kind that spawns a child process. The invariant is maintained by the dispatch code — builtins always return `Execution::Inline`, subprocess handlers always return `Execution::Subprocess(pid)`.
 
 ### 2. Extract PID from spawned child
 
@@ -192,9 +190,9 @@ pub async fn await_typescript(
 }
 ```
 
-### 3. Scheduler returns `Execution<(), Pid>`, run_workflow stores it
+### 3. Scheduler returns `Execution`, run_workflow stores it
 
-`Scheduler::dispatch` returns `Execution<(), Pid>`. The Scheduler doesn't touch WorkflowState:
+`Scheduler::dispatch` returns `Execution`. The Scheduler doesn't touch WorkflowState:
 
 ```rust
 // crates/barnum_event_loop/src/lib.rs — Scheduler::dispatch
@@ -203,11 +201,11 @@ pub fn dispatch(
     &self,
     dispatch_event: &DispatchEvent,
     handler: &HandlerKind,
-) -> Execution<(), Pid> {
+) -> Execution {
     match handler {
         HandlerKind::Builtin(_) => {
             // ... existing builtin dispatch (tokio::spawn inline) ...
-            Execution::Inline(())
+            Execution::Inline
         }
         HandlerKind::TypeScript(ts) => {
             let module = ts.module.lookup().to_owned();
@@ -279,7 +277,7 @@ tokio::spawn(async move {
 ```
 
 `run_workflow` maintains the `pid_list`:
-- On dispatch: if `execution` is `Execution::Subprocess(pid)`, push `pid`
+- On dispatch: match `execution`, if `Subprocess(pid)` push `pid`, if `Inline` do nothing
 - On completion: remove the pid
 
 This keeps WorkflowState as a plain struct. The shared PID list is a local concern of the event loop, not an engine concept.
