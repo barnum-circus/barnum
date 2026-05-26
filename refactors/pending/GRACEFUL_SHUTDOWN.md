@@ -74,13 +74,13 @@ The PID is per-invocation state. It belongs on `FrameKind::Invoke` — the frame
 // crates/barnum_engine/src/frame.rs
 Invoke {
     handler: HandlerId,
-    pid: Option<u32>,  // None for builtins, Some for TypeScript subprocesses
+    pid: Option<u32>,  // None for inline (builtins), Some for subprocess handlers
 },
 ```
 
-`None` for builtins (they run inline in a tokio task, no subprocess). `Some(pid)` for TypeScript handlers (each invocation spawns a subprocess).
+`None` for handlers that run inline (builtins). `Some(pid)` for handlers that spawn a subprocess (currently TypeScript, but any future subprocess-based handler kind would also populate this). The distinction is "inline vs subprocess," not "builtin vs TypeScript" — TypeScript just happens to be the only subprocess handler today.
 
-This is the only change to the engine crate. No new data structures, no parallel maps. The frame tree already represents "what's in flight" — the PID is just one more field on the invocation.
+This is the only change to the engine crate. No new data structures, no parallel maps, no generic enums. The frame tree already represents "what's in flight" — the PID is just one more field on the invocation.
 
 ### 2. Extract PID from spawned child
 
