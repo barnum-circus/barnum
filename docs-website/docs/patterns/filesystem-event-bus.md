@@ -14,12 +14,12 @@ Consumer claims an item via rename, reads it, then deletes it. Simple, but if th
 export function enqueue<T>(dir: string, id: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
   schema.parse(item);
   mkdirSync(dir, { recursive: true });
+  const files = readdirSync(dir);
   // Idempotent: skip if this ID already exists in any state
-  const existing = readdirSync(dir).find(f => f.includes(id));
-  if (existing) {
+  if (files.some(f => f.startsWith(`${id}.`))) {
     return some(null);
   }
-  const unclaimed = readdirSync(dir).filter(f => f.endsWith(".unclaimed.json"));
+  const unclaimed = files.filter(f => f.endsWith(".unclaimed.json"));
   if (unclaimed.length >= maxSize) {
     return none();
   }
@@ -91,13 +91,13 @@ The consumer claims an item via `renameSync` (atomic on POSIX), processes it, th
 export function enqueue<T>(dir: string, id: string, maxSize: number, item: T, schema: z.ZodType<T>): Option<null> {
   schema.parse(item);
   mkdirSync(dir, { recursive: true });
+  const files = readdirSync(dir);
   // Idempotent: skip if this ID already exists in any state
-  const existing = readdirSync(dir).find(f => f.includes(id));
-  if (existing) {
+  if (files.some(f => f.startsWith(`${id}.`))) {
     return some(null);
   }
-  const unclaimed = readdirSync(dir).filter(f => f.endsWith(".unclaimed.json"));
-  if (unclaimed.length >= maxSize) {
+  const active = files.filter(f => f.endsWith(".unclaimed.json") || f.endsWith(".pending.json"));
+  if (active.length >= maxSize) {
     return none();
   }
   writeFileSync(join(dir, `${id}.unclaimed.json`), JSON.stringify(item));
@@ -127,6 +127,23 @@ export function complete(dir: string, id: string): void {
   const pendingPath = join(dir, `${id}.pending.json`);
   const donePath = join(dir, `${id}.done.json`);
   renameSync(pendingPath, donePath);
+}
+
+export function resetPending(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  const files = readdirSync(dir).filter(f => f.endsWith(".pending.json"));
+  for (const file of files) {
+    const id = file.replace(".pending.json", "");
+    renameSync(join(dir, file), join(dir, `${id}.unclaimed.json`));
+  }
+}
+
+export function clearQueue(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  const files = readdirSync(dir).filter(f => f.endsWith(".json"));
+  for (const file of files) {
+    unlinkSync(join(dir, file));
+  }
 }
 ```
 
@@ -191,8 +208,8 @@ Use this when losing an in-flight item is unacceptable, or when you want an audi
 
 Both strategies share:
 
-- **Idempotent enqueue.** `enqueue` checks whether the ID already exists in any state before writing. Safe to retry after crash.
-- **Backpressure.** `enqueue` returns `None` when full. The pipeline branches on it.
+- **Idempotent enqueue.** `enqueue` checks whether the ID already exists in any state (`startsWith` match on filename prefix). Safe to retry after crash.
+- **Backpressure.** `enqueue` returns `None` when full. Strategy 1 counts unclaimed items; Strategy 2 counts active items (unclaimed + pending) since pending items still occupy logical capacity.
 - **Atomic claiming.** `renameSync` is atomic on POSIX. First consumer to rename wins; others get ENOENT and try the next file. Safe for multiple concurrent consumers.
 - **FIFO.** Lexicographic sort on filenames gives ordering.
 - **Validation.** Both `enqueue` and `dequeue` validate against the Zod schema.
@@ -200,7 +217,7 @@ Both strategies share:
 
 Strategy 2 additionally provides:
 
-- **Crash recovery.** `.pending.json` files indicate items that were claimed but never completed.
+- **Crash recovery.** `.pending.json` files indicate items that were claimed but never completed. `resetPending` moves them back to `.unclaimed.json` for reprocessing.
 - **Audit trail.** `.done.json` files record what was processed.
 
 ## Limitations

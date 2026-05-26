@@ -105,14 +105,16 @@ export const produceEvent = createHandler(
 
       const count = incrementProducedCount();
       const id = `${producerId}-${count}`;
+      const files = readdirSync(QUEUE_DIR);
       // Idempotent: skip if this ID already exists in any state
-      const existing = readdirSync(QUEUE_DIR).find((f) => f.includes(id));
-      if (existing) {
+      if (files.some((f) => f.startsWith(`${id}.`))) {
         return some(null);
       }
       const event = { id, producerId, timestamp: Date.now() };
-      const filename = `${id}.unclaimed.json`;
-      writeFileSync(join(QUEUE_DIR, filename), JSON.stringify(event));
+      writeFileSync(
+        join(QUEUE_DIR, `${id}.unclaimed.json`),
+        JSON.stringify(event),
+      );
       log(
         `[producer-${producerId}] produced event ${event.id} (queue: ${queueSize()}, total: ${count}/${MAX_EVENTS})`,
       );

@@ -102,24 +102,27 @@ export const produceEvent = createHandler(
         return none();
       }
 
-      const size = queueSize();
-      if (size >= MAX_QUEUE_SIZE) {
+      const count = incrementProducedCount();
+      const id = `${producerId}-${count}`;
+      const files = readdirSync(QUEUE_DIR);
+      // Idempotent: skip if this ID already exists in any state
+      if (files.some((f) => f.startsWith(`${id}.`))) {
+        return some(null);
+      }
+      const active = files.filter(
+        (f) => f.endsWith(".unclaimed.json") || f.endsWith(".pending.json"),
+      );
+      if (active.length >= MAX_QUEUE_SIZE) {
         log(
-          `[producer-${producerId}] backpressure: queue full (${size}/${MAX_QUEUE_SIZE})`,
+          `[producer-${producerId}] backpressure: queue full (${active.length}/${MAX_QUEUE_SIZE})`,
         );
         return some(null);
       }
-
-      const count = incrementProducedCount();
-      const id = `${producerId}-${count}`;
-      // Idempotent: skip if this ID already exists in any state
-      const existing = readdirSync(QUEUE_DIR).find((f) => f.includes(id));
-      if (existing) {
-        return some(null);
-      }
       const event = { id, producerId, timestamp: Date.now() };
-      const filename = `${id}.unclaimed.json`;
-      writeFileSync(join(QUEUE_DIR, filename), JSON.stringify(event));
+      writeFileSync(
+        join(QUEUE_DIR, `${id}.unclaimed.json`),
+        JSON.stringify(event),
+      );
       log(
         `[producer-${producerId}] produced event ${event.id} (queue: ${queueSize()}, total: ${count}/${MAX_EVENTS})`,
       );
