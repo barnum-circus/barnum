@@ -169,37 +169,52 @@ pub async fn await_typescript(
 }
 ```
 
-### 3. Update Scheduler dispatch to record PID
+### 3. Scheduler returns PID, run_workflow stores it
 
-The scheduler calls `spawn_typescript`, records the PID on the frame, then spawns the tokio task for the await:
+`Scheduler::dispatch` returns `Option<u32>` — the child PID for TypeScript handlers, `None` for builtins. The Scheduler doesn't touch WorkflowState. `run_workflow` (which already has `&mut WorkflowState`) stores the PID on the frame:
 
 ```rust
-// crates/barnum_event_loop/src/lib.rs — Scheduler::dispatch for TypeScript handlers
+// crates/barnum_event_loop/src/lib.rs — Scheduler::dispatch
 
-HandlerKind::TypeScript(ts) => {
-    let module = ts.module.lookup().to_owned();
-    let func = ts.func.lookup().to_owned();
-    let value = dispatch_event.value.clone();
-    let executor = self.executor.clone();
-    let worker_path = self.worker_path.clone();
+/// Returns the child PID if a subprocess was spawned (TypeScript handlers),
+/// or None for builtins (inline tokio tasks).
+pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) -> Option<u32> {
+    match handler {
+        HandlerKind::Builtin(_) => {
+            // ... existing builtin dispatch (tokio::spawn inline) ...
+            None
+        }
+        HandlerKind::TypeScript(ts) => {
+            let module = ts.module.lookup().to_owned();
+            let func = ts.func.lookup().to_owned();
+            let value = dispatch_event.value.clone();
+            let executor = self.executor.clone();
+            let worker_path = self.worker_path.clone();
 
-    let spawned = spawn_typescript(&executor, &worker_path, &module, &func, &value);
-    let pid = spawned.pid;
+            let spawned = spawn_typescript(&executor, &worker_path, &module, &func, &value);
+            let pid = spawned.pid;
 
-    // Record PID on the Invoke frame
-    workflow_state.set_task_pid(task_id, pid);
+            let result_tx = self.result_tx.clone();
+            tokio::spawn(async move {
+                let result = await_typescript(spawned, &module, &func)
+                    .await
+                    .map_err(HandlerError::from);
+                let _ = result_tx.send((task_id, result));
+            });
 
-    let result_tx = self.result_tx.clone();
-    tokio::spawn(async move {
-        let result = await_typescript(spawned, &module, &func)
-            .await
-            .map_err(HandlerError::from);
-        let _ = result_tx.send((task_id, result));
-    });
+            Some(pid)
+        }
+    }
 }
 ```
 
-This means `Scheduler::dispatch` now takes `&mut WorkflowState` (or a method handle for setting the PID). Currently it takes `&DispatchEvent` and `&HandlerKind` — the signature needs to grow, or `set_task_pid` can be called by `run_workflow` after dispatch returns.
+```rust
+// In run_workflow's dispatch path:
+let pid = scheduler.dispatch(&dispatch_event, handler);
+if let Some(pid) = pid {
+    workflow_state.set_invoke_pid(dispatch_event.task_id, pid);
+}
+```
 
 ### 4. Clear PID on completion
 
