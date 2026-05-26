@@ -66,37 +66,94 @@ process.stdout.on("error", (error: NodeJS.ErrnoException) => {
 
 ## Proposed changes
 
-### 1. Store PID on the Invoke frame
+### 0. `HandlerSlot<TBuiltin, TExternal>` — the shared shape
 
-The PID is per-invocation state. It belongs on `FrameKind::Invoke` — the frame that represents "a handler invocation in flight." Add a `pid` field:
+The real union throughout the system is "builtin (inline) vs external (subprocess)." Define it once, parameterize the payload:
+
+```rust
+// crates/barnum_ast/src/lib.rs (or a shared crate)
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandlerSlot<TBuiltin, TExternal> {
+    Builtin(TBuiltin),
+    External(TExternal),
+}
+
+impl<TBuiltin, TExternal> HandlerSlot<TBuiltin, TExternal> {
+    pub fn map_external<U>(self, f: impl FnOnce(TExternal) -> U) -> HandlerSlot<TBuiltin, U> {
+        match self {
+            HandlerSlot::Builtin(b) => HandlerSlot::Builtin(b),
+            HandlerSlot::External(e) => HandlerSlot::External(f(e)),
+        }
+    }
+
+    pub fn map_builtin<U>(self, f: impl FnOnce(TBuiltin) -> U) -> HandlerSlot<U, TExternal> {
+        match self {
+            HandlerSlot::Builtin(b) => HandlerSlot::Builtin(f(b)),
+            HandlerSlot::External(e) => HandlerSlot::External(e),
+        }
+    }
+}
+```
+
+Usages across the codebase:
+
+| Context | Type | Meaning |
+|---------|------|---------|
+| Handler definitions | `HandlerSlot<BuiltinHandler, TypeScriptHandler>` | What the handler IS |
+| Invoke frame runtime | `HandlerSlot<(), Pid>` | Per-invocation subprocess state |
+| Dispatch return | `HandlerSlot<(), Pid>` | What the scheduler spawned |
+
+The existing `HandlerKind` becomes a type alias:
+
+```rust
+pub type HandlerKind = HandlerSlot<BuiltinHandler, TypeScriptHandler>;
+```
+
+### 0.5. `Pid` newtype
+
+```rust
+// crates/barnum_engine/src/lib.rs (or a shared types crate)
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Pid(pub u32);
+
+impl Pid {
+    pub fn kill(self, signal: i32) {
+        unsafe { libc::kill(self.0 as libc::pid_t, signal); }
+    }
+}
+```
+
+### 1. Store runtime state on the Invoke frame
+
+The Invoke frame carries per-invocation state using `HandlerSlot`:
 
 ```rust
 // crates/barnum_engine/src/frame.rs
 Invoke {
     handler: HandlerId,
-    pid: Option<u32>,  // None for inline (builtins), Some for subprocess handlers
-},
+    runtime: HandlerSlot<(), Pid>,
+}
 ```
 
-`None` for handlers that run inline (builtins). `Some(pid)` for handlers that spawn a subprocess (currently TypeScript, but any future subprocess-based handler kind would also populate this). The distinction is "inline vs subprocess," not "builtin vs TypeScript" — TypeScript just happens to be the only subprocess handler today.
-
-This is the only change to the engine crate. No new data structures, no parallel maps, no generic enums. The frame tree already represents "what's in flight" — the PID is just one more field on the invocation.
+Builtins structurally cannot carry a PID. External handlers always carry one. No `Option`, no impossible states.
 
 ### 2. Extract PID from spawned child
 
-`execute_typescript` currently consumes the `Child` internally. Split it so the PID is available before the await:
+`execute_typescript` currently consumes the `Child` internally. Split it so the `Pid` is available before the await:
 
 ```rust
 // crates/barnum_typescript_handler/src/lib.rs
 
 pub struct SpawnedHandler {
-    pub pid: u32,
+    pub pid: Pid,
     pub child: Child,
     pub stderr_task: JoinHandle<Vec<u8>>,
 }
 
 /// Spawn the subprocess and write input to stdin. Returns immediately
-/// with the PID and child handle ready for awaiting.
+/// with the Pid and child handle ready for awaiting.
 pub fn spawn_typescript(
     executor: &str,
     worker_path: &str,
@@ -113,7 +170,7 @@ pub fn spawn_typescript(
         .spawn()
         .expect("failed to spawn handler process");
 
-    let pid = child.id().expect("child has no pid");
+    let pid = Pid(child.id().expect("child has no pid"));
 
     // Write input and close stdin synchronously (small payload, won't block)
     let mut stdin = child.stdin.take().expect("no stdin");
@@ -169,22 +226,25 @@ pub async fn await_typescript(
 }
 ```
 
-### 3. Scheduler returns PID, run_workflow stores it
+### 3. Scheduler returns `HandlerSlot<(), Pid>`, run_workflow stores it
 
-`Scheduler::dispatch` returns `Option<u32>` — the child PID for TypeScript handlers, `None` for builtins. The Scheduler doesn't touch WorkflowState. `run_workflow` (which already has `&mut WorkflowState`) stores the PID on the frame:
+`Scheduler::dispatch` returns `HandlerSlot<(), Pid>`. The Scheduler doesn't touch WorkflowState. `run_workflow` (which already has `&mut WorkflowState`) stores the result directly on the frame's `runtime` field:
 
 ```rust
 // crates/barnum_event_loop/src/lib.rs — Scheduler::dispatch
 
-/// Returns the child PID if a subprocess was spawned (TypeScript handlers),
-/// or None for builtins (inline tokio tasks).
-pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) -> Option<u32> {
+/// Returns the per-invocation runtime state: () for builtins, Pid for externals.
+pub fn dispatch(
+    &self,
+    dispatch_event: &DispatchEvent,
+    handler: &HandlerKind,
+) -> HandlerSlot<(), Pid> {
     match handler {
-        HandlerKind::Builtin(_) => {
+        HandlerSlot::Builtin(_) => {
             // ... existing builtin dispatch (tokio::spawn inline) ...
-            None
+            HandlerSlot::Builtin(())
         }
-        HandlerKind::TypeScript(ts) => {
+        HandlerSlot::External(ts) => {
             let module = ts.module.lookup().to_owned();
             let func = ts.func.lookup().to_owned();
             let value = dispatch_event.value.clone();
@@ -195,6 +255,7 @@ pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) ->
             let pid = spawned.pid;
 
             let result_tx = self.result_tx.clone();
+            let task_id = dispatch_event.task_id;
             tokio::spawn(async move {
                 let result = await_typescript(spawned, &module, &func)
                     .await
@@ -202,7 +263,7 @@ pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) ->
                 let _ = result_tx.send((task_id, result));
             });
 
-            Some(pid)
+            HandlerSlot::External(pid)
         }
     }
 }
@@ -210,10 +271,8 @@ pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) ->
 
 ```rust
 // In run_workflow's dispatch path:
-let pid = scheduler.dispatch(&dispatch_event, handler);
-if let Some(pid) = pid {
-    workflow_state.set_invoke_pid(dispatch_event.task_id, pid);
-}
+let runtime = scheduler.dispatch(&dispatch_event, handler);
+workflow_state.set_invoke_runtime(dispatch_event.task_id, runtime);
 ```
 
 ### 4. Clear PID on completion
@@ -222,26 +281,22 @@ In the `run_workflow` loop, when a completion is received and processed, clear t
 
 ### 5. SIGTERM/SIGINT handler
 
-Install signal handlers in the CLI entry point. On signal, walk the frame arena and kill every `Invoke` frame's PID:
+Install signal handlers in the CLI entry point. On signal, walk the frame arena and kill every `Invoke` frame with an `External(pid)` runtime:
 
 ```rust
 // crates/barnum_cli/src/main.rs
-
-// The frame arena needs to be accessible from the signal handler.
-// Since run_workflow owns &mut WorkflowState, expose the PID list
-// via a shared handle.
-
 use tokio::signal::unix::{signal, SignalKind};
 
-// Before run_workflow:
-let pid_list = workflow_state.pid_list_handle(); // Arc<Mutex<Vec<u32>>> or similar
+// Standalone PID list maintained by run_workflow at dispatch/completion.
+// WorkflowState stays a plain struct — no concurrency primitives baked in.
+let pid_list: Arc<Mutex<Vec<Pid>>> = Arc::new(Mutex::new(Vec::new()));
 
 // Ctrl+C
 let pids = Arc::clone(&pid_list);
 tokio::spawn(async move {
     tokio::signal::ctrl_c().await.ok();
     for &pid in pids.lock().unwrap().iter() {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+        pid.kill(libc::SIGTERM);
     }
     std::process::exit(130);
 });
@@ -252,18 +307,17 @@ let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
 tokio::spawn(async move {
     sigterm.recv().await;
     for &pid in pids.lock().unwrap().iter() {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+        pid.kill(libc::SIGTERM);
     }
     std::process::exit(143);
 });
 ```
 
-The `pid_list_handle()` method on WorkflowState returns a shared reference to the list of active PIDs. Implementation options:
-- WorkflowState owns an `Arc<Mutex<Vec<u32>>>` that's updated on frame create/destroy
-- Or: the signal handler directly accesses the frame arena (requires Arc<Mutex<Arena>>)
-- Or: a standalone `Arc<Mutex<Vec<u32>>>` maintained by `run_workflow` at dispatch/completion boundaries (keeps WorkflowState free of concurrency primitives)
+`run_workflow` maintains the `pid_list`:
+- On dispatch: if `runtime` is `HandlerSlot::External(pid)`, push `pid`
+- On completion: remove the pid
 
-The last option is cleanest — WorkflowState stays a plain struct, and `run_workflow` maintains the shared PID list as a local concern of the event loop.
+This keeps WorkflowState as a plain struct. The shared PID list is a local concern of the event loop, not an engine concept.
 
 ### 6. Worker-side EPIPE handling stays
 
