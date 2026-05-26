@@ -63,6 +63,15 @@ impl From<PendingEffectKind> for EventKind {
 }
 
 // =============================================================================
+// ProcessGroup
+// =============================================================================
+
+/// A process group ID. All subprocess children are spawned into this group
+/// so they can be killed with a single `killpg()` call on shutdown.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessGroup(pub u32);
+
+// =============================================================================
 // Scheduler
 // =============================================================================
 
@@ -77,6 +86,8 @@ pub struct Scheduler {
     executor: String,
     /// Path to `worker.ts`.
     worker_path: String,
+    /// Process group for subprocess children.
+    process_group: ProcessGroup,
 }
 
 impl Scheduler {
@@ -85,13 +96,14 @@ impl Scheduler {
     /// `executor` is the command to run TypeScript, e.g. `"node /path/to/tsx/cli.mjs"`.
     /// `worker_path` is the absolute path to `worker.ts`.
     #[must_use]
-    pub fn new(executor: String, worker_path: String) -> Self {
+    pub fn new(executor: String, worker_path: String, process_group: ProcessGroup) -> Self {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
         Self {
             result_tx,
             result_rx,
             executor,
             worker_path,
+            process_group,
         }
     }
 
@@ -125,10 +137,11 @@ impl Scheduler {
                 let value = dispatch_event.value.clone();
                 let executor = self.executor.clone();
                 let worker_path = self.worker_path.clone();
+                let pgid = self.process_group.0;
 
                 tokio::spawn(async move {
                     let result =
-                        execute_typescript(&executor, &worker_path, &module, &func, &value)
+                        execute_typescript(&executor, &worker_path, &module, &func, &value, pgid)
                             .await
                             .map_err(HandlerError::from);
                     let _ = result_tx.send((task_id, result));
@@ -510,7 +523,11 @@ mod tests {
     /// Scheduler with dummy executor/worker paths — only builtin handlers
     /// are used, so the subprocess executor is never invoked.
     fn test_scheduler() -> Scheduler {
-        Scheduler::new("unused".to_owned(), "unused".to_owned())
+        Scheduler::new(
+            "unused".to_owned(),
+            "unused".to_owned(),
+            ProcessGroup(std::process::id()),
+        )
     }
 
     #[tokio::test]

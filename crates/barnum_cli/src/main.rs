@@ -2,8 +2,9 @@
 
 use barnum_ast::flat::flatten;
 use barnum_engine::WorkflowState;
-use barnum_event_loop::{Scheduler, run_workflow};
+use barnum_event_loop::{ProcessGroup, Scheduler, run_workflow};
 use clap::{Parser, Subcommand, ValueEnum};
+use tokio::signal::unix::{SignalKind, signal};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -155,10 +156,13 @@ fn check(input: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let process_group = ProcessGroup(std::process::id());
+    install_signal_handlers(process_group);
+
     let config = deserialize_config(input)?;
     let flat_config = flatten(config)?;
     let mut workflow_state = WorkflowState::new(flat_config);
-    let mut scheduler = Scheduler::new(executor.to_owned(), worker.to_owned());
+    let mut scheduler = Scheduler::new(executor.to_owned(), worker.to_owned(), process_group);
 
     let result = run_workflow(&mut workflow_state, &mut scheduler).await?;
 
@@ -167,4 +171,34 @@ async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn st
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     Ok(())
+}
+
+/// Install signal handlers that kill all subprocess children on SIGTERM/SIGINT.
+///
+/// Children are spawned into a dedicated process group. On signal, `killpg()`
+/// terminates them all with a single syscall.
+fn install_signal_handlers(process_group: ProcessGroup) {
+    let pgid = process_group.0;
+
+    // Ctrl+C
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::killpg(pgid.cast_signed(), libc::SIGTERM);
+        }
+        std::process::exit(130);
+    });
+
+    // SIGTERM
+    #[allow(clippy::expect_used)]
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+    tokio::spawn(async move {
+        sigterm.recv().await;
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::killpg(pgid.cast_signed(), libc::SIGTERM);
+        }
+        std::process::exit(143);
+    });
 }
