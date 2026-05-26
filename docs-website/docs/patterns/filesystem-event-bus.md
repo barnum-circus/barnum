@@ -150,7 +150,7 @@ The consumer uses `bindInput` to thread the claimed event's `id` through process
 ```ts
 function makeConsumerLoop(): TypedAction<null, null> {
   return loop<null, null>((recur, done) =>
-    constant(null).then(dequeueEvent).branch({
+    dequeueEvent.branch({
       Some: bindInput<ClaimedEvent, never>((claimed) =>
         pipe(
           claimed.getField("item"),

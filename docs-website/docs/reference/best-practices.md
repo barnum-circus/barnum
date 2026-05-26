@@ -391,6 +391,26 @@ earlyReturn<ErrorReport>((ret) => step1.unwrapOr(ret).then(step2));
 
 And `defineRecursiveFunctions` — every function's input and output types must be annotated in the definition tuple, or all call sites produce `any`.
 
+### Don't use `constant()` to produce a value the pipeline already carries
+
+`constant(x)` discards its input and produces `x`. If the input is already `x`, `constant(x)` is a no-op — it throws away a value only to reconstruct the identical value. This most commonly appears at the top of a `loop` body:
+
+```ts
+// Avoid: loop<null, null> already passes null as input to the body
+loop<null, null>((recur, done) =>
+  constant(null).then(dequeueEvent).branch({ ... }),
+);
+
+// Prefer: dequeueEvent accepts null, which is already the loop's input
+loop<null, null>((recur, done) =>
+  dequeueEvent.branch({ ... }),
+);
+```
+
+`loop<TInput, TBreak>` passes `TInput` as the body's input on every iteration. If the loop's input type is `null` and the first handler accepts `null`, just use the handler directly — the pipeline already provides the correct value.
+
+`constant()` is appropriate when you need to introduce a value that doesn't exist in the current pipeline context — e.g., `constant({ producerId })` to inject a captured closure variable.
+
 ### Prefer `allObject` over `all`
 
 `all` returns a positional tuple — callers access results by index, which is fragile and unreadable. `allObject` returns a named object:

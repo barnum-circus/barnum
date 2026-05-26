@@ -43,23 +43,21 @@ function makeProducerLoop(producerId: number): TypedAction<null, null> {
 // Consumer: dequeue, process, mark complete. Repeat until done.
 function makeConsumerLoop(): TypedAction<null, null> {
   return loop<null, null>((recur, done) =>
-    constant(null)
-      .then(dequeueEvent)
-      .branch({
-        Some: bindInput<ClaimedEvent, never>((claimed) =>
-          pipe(
-            claimed.getField("item"),
-            consumeEvent,
-            claimed.pick("id"),
-            completeEvent,
-            recur,
-          ),
+    dequeueEvent.branch({
+      Some: bindInput<ClaimedEvent, never>((claimed) =>
+        pipe(
+          claimed.getField("item"),
+          consumeEvent,
+          claimed.pick("id"),
+          completeEvent,
+          recur,
         ),
-        None: isDone.then(asOption()).branch({
-          Some: done,
-          None: sleep(50).then(recur),
-        }),
+      ),
+      None: isDone.then(asOption()).branch({
+        Some: done,
+        None: sleep(50).then(recur),
       }),
+    }),
   );
 }
 
