@@ -39,9 +39,17 @@ tokio::spawn(async move {
 });
 ```
 
-### Frame tree (`crates/barnum_engine/src/lib.rs`)
+### Frame tree (`crates/barnum_engine/src/frame.rs`)
 
-The engine already tracks in-flight tasks via `task_to_frame: BTreeMap<TaskId, FrameId>`. This tells us exactly which tasks are in-flight at any moment.
+`FrameKind::Invoke` is the leaf frame for in-flight handler invocations:
+
+```rust
+Invoke {
+    handler: HandlerId,
+},
+```
+
+The engine tracks which tasks are in-flight via `task_to_frame: BTreeMap<TaskId, FrameId>`. Each `TaskId` maps to a `FrameId` pointing at an `Invoke` frame. A handler is a *definition* (module, func, schemas); a frame is an *invocation* (a specific execution of that handler). The same handler can have many concurrent invocations, each with its own frame and its own subprocess PID.
 
 ### Current orphan handling (`libs/barnum/src/worker.ts:22-29`)
 
@@ -58,18 +66,28 @@ process.stdout.on("error", (error: NodeJS.ErrnoException) => {
 
 ## Proposed changes
 
-### 1. Extract PID from spawned child
+### 1. Store PID on the Invoke frame
 
-`execute_typescript` currently consumes the `Child` internally. Modify it to capture `child.id()` (returns `Option<u32>`) immediately after spawn and return it alongside the result.
-
-Two approaches:
-
-**Option A: Return PID before awaiting.**
-
-Split into `spawn_typescript` (returns `(u32, Child)` — sets up stdin, returns PID and child ready for await) and `await_typescript` (reads stdout, waits for exit, returns result). The scheduler calls spawn, records PID, then spawns a tokio task that calls await.
+The PID is per-invocation state. It belongs on `FrameKind::Invoke` — the frame that represents "a handler invocation in flight." Add a `pid` field:
 
 ```rust
-// barnum_typescript_handler/src/lib.rs
+// crates/barnum_engine/src/frame.rs
+Invoke {
+    handler: HandlerId,
+    pid: Option<u32>,  // None for builtins, Some for TypeScript subprocesses
+},
+```
+
+`None` for builtins (they run inline in a tokio task, no subprocess). `Some(pid)` for TypeScript handlers (each invocation spawns a subprocess).
+
+This is the only change to the engine crate. No new data structures, no parallel maps. The frame tree already represents "what's in flight" — the PID is just one more field on the invocation.
+
+### 2. Extract PID from spawned child
+
+`execute_typescript` currently consumes the `Child` internally. Split it so the PID is available before the await:
+
+```rust
+// crates/barnum_typescript_handler/src/lib.rs
 
 pub struct SpawnedHandler {
     pub pid: u32,
@@ -77,6 +95,8 @@ pub struct SpawnedHandler {
     pub stderr_task: JoinHandle<Vec<u8>>,
 }
 
+/// Spawn the subprocess and write input to stdin. Returns immediately
+/// with the PID and child handle ready for awaiting.
 pub fn spawn_typescript(
     executor: &str,
     worker_path: &str,
@@ -95,19 +115,32 @@ pub fn spawn_typescript(
 
     let pid = child.id().expect("child has no pid");
 
-    // Write input and close stdin
+    // Write input and close stdin synchronously (small payload, won't block)
     let mut stdin = child.stdin.take().expect("no stdin");
     let input = serde_json::to_vec(&serde_json::json!({ "value": value }))
         .expect("serialize failed");
-    // Note: stdin write needs to be async — handle via spawn_blocking or
-    // restructure to write in the caller's tokio task before spawning the
-    // await task.
+    // stdin write is blocking here — acceptable for small JSON payloads.
+    // If this becomes a concern, move to spawn_blocking or async write
+    // before handing off to the await task.
 
-    // ... stderr forwarding setup ...
+    // stderr forwarding setup...
+    let mut stderr_handle = child.stderr.take().expect("no stderr");
+    let stderr_task = tokio::spawn(async move {
+        let mut collected = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = stderr_handle.read(&mut buf).await.unwrap_or(0);
+            if n == 0 { break; }
+            collected.extend_from_slice(&buf[..n]);
+            tokio::io::stderr().write_all(&buf[..n]).await.ok();
+        }
+        collected
+    });
 
     SpawnedHandler { pid, child, stderr_task }
 }
 
+/// Await the spawned handler's completion and parse its result.
 pub async fn await_typescript(
     spawned: SpawnedHandler,
     module: &str,
@@ -115,119 +148,123 @@ pub async fn await_typescript(
 ) -> Result<Value, TypeScriptHandlerError> {
     let output = spawned.child.wait_with_output().await.expect("wait failed");
     let stderr_bytes = spawned.stderr_task.await.expect("stderr task failed");
-    // ... same exit code / JSON parsing logic ...
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_owned();
+        return Err(TypeScriptHandlerError::SubprocessFailed {
+            module: module.to_owned(),
+            func: func.to_owned(),
+            exit_code: output.status.code().unwrap_or(-1),
+            stderr,
+        });
+    }
+
+    serde_json::from_slice(&output.stdout).map_err(|source| {
+        TypeScriptHandlerError::InvalidOutput {
+            module: module.to_owned(),
+            func: func.to_owned(),
+            source,
+        }
+    })
 }
 ```
 
-**Option B: Callback/channel for PID notification.**
+### 3. Update Scheduler dispatch to record PID
 
-Keep `execute_typescript` as one function, but pass a `oneshot::Sender<u32>` that receives the PID immediately after spawn. Simpler change, no API split.
+The scheduler calls `spawn_typescript`, records the PID on the frame, then spawns the tokio task for the await:
 
 ```rust
-pub async fn execute_typescript(
-    executor: &str,
-    worker_path: &str,
-    module: &str,
-    func: &str,
-    value: &Value,
-    pid_tx: oneshot::Sender<u32>,
-) -> Result<Value, TypeScriptHandlerError> {
-    let mut child = Command::new("sh") /* ... */ .spawn().expect("...");
-    let pid = child.id().expect("child has no pid");
-    let _ = pid_tx.send(pid);
-    // ... rest unchanged ...
+// crates/barnum_event_loop/src/lib.rs — Scheduler::dispatch for TypeScript handlers
+
+HandlerKind::TypeScript(ts) => {
+    let module = ts.module.lookup().to_owned();
+    let func = ts.func.lookup().to_owned();
+    let value = dispatch_event.value.clone();
+    let executor = self.executor.clone();
+    let worker_path = self.worker_path.clone();
+
+    let spawned = spawn_typescript(&executor, &worker_path, &module, &func, &value);
+    let pid = spawned.pid;
+
+    // Record PID on the Invoke frame
+    workflow_state.set_task_pid(task_id, pid);
+
+    let result_tx = self.result_tx.clone();
+    tokio::spawn(async move {
+        let result = await_typescript(spawned, &module, &func)
+            .await
+            .map_err(HandlerError::from);
+        let _ = result_tx.send((task_id, result));
+    });
 }
 ```
 
-**Recommendation: Option A.** The split makes the lifecycle explicit — spawn is synchronous (or nearly so), await is async. The scheduler owns the spawn step and naturally sees the PID. Option B threads a channel through for no structural benefit.
+This means `Scheduler::dispatch` now takes `&mut WorkflowState` (or a method handle for setting the PID). Currently it takes `&DispatchEvent` and `&HandlerKind` — the signature needs to grow, or `set_task_pid` can be called by `run_workflow` after dispatch returns.
 
-### 2. Store PID in WorkflowState alongside existing task tracking
+### 4. Clear PID on completion
 
-`WorkflowState` already tracks in-flight tasks via `task_to_frame: BTreeMap<TaskId, FrameId>`. The PID belongs here — it's just another piece of metadata about an in-flight task. Add a parallel map:
+In the `run_workflow` loop, when a completion is received and processed, clear the PID from the frame. This happens naturally when the frame is removed from the arena during `complete()`. No explicit cleanup needed — the frame (and its PID field) is deallocated.
 
-```rust
-// crates/barnum_engine/src/lib.rs
-pub struct WorkflowState {
-    // ... existing fields ...
-    task_to_frame: BTreeMap<TaskId, FrameId>,
-    task_pids: BTreeMap<TaskId, u32>,  // NEW: child PID per in-flight task
-}
-```
+### 5. SIGTERM/SIGINT handler
 
-- On dispatch (after spawn): `workflow_state.register_task_pid(task_id, pid)`
-- On completion (existing path in `run_workflow`): `workflow_state.remove_task_pid(task_id)`
-- On signal: `workflow_state.all_task_pids()` → kill each one
-
-The `task_pids` map is only populated for TypeScript handlers (builtins run inline in tokio tasks, no subprocess). The signal handler iterates it to kill children.
-
-This keeps PID tracking co-located with the existing in-flight task tracking — one source of truth for "what's running right now."
-
-### 3. SIGTERM handler
-
-Install a signal handler (via `tokio::signal`) in the CLI entry point (`crates/barnum_cli/src/main.rs`). On SIGTERM/SIGINT:
-
-1. Read all PIDs from `workflow_state.all_task_pids()`
-2. For each PID: `unsafe { libc::kill(pid as i32, libc::SIGTERM) }`
-3. Exit the process
-
-Since `run_workflow` owns `&mut WorkflowState`, the signal handler needs shared access. Wrap in `Arc<Mutex<_>>` at the call site (or use a separate `Arc<Mutex<BTreeMap<TaskId, u32>>>` that WorkflowState exposes — keeping the engine crate free of Arc/Mutex).
+Install signal handlers in the CLI entry point. On signal, walk the frame arena and kill every `Invoke` frame's PID:
 
 ```rust
-// In main.rs or run_workflow wrapper:
+// crates/barnum_cli/src/main.rs
+
+// The frame arena needs to be accessible from the signal handler.
+// Since run_workflow owns &mut WorkflowState, expose the PID list
+// via a shared handle.
+
 use tokio::signal::unix::{signal, SignalKind};
 
-let task_pids: Arc<Mutex<BTreeMap<TaskId, u32>>> = workflow_state.task_pids_handle();
+// Before run_workflow:
+let pid_list = workflow_state.pid_list_handle(); // Arc<Mutex<Vec<u32>>> or similar
 
 // Ctrl+C
-let pids = Arc::clone(&task_pids);
+let pids = Arc::clone(&pid_list);
 tokio::spawn(async move {
     tokio::signal::ctrl_c().await.ok();
-    for &pid in pids.lock().unwrap().values() {
+    for &pid in pids.lock().unwrap().iter() {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
     }
-    std::process::exit(130); // 128 + SIGINT
+    std::process::exit(130);
 });
 
 // SIGTERM
-let pids = Arc::clone(&task_pids);
-let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+let pids = Arc::clone(&pid_list);
+let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
 tokio::spawn(async move {
     sigterm.recv().await;
-    for &pid in pids.lock().unwrap().values() {
+    for &pid in pids.lock().unwrap().iter() {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
     }
-    std::process::exit(143); // 128 + SIGTERM
+    std::process::exit(143);
 });
 ```
 
-Alternative: if we don't want `Arc<Mutex>` threading through WorkflowState, store the PID map as a standalone `Arc<Mutex<BTreeMap<TaskId, u32>>>` owned by `run_workflow` and passed to both the dispatch path and the signal handler. WorkflowState doesn't need to own it — it just needs to be co-located with the dispatch/completion path.
+The `pid_list_handle()` method on WorkflowState returns a shared reference to the list of active PIDs. Implementation options:
+- WorkflowState owns an `Arc<Mutex<Vec<u32>>>` that's updated on frame create/destroy
+- Or: the signal handler directly accesses the frame arena (requires Arc<Mutex<Arena>>)
+- Or: a standalone `Arc<Mutex<Vec<u32>>>` maintained by `run_workflow` at dispatch/completion boundaries (keeps WorkflowState free of concurrency primitives)
 
-### 4. Worker-side EPIPE handling stays
+The last option is cleanest — WorkflowState stays a plain struct, and `run_workflow` maintains the shared PID list as a local concern of the event loop.
 
-Keep the existing EPIPE suppression in `worker.ts` as a belt-and-suspenders fallback. If the signal handler somehow misses a child (race between spawn and signal), EPIPE still provides eventual cleanup.
+### 6. Worker-side EPIPE handling stays
+
+Keep the existing EPIPE suppression in `worker.ts` as belt-and-suspenders. If the signal handler misses a child (race between spawn and PID registration), EPIPE still provides eventual cleanup.
 
 ## Edge cases
 
-- **Race: signal arrives between spawn and PID registration.** The child exists but isn't in the registry. EPIPE fallback handles it. Acceptable.
-- **Race: child exits naturally the same instant as signal.** `kill()` on a dead PID is a no-op (ESRCH). Safe.
-- **`sh -c` wrapper PID vs actual node PID.** `child.id()` returns the PID of `sh`, not `node`/`tsx`. Killing `sh` should propagate to its child because `sh -c` exec's the command (replaces itself). If for some reason it doesn't, the actual node process becomes orphaned and hits EPIPE. Belt-and-suspenders.
-- **Process group kill alternative.** Instead of tracking individual PIDs, spawn all children in a dedicated process group and kill the group. Simpler registry (just the pgid), one kill call. Trade-off: requires `.process_group(0)` on spawn (creates new group) or inheriting a shared group. Worth considering as a simplification.
+- **Race: signal arrives between spawn and PID registration.** The child exists but isn't in the list yet. EPIPE fallback handles it.
+- **Race: child exits naturally the same instant as signal.** `kill()` on a dead PID returns ESRCH. Safe — ignore the error.
+- **`sh -c` wrapper PID vs actual node PID.** `child.id()` returns the PID of `sh`. On most systems, `sh -c <single command>` exec's the command (replaces itself), so the PID is the actual node process. If it doesn't exec (e.g., the command has pipes/redirects), killing the shell sends SIGTERM to it, which terminates the shell and its child gets SIGHUP. Either way, cleanup happens.
+- **Frame torn down before signal.** If a race is won and losing frames are deallocated, their PIDs are gone from the arena. The orphaned workers hit EPIPE and self-terminate. No stale PIDs in the list to accidentally kill a recycled PID.
 
 ## Open questions
 
-1. **Process group vs individual PID tracking?** A process group kill is one `killpg()` call instead of iterating. Simpler. But requires all children to share a group, which means either: (a) barnum creates a new process group for itself at startup (`setsid`), or (b) each child is spawned into a shared group. Option (a) means killing barnum's group also kills barnum itself — which is fine since we're in the signal handler and about to exit anyway.
+1. **Process group vs individual PID tracking?** Spawning all children into a shared process group means one `killpg()` call instead of iterating. Requires `.process_group(pgid)` on spawn or barnum calling `setsid` at startup. Simpler kill path, but adds spawn-time complexity. Individual PID kill is straightforward and the number of concurrent handlers is small (typically < 20).
 
-2. **Graceful timeout?** Send SIGTERM, wait N ms, then SIGKILL stragglers? Or just SIGTERM and exit immediately? For handler subprocesses that are stateless (no persistent side effects), immediate SIGTERM is fine. Handlers that write to disk (like the queue demos) might leave partial state — but that's already the crash-recovery concern that the claim-and-complete strategy addresses.
+2. **Graceful timeout?** SIGTERM then wait N ms then SIGKILL? For stateless handler subprocesses, immediate SIGTERM is sufficient. Handlers with persistent side effects (disk writes) are already addressed by crash-recovery patterns (claim-and-complete).
 
-3. **Should the scheduler expose a `kill_all()` method** for use in non-signal contexts (e.g., workflow timeout, fatal error)? Probably yes — the signal handler is just one caller.
-
-4. **Exact placement of PID storage.** `FrameKind::Invoke` (`crates/barnum_engine/src/frame.rs:101`) is the leaf frame for in-flight handler tasks. It currently stores just `handler: HandlerId`. Adding `pid: Option<u32>` here is natural — `None` for builtins (no subprocess), `Some(pid)` for TypeScript handlers. The frame tree already carries all in-flight state; PID is just one more field. No parallel map needed.
-
-```rust
-Invoke {
-    handler: HandlerId,
-    pid: Option<u32>,  // None for builtins, Some for TypeScript subprocesses
-},
-```
-
-The signal handler walks the frame arena, filters for `Invoke` frames with `Some(pid)`, and kills each one.
+3. **`kill_all()` for non-signal contexts?** Workflow timeout, fatal validation error, or user cancellation could all use the same kill-all-children mechanism. The signal handler is just one caller. Worth exposing as a method on whatever owns the PID list.
