@@ -56,53 +56,53 @@ export type BodyResult<TOut> = Action & {
 };
 
 export interface InvokeAction {
-  kind: "Invoke";
-  handler: HandlerKind;
+  readonly kind: "Invoke";
+  readonly handler: HandlerKind;
 }
 
 export interface ChainAction {
-  kind: "Chain";
-  first: Action;
-  rest: Action;
+  readonly kind: "Chain";
+  readonly first: Action;
+  readonly rest: Action;
 }
 
 export interface ForEachAction {
-  kind: "ForEach";
-  action: Action;
+  readonly kind: "ForEach";
+  readonly action: Action;
 }
 
 export interface AllAction {
-  kind: "All";
-  actions: Array<Action>;
+  readonly kind: "All";
+  readonly actions: Array<Action>;
 }
 
 export interface BranchAction {
-  kind: "Branch";
-  cases: Record<string, Action>;
+  readonly kind: "Branch";
+  readonly cases: Record<string, Action>;
 }
 
 export interface ResumeHandleAction {
-  kind: "ResumeHandle";
-  resume_handler_id: ResumeHandlerId;
-  body: Action;
-  handler: Action;
+  readonly kind: "ResumeHandle";
+  readonly resume_handler_id: ResumeHandlerId;
+  readonly body: Action;
+  readonly handler: Action;
 }
 
 export interface ResumePerformAction {
-  kind: "ResumePerform";
-  resume_handler_id: ResumeHandlerId;
+  readonly kind: "ResumePerform";
+  readonly resume_handler_id: ResumeHandlerId;
 }
 
 export interface RestartHandleAction {
-  kind: "RestartHandle";
-  restart_handler_id: RestartHandlerId;
-  body: Action;
-  handler: Action;
+  readonly kind: "RestartHandle";
+  readonly restart_handler_id: RestartHandlerId;
+  readonly body: Action;
+  readonly handler: Action;
 }
 
 export interface RestartPerformAction {
-  kind: "RestartPerform";
-  restart_handler_id: RestartHandlerId;
+  readonly kind: "RestartPerform";
+  readonly restart_handler_id: RestartHandlerId;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,37 +112,37 @@ export interface RestartPerformAction {
 export type HandlerKind = TypeScriptHandler | BuiltinHandler;
 
 export interface TypeScriptHandler {
-  kind: "TypeScript";
-  module: string;
-  func: string;
-  input_schema?: JSONSchema7;
-  output_schema?: JSONSchema7;
+  readonly kind: "TypeScript";
+  readonly module: string;
+  readonly func: string;
+  readonly input_schema?: JSONSchema7;
+  readonly output_schema?: JSONSchema7;
 }
 
 export interface BuiltinHandler {
-  kind: "Builtin";
-  builtin: BuiltinKind;
+  readonly kind: "Builtin";
+  readonly builtin: BuiltinKind;
 }
 
 export type BuiltinKind =
-  | { kind: "Constant"; value: unknown }
-  | { kind: "Identity" }
-  | { kind: "Drop" }
-  | { kind: "Merge" }
-  | { kind: "Flatten" }
-  | { kind: "GetField"; field: string }
-  | { kind: "GetIndex"; index: number }
-  | { kind: "CollectSome" }
+  | { readonly kind: "Constant"; readonly value: unknown }
+  | { readonly kind: "Identity" }
+  | { readonly kind: "Drop" }
+  | { readonly kind: "Merge" }
+  | { readonly kind: "Flatten" }
+  | { readonly kind: "GetField"; readonly field: string }
+  | { readonly kind: "GetIndex"; readonly index: number }
+  | { readonly kind: "CollectSome" }
   // Future: Add WrapInArray builtin (T → [T]). Currently done via all(identity()) which
   // works but routes through the All executor for a trivial operation.
-  | { kind: "AsOption" }
-  | { kind: "SplitFirst" }
-  | { kind: "SplitLast" }
-  | { kind: "WrapInField"; field: string }
-  | { kind: "Sleep"; ms: number }
-  | { kind: "Panic"; message: string }
-  | { kind: "ExtractPrefix" }
-  | { kind: "Slice"; start: number; end?: number };
+  | { readonly kind: "AsOption" }
+  | { readonly kind: "SplitFirst" }
+  | { readonly kind: "SplitLast" }
+  | { readonly kind: "WrapInField"; readonly field: string }
+  | { readonly kind: "Sleep"; readonly ms: number }
+  | { readonly kind: "Panic"; readonly message: string }
+  | { readonly kind: "ExtractPrefix" }
+  | { readonly kind: "Slice"; readonly start: number; readonly end?: number };
 
 /**
  * When T is `never` or `void` (handler ignores input / recur doesn't
@@ -160,7 +160,7 @@ export type PipeIn<T> = [T] extends [never]
 // ---------------------------------------------------------------------------
 
 export interface Config {
-  workflow: Action;
+  readonly workflow: Action;
 }
 
 // ---------------------------------------------------------------------------
@@ -558,9 +558,9 @@ export type TaggedUnion<
   TDef extends Record<string, unknown>,
 > = {
   [K in keyof TDef & string]: {
-    kind: `${TEnumName}.${K}`;
-    value: VoidToNull<TDef[K]>;
-    __def?: TDef;
+    readonly kind: `${TEnumName}.${K}`;
+    readonly value: VoidToNull<TDef[K]>;
+    readonly __def?: TDef;
   };
 }[keyof TDef & string];
 
@@ -1137,7 +1137,10 @@ function unwrapBranchCases(
  * `{ kind: K; value: any }`, which is the correct escape hatch.
  */
 export type BranchInput<TCases> = {
-  [K in keyof TCases & string]: { kind: K; value: ExtractInput<TCases[K]> };
+  [K in keyof TCases & string]: {
+    readonly kind: K;
+    readonly value: ExtractInput<TCases[K]>;
+  };
 }[keyof TCases & string];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

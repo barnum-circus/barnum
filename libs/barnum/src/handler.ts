@@ -16,22 +16,22 @@ export interface HandlerDefinition<
   TOutput = unknown,
   TStepConfig = unknown,
 > {
-  inputValidator?: z.ZodType<TValue>;
-  outputValidator?: z.ZodType<TOutput>;
-  stepConfigValidator?: z.ZodType<TStepConfig>;
-  handle: (context: {
-    value: TValue;
-    stepConfig: TStepConfig;
+  readonly inputValidator?: z.ZodType<TValue>;
+  readonly outputValidator?: z.ZodType<TOutput>;
+  readonly stepConfigValidator?: z.ZodType<TStepConfig>;
+  readonly handle: (context: {
+    readonly value: TValue;
+    readonly stepConfig: TStepConfig;
   }) => Promise<TOutput>;
 }
 
 /** Runtime-only handler definition shape — erases generic type info. */
 interface UntypedHandlerDefinition {
-  inputValidator?: z.ZodType;
-  outputValidator?: z.ZodType;
-  stepConfigValidator?: z.ZodType;
+  readonly inputValidator?: z.ZodType;
+  readonly outputValidator?: z.ZodType;
+  readonly stepConfigValidator?: z.ZodType;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handle: (...args: Array<any>) => Promise<unknown>;
+  readonly handle: (...args: Array<any>) => Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------

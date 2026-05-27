@@ -22,7 +22,7 @@ export type LogLevel = "off" | "error" | "warn" | "info" | "debug" | "trace";
 
 export interface RunPipelineOptions {
   /** Engine log verbosity. Default: "off" (only handler stderr is visible). */
-  logLevel?: LogLevel;
+  readonly logLevel?: LogLevel;
 }
 
 const __dirname = import.meta.dirname;
@@ -81,9 +81,9 @@ function resolveInstalledBinary(): string | undefined {
 }
 
 type BinaryResolution =
-  | { kind: "Env"; path: string }
-  | { kind: "NodeModules"; path: string }
-  | { kind: "Local"; path: string };
+  | { readonly kind: "Env"; readonly path: string }
+  | { readonly kind: "NodeModules"; readonly path: string }
+  | { readonly kind: "Local"; readonly path: string };
 
 /** Resolve the barnum binary. Checks: BARNUM env var, local repo, node_modules. */
 function resolveBinary(): BinaryResolution {
