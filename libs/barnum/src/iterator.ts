@@ -1,10 +1,12 @@
 import {
+  type BodyResult,
   type Iterator as IteratorT,
   type IteratorDef,
   type Option as OptionT,
   type Pipeable,
   type Result as ResultT,
   type TypedAction,
+  type VarRef,
   toAction,
   typedAction,
   branch,
@@ -172,7 +174,7 @@ export const Iterator = {
   /** Fold elements with accumulator. `Iterator<T> → TAcc` */
   fold<TElement, TAcc>(
     init: Pipeable<void, TAcc>,
-    body: Pipeable<[TAcc, TElement], TAcc>,
+    body: (acc: VarRef<TAcc>, element: VarRef<TElement>) => BodyResult<TAcc>,
   ): TypedAction<IteratorT<TElement>, TAcc> {
     return Iterator.collect<TElement>().then(
       bindInput<Array<TElement>>((elements) =>
@@ -196,13 +198,11 @@ export const Iterator = {
                       const head = headTail.getIndex(0).unwrap();
                       const tail = headTail.getIndex(1).unwrap();
 
-                      return all(acc, head)
-                        .then(body)
-                        .then(
-                          bindInput<TAcc>((newAcc) =>
-                            all(newAcc, tail).then(recur),
-                          ),
-                        );
+                      return typedAction<void, TAcc>(body(acc, head)).then(
+                        bindInput<TAcc>((newAcc) =>
+                          all(newAcc, tail).then(recur),
+                        ),
+                      );
                     }),
                   });
                 }),
