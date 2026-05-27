@@ -11,7 +11,7 @@ import {
 import { first, last } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -20,48 +20,42 @@ import { type CheckIO, assertExact } from "./type-utils.js";
 describe("array type tests", () => {
   it("range: any -> number[]", () => {
     const action = range(0, 10);
-    assertExact<CheckIO<typeof action, any, Array<number>>>();
+    assertIO<typeof action, any, Array<number>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("flatten: T[][] -> T[]", () => {
     const action = flatten<number>();
-    assertExact<CheckIO<typeof action, Array<Array<number>>, Array<number>>>();
+    assertIO<typeof action, Array<Array<number>>, Array<number>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("getIndex: Tuple -> Option<Tuple[N]>", () => {
     const action = getIndex<[string, number, boolean], 1>(1);
-    assertExact<
-      CheckIO<typeof action, [string, number, boolean], Option<number>>
-    >();
+    assertIO<typeof action, [string, number, boolean], Option<number>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("splitFirst: T[] -> Option<[T, T[]]>", () => {
     const action = splitFirst<number>();
-    assertExact<
-      CheckIO<typeof action, Array<number>, Option<[number, Array<number>]>>
-    >();
+    assertIO<typeof action, Array<number>, Option<[number, Array<number>]>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("splitLast: T[] -> Option<[T[], T]>", () => {
     const action = splitLast<number>();
-    assertExact<
-      CheckIO<typeof action, Array<number>, Option<[Array<number>, number]>>
-    >();
+    assertIO<typeof action, Array<number>, Option<[Array<number>, number]>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("first: Array<T> -> Option<T>", () => {
     const action = first<number>();
-    assertExact<CheckIO<typeof action, Array<number>, Option<number>>>();
+    assertIO<typeof action, Array<number>, Option<number>>();
   });
 
   it("last: Array<T> -> Option<T>", () => {
     const action = last<number>();
-    assertExact<CheckIO<typeof action, Array<number>, Option<number>>>();
+    assertIO<typeof action, Array<number>, Option<number>>();
   });
 });
 

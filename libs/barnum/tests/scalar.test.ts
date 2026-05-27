@@ -3,7 +3,7 @@ import { pipe } from "../src/ast.js";
 import { constant, drop, identity, panic } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -12,24 +12,24 @@ import { type CheckIO, assertExact } from "./type-utils.js";
 describe("scalar type tests", () => {
   it("constant: any -> T", () => {
     const action = constant({ x: 1 });
-    assertExact<CheckIO<typeof action, any, { x: number }>>();
+    assertIO<typeof action, any, { x: number }>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("identity: T -> T", () => {
     const action = identity<{ x: number }>();
-    assertExact<CheckIO<typeof action, { x: number }, { x: number }>>();
+    assertIO<typeof action, { x: number }, { x: number }>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("drop: any -> null", () => {
-    assertExact<CheckIO<typeof drop, any, null>>();
+    assertIO<typeof drop, any, null>();
     expect(drop.kind).toBe("Invoke");
   });
 
   it("panic: any -> never", () => {
     const action = panic("boom");
-    assertExact<CheckIO<typeof action, any, never>>();
+    assertIO<typeof action, any, never>();
     expect(action.kind).toBe("Invoke");
   });
 });

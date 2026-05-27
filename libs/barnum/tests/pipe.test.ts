@@ -4,7 +4,7 @@ import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { chain } from "../src/chain.js";
 import { runPipeline } from "../src/run.js";
 import { build, classifyErrors, deploy, setup, verify } from "./handlers.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -13,9 +13,7 @@ import { type CheckIO, assertExact } from "./type-utils.js";
 describe("pipe type tests", () => {
   it("pipe: input of first, output of last", () => {
     const action = pipe(setup, build, verify);
-    assertExact<
-      CheckIO<typeof action, { project: string }, { verified: boolean }>
-    >();
+    assertIO<typeof action, { project: string }, { verified: boolean }>();
     expect(action.kind).toBe("Chain");
   });
 
@@ -59,7 +57,7 @@ describe("pipe type tests", () => {
       verify,
       deploy,
     );
-    assertExact<CheckIO<typeof action, any, { deployed: boolean }>>();
+    assertIO<typeof action, any, { deployed: boolean }>();
     expect(action.kind).toBe("Chain");
   });
 });

@@ -20,7 +20,7 @@ export function assertExact<_T extends true>(): void {}
 
 /**
  * Check both input and output types of an action match exactly.
- * Usage: `assertExact<CheckIO<typeof action, ExpectedIn, ExpectedOut>>()`
+ * Usage: `assertIO<typeof action, ExpectedIn, ExpectedOut>()`
  */
 export type CheckIO<TAction, TIn, TOut> =
   IsExact<ExtractInput<TAction>, TIn> extends true
@@ -28,3 +28,9 @@ export type CheckIO<TAction, TIn, TOut> =
       ? true
       : false
     : false;
+
+/** Assert that an action has exactly the given input and output types. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function assertIO<TAction, TIn, TOut>(
+  ..._: CheckIO<TAction, TIn, TOut> extends true ? [] : [never]
+): void {}

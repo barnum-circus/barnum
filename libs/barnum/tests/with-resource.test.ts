@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { bindInput, pipe } from "../src/ast.js";
 import { constant, identity, withResource } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -20,9 +20,7 @@ describe("withResource type tests", () => {
       dispose: constant(null),
     });
 
-    assertExact<
-      CheckIO<typeof action, { input: string }, { output: string }>
-    >();
+    assertIO<typeof action, { input: string }, { output: string }>();
   });
 
   it("action receives [resource, input] as input type", () => {
@@ -33,8 +31,8 @@ describe("withResource type tests", () => {
         { output: string }
       >((state) => {
         const [resource, input] = state.split();
-        assertExact<CheckIO<typeof resource, any, { resource: string }>>();
-        assertExact<CheckIO<typeof input, any, { input: string }>>();
+        assertIO<typeof resource, any, { resource: string }>();
+        assertIO<typeof input, any, { input: string }>();
 
         return resource.then(constant({ output: "output" }));
       }),

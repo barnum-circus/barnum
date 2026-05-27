@@ -9,7 +9,7 @@ import {
 } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -18,15 +18,13 @@ import { type CheckIO, assertExact } from "./type-utils.js";
 describe("struct type tests", () => {
   it("getField: { key: V } -> V", () => {
     const action = getField<{ name: string; age: number }, "name">("name");
-    assertExact<
-      CheckIO<typeof action, { name: string; age: number }, string>
-    >();
+    assertIO<typeof action, { name: string; age: number }, string>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("wrapInField: T -> Record<F, T>", () => {
     const action = wrapInField<"foo", number>("foo");
-    assertExact<CheckIO<typeof action, number, Record<"foo", number>>>();
+    assertIO<typeof action, number, Record<"foo", number>>();
     expect(action.kind).toBe("Invoke");
   });
 
@@ -35,12 +33,10 @@ describe("struct type tests", () => {
       "a",
       "b",
     );
-    assertExact<
-      CheckIO<
-        typeof action,
-        { a: number; b: string; c: boolean },
-        Pick<{ a: number; b: string; c: boolean }, "a" | "b">
-      >
+    assertIO<
+      typeof action,
+      { a: number; b: string; c: boolean },
+      Pick<{ a: number; b: string; c: boolean }, "a" | "b">
     >();
   });
 
@@ -49,7 +45,7 @@ describe("struct type tests", () => {
       name: constant("hello"),
       count: constant(42),
     });
-    assertExact<CheckIO<typeof action, any, { name: string; count: number }>>();
+    assertIO<typeof action, any, { name: string; count: number }>();
   });
 
   it("allObjects has the correct input type (one key)", () => {
@@ -59,7 +55,7 @@ describe("struct type tests", () => {
       name: acceptsNumber,
     });
 
-    assertExact<CheckIO<typeof action, number, { name: null }>>();
+    assertIO<typeof action, number, { name: null }>();
   });
 
   it("allObjects has the correct input type (multiple keys, identical input)", () => {
@@ -70,7 +66,7 @@ describe("struct type tests", () => {
       bar: acceptsNumber,
     });
 
-    assertExact<CheckIO<typeof action, number, { foo: null; bar: null }>>();
+    assertIO<typeof action, number, { foo: null; bar: null }>();
   });
 
   it("allObjects rejects invalid inputs (multiple keys, overlapping input)", () => {

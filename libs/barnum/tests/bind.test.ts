@@ -9,7 +9,7 @@ import {
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup, verify } from "./handlers.js";
-import { type CheckIO, type IsExact, assertExact } from "./type-utils.js";
+import { type IsExact, assertExact, assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -28,7 +28,7 @@ describe("bind type tests", () => {
 
     bind([computeName], ([name]) => {
       assertExact<IsExact<typeof name, VarRef<string>>>();
-      assertExact<CheckIO<typeof name, any, string>>();
+      assertIO<typeof name, any, string>();
       return drop;
     });
   });
@@ -51,20 +51,20 @@ describe("bind type tests", () => {
     const numberAction = constant(42);
 
     bind([stringAction, numberAction], ([s, n]) => {
-      assertExact<CheckIO<typeof s, any, string>>();
-      assertExact<CheckIO<typeof n, any, number>>();
+      assertIO<typeof s, any, string>();
+      assertIO<typeof n, any, number>();
       return drop;
     });
   });
 
   it("bind output type matches body output type", () => {
     const action = bind([constant("x")], ([_s]) => verify);
-    assertExact<CheckIO<typeof action, any, { verified: boolean }>>();
+    assertIO<typeof action, any, { verified: boolean }>();
   });
 
   it("bind input type matches binding input type", () => {
     const action = bind([setup], ([_env]) => constant("done"));
-    assertExact<CheckIO<typeof action, { project: string }, string>>();
+    assertIO<typeof action, { project: string }, string>();
   });
 });
 
@@ -76,7 +76,7 @@ describe("bindInput type tests", () => {
   it("infers VarRef type from explicit type parameter", () => {
     bindInput<{ artifact: string }, { verified: boolean }>((input) => {
       assertExact<IsExact<typeof input, VarRef<{ artifact: string }>>>();
-      assertExact<CheckIO<typeof input, any, { artifact: string }>>();
+      assertIO<typeof input, any, { artifact: string }>();
       return pipe(input, verify);
     });
   });
@@ -85,21 +85,19 @@ describe("bindInput type tests", () => {
     const action = bindInput<{ artifact: string }, { verified: boolean }>(
       (input) => pipe(input, verify),
     );
-    assertExact<
-      CheckIO<typeof action, { artifact: string }, { verified: boolean }>
-    >();
+    assertIO<typeof action, { artifact: string }, { verified: boolean }>();
   });
 
   it("input type matches TIn parameter", () => {
     const action = bindInput<{ project: string }, string>((_input) =>
       constant("done"),
     );
-    assertExact<CheckIO<typeof action, { project: string }, string>>();
+    assertIO<typeof action, { project: string }, string>();
   });
 
   it("body pipeline input is any (VarRef ignores pipeline input)", () => {
     bindInput<string, string>((input) => {
-      assertExact<CheckIO<typeof input, any, string>>();
+      assertIO<typeof input, any, string>();
       return input;
     });
   });

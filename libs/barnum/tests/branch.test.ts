@@ -17,7 +17,7 @@ import {
   fix,
   verify,
 } from "./handlers.js";
-import { type CheckIO, type IsExact, assertExact } from "./type-utils.js";
+import { type IsExact, assertExact, assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -29,13 +29,11 @@ describe("branch type tests", () => {
       Yes: deploy,
       No: deploy,
     });
-    assertExact<
-      CheckIO<
-        typeof action,
-        | { kind: "Yes"; value: { verified: boolean } }
-        | { kind: "No"; value: { verified: boolean } },
-        { deployed: boolean }
-      >
+    assertIO<
+      typeof action,
+      | { kind: "Yes"; value: { verified: boolean } }
+      | { kind: "No"; value: { verified: boolean } },
+      { deployed: boolean }
     >();
     expect(action.kind).toBe("Branch");
   });
@@ -45,12 +43,10 @@ describe("branch type tests", () => {
       HasErrors: forEach(fix),
       Clean: drop,
     });
-    assertExact<
-      CheckIO<
-        typeof action,
-        Array<TypeError>,
-        Array<{ file: string; fixed: boolean }> | null
-      >
+    assertIO<
+      typeof action,
+      Array<TypeError>,
+      Array<{ file: string; fixed: boolean }> | null
     >();
     expect(action.kind).toBe("Chain");
   });

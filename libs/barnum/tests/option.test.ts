@@ -12,7 +12,7 @@ import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Option as O } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
-import { type CheckIO, type IsExact, assertExact } from "./type-utils.js";
+import { type IsExact, assertExact, assertIO } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {
@@ -60,22 +60,22 @@ function expectedTagAst(kind: string) {
 describe("Option constructor type info", () => {
   it("Option.some<T>() retains element type with explicit param", () => {
     const some = O.some<number>();
-    assertExact<CheckIO<typeof some, number, Option<number>>>();
+    assertIO<typeof some, number, Option<number>>();
   });
 
   it("Option.none<T>() retains element type with explicit param", () => {
     const none = O.none<string>();
-    assertExact<CheckIO<typeof none, void, Option<string>>>();
+    assertIO<typeof none, void, Option<string>>();
   });
 
   it("postfix .some() infers type from output", () => {
     const result = constant(42).some();
-    assertExact<CheckIO<typeof result, any, Option<number>>>();
+    assertIO<typeof result, any, Option<number>>();
   });
 
   it("pipe(x, Option.some<T>()) retains type with explicit param", () => {
     const result = pipe(constant(42), O.some<number>());
-    assertExact<CheckIO<typeof result, any, Option<number>>>();
+    assertIO<typeof result, any, Option<number>>();
   });
 
   it("pipe(x, Option.some()) does not infer T from pipe context", () => {
@@ -88,12 +88,10 @@ describe("Option constructor type info", () => {
 describe("Option namespace types", () => {
   it("Option.map(action): Option<T> -> Option<U>", () => {
     const action = O.map<{ artifact: string }, { verified: boolean }>(verify);
-    assertExact<
-      CheckIO<
-        typeof action,
-        Option<{ artifact: string }>,
-        Option<{ verified: boolean }>
-      >
+    assertIO<
+      typeof action,
+      Option<{ artifact: string }>,
+      Option<{ verified: boolean }>
     >();
   });
 
@@ -102,12 +100,10 @@ describe("Option namespace types", () => {
       tag<"Option", OptionDef<{ artifact: string }>, "Some">("Some", "Option"),
       O.map(verify),
     );
-    assertExact<
-      CheckIO<
-        typeof action,
-        { artifact: string },
-        Option<{ verified: boolean }>
-      >
+    assertIO<
+      typeof action,
+      { artifact: string },
+      Option<{ verified: boolean }>
     >();
   });
 
@@ -121,12 +117,10 @@ describe("Option namespace types", () => {
         ),
       ),
     );
-    assertExact<
-      CheckIO<
-        typeof action,
-        Option<{ artifact: string }>,
-        Option<{ verified: boolean }>
-      >
+    assertIO<
+      typeof action,
+      Option<{ artifact: string }>,
+      Option<{ verified: boolean }>
     >();
   });
 
@@ -143,18 +137,16 @@ describe("Option namespace types", () => {
         ),
       ),
     );
-    assertExact<
-      CheckIO<
-        typeof action,
-        { artifact: string },
-        Option<{ verified: boolean }>
-      >
+    assertIO<
+      typeof action,
+      { artifact: string },
+      Option<{ verified: boolean }>
     >();
   });
 
   it("Option.unwrapOr(defaultAction): Option<T> -> T", () => {
     const action = O.unwrapOr<string>(constant("fallback"));
-    assertExact<CheckIO<typeof action, Option<string>, string>>();
+    assertIO<typeof action, Option<string>, string>();
   });
 
   it("Option.filter(predicate): Option<T> -> Option<T>", () => {
@@ -163,22 +155,22 @@ describe("Option namespace types", () => {
       tag<"Option", OptionDef<string>, "Some">("Some", "Option"),
     );
     const action = O.filter<string>(predicate);
-    assertExact<CheckIO<typeof action, Option<string>, Option<string>>>();
+    assertIO<typeof action, Option<string>, Option<string>>();
   });
 
   it("Option.collect(): Option<T>[] -> T[]", () => {
     const action = O.collect<string>();
-    assertExact<CheckIO<typeof action, Array<Option<string>>, Array<string>>>();
+    assertIO<typeof action, Array<Option<string>>, Array<string>>();
   });
 
   it("Option.isSome(): Option<T> -> boolean", () => {
     const action = O.isSome<string>();
-    assertExact<CheckIO<typeof action, Option<string>, boolean>>();
+    assertIO<typeof action, Option<string>, boolean>();
   });
 
   it("Option.isNone(): Option<T> -> boolean", () => {
     const action = O.isNone<number>();
-    assertExact<CheckIO<typeof action, Option<number>, boolean>>();
+    assertIO<typeof action, Option<number>, boolean>();
   });
 
   it("full Option pipeline: construct -> map -> unwrapOr", () => {
@@ -187,9 +179,7 @@ describe("Option namespace types", () => {
       O.map(verify),
       O.unwrapOr(constant({ verified: false })),
     );
-    assertExact<
-      CheckIO<typeof action, { artifact: string }, { verified: boolean }>
-    >();
+    assertIO<typeof action, { artifact: string }, { verified: boolean }>();
   });
 
   it("forEach + Option.collect pipeline", () => {
@@ -197,28 +187,24 @@ describe("Option namespace types", () => {
       forEach(O.map<{ artifact: string }, { verified: boolean }>(verify)),
       O.collect<{ verified: boolean }>(),
     );
-    assertExact<
-      CheckIO<
-        typeof action,
-        Array<Option<{ artifact: string }>>,
-        Array<{ verified: boolean }>
-      >
+    assertIO<
+      typeof action,
+      Array<Option<{ artifact: string }>>,
+      Array<{ verified: boolean }>
     >();
   });
 
   it("Option.unwrap: Option<T> -> T", () => {
     const action = O.unwrap<number>();
-    assertExact<CheckIO<typeof action, Option<number>, number>>();
+    assertIO<typeof action, Option<number>, number>();
   });
 
   it("Option.transpose: Option<Result<T,E>> -> Result<Option<T>,E>", () => {
     const action = O.transpose<string, number>();
-    assertExact<
-      CheckIO<
-        typeof action,
-        Option<Result<string, number>>,
-        Result<Option<string>, number>
-      >
+    assertIO<
+      typeof action,
+      Option<Result<string, number>>,
+      Result<Option<string>, number>
     >();
   });
 });

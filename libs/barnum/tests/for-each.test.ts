@@ -3,7 +3,7 @@ import { config, forEach, pipe } from "../src/ast.js";
 import { constant, getField, wrapInField } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { listFiles, migrate, setup, verify } from "./handlers.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -12,12 +12,10 @@ import { type CheckIO, assertExact } from "./type-utils.js";
 describe("forEach type tests", () => {
   it("forEach: wraps input/output in arrays", () => {
     const action = forEach(verify);
-    assertExact<
-      CheckIO<
-        typeof action,
-        Array<{ artifact: string }>,
-        Array<{ verified: boolean }>
-      >
+    assertIO<
+      typeof action,
+      Array<{ artifact: string }>,
+      Array<{ verified: boolean }>
     >();
     expect(action.kind).toBe("ForEach");
   });

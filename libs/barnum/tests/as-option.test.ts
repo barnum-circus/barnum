@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type Option, pipe } from "../src/ast.js";
 import { asOption, constant } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -11,17 +11,17 @@ import { type CheckIO, assertExact } from "./type-utils.js";
 describe("AsOption type tests", () => {
   it("asOption() standalone: boolean → Option<null>", () => {
     const action = asOption();
-    assertExact<CheckIO<typeof action, boolean, Option<null>>>();
+    assertIO<typeof action, boolean, Option<null>>();
   });
 
   it(".asOption() postfix: infers from preceding output", () => {
     const action = constant(true).asOption();
-    assertExact<CheckIO<typeof action, any, Option<null>>>();
+    assertIO<typeof action, any, Option<null>>();
   });
 
   it("asOption() composes in pipe", () => {
     const action = pipe(constant(true), asOption());
-    assertExact<CheckIO<typeof action, any, Option<null>>>();
+    assertIO<typeof action, any, Option<null>>();
   });
 });
 

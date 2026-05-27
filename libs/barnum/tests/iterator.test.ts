@@ -12,7 +12,7 @@ import { constant, identity, tag } from "../src/builtins/index.js";
 import { Iterator as I } from "../src/iterator.js";
 import { Option as O } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
-import { type CheckIO, assertExact } from "./type-utils.js";
+import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests — standalone constructors
@@ -21,39 +21,37 @@ import { type CheckIO, assertExact } from "./type-utils.js";
 describe("Iterator constructor type info", () => {
   it("Iterator.fromArray<T>(): T[] → Iterator<T>", () => {
     const action = I.fromArray<number>();
-    assertExact<CheckIO<typeof action, Array<number>, Iterator<number>>>();
+    assertIO<typeof action, Array<number>, Iterator<number>>();
   });
 
   it("Iterator.fromOption<T>(): Option<T> → Iterator<T>", () => {
     const action = I.fromOption<string>();
-    assertExact<CheckIO<typeof action, Option<string>, Iterator<string>>>();
+    assertIO<typeof action, Option<string>, Iterator<string>>();
   });
 
   it("Iterator.fromResult<T,E>(): Result<T,E> → Iterator<T>", () => {
     const action = I.fromResult<number, string>();
-    assertExact<
-      CheckIO<typeof action, Result<number, string>, Iterator<number>>
-    >();
+    assertIO<typeof action, Result<number, string>, Iterator<number>>();
   });
 
   it("Iterator.collect<T>(): Iterator<T> → T[]", () => {
     const action = I.collect<number>();
-    assertExact<CheckIO<typeof action, Iterator<number>, Array<number>>>();
+    assertIO<typeof action, Iterator<number>, Array<number>>();
   });
 
   it("Iterator.map<T,U>(f): Iterator<T> → Iterator<U>", () => {
     const action = I.map<number, string>(constant("x"));
-    assertExact<CheckIO<typeof action, Iterator<number>, Iterator<string>>>();
+    assertIO<typeof action, Iterator<number>, Iterator<string>>();
   });
 
   it("Iterator.flatMap<T,U>(f): Iterator<T> → Iterator<U>", () => {
     const action = I.flatMap<number, string>(constant(["a", "b"]));
-    assertExact<CheckIO<typeof action, Iterator<number>, Iterator<string>>>();
+    assertIO<typeof action, Iterator<number>, Iterator<string>>();
   });
 
   it("Iterator.filter<T>(pred): Iterator<T> → Iterator<T>", () => {
     const action = I.filter<number>(constant(true));
-    assertExact<CheckIO<typeof action, Iterator<number>, Iterator<number>>>();
+    assertIO<typeof action, Iterator<number>, Iterator<number>>();
   });
 });
 
@@ -64,56 +62,56 @@ describe("Iterator constructor type info", () => {
 describe("Iterator postfix type info", () => {
   it(".iterate() on Option", () => {
     const action = constant(42).some().iterate();
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".iterate() on Result", () => {
     const action = constant(42).ok().iterate();
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".iterate() on array", () => {
     const action = constant([1, 2, 3]).iterate();
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".map(f) on Iterator", () => {
     const action = constant([1, 2]).iterate().map(constant("x"));
-    assertExact<CheckIO<typeof action, any, Iterator<string>>>();
+    assertIO<typeof action, any, Iterator<string>>();
   });
 
   it(".flatMap(f) on Iterator returning Iterator", () => {
     const action = constant([1])
       .iterate()
       .flatMap(pipe(constant([10, 20]), I.fromArray<number>()));
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".flatMap(f) on Iterator returning Option", () => {
     const action = constant([1]).iterate().flatMap(constant(42).some());
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".flatMap(f) on Iterator returning Result", () => {
     const action = constant([1]).iterate().flatMap(constant(42).ok());
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".flatMap(f) on Iterator returning array", () => {
     const action = constant([1])
       .iterate()
       .flatMap(constant([10, 20]));
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".filter(pred) on Iterator", () => {
     const action = constant([1, 2, 3]).iterate().filter(constant(true));
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".collect() on Iterator", () => {
     const action = constant([1, 2]).iterate().collect();
-    assertExact<CheckIO<typeof action, any, Array<number>>>();
+    assertIO<typeof action, any, Array<number>>();
   });
 
   it(".fold() types: input and output", () => {
@@ -123,41 +121,37 @@ describe("Iterator postfix type info", () => {
         constant(""),
         bindInput<[string, number], string>((state) => {
           const [acc, element] = state.split();
-          assertExact<CheckIO<typeof acc, any, string>>();
-          assertExact<CheckIO<typeof element, any, number>>();
+          assertIO<typeof acc, any, string>();
+          assertIO<typeof element, any, number>();
           return acc;
         }),
       );
-    assertExact<CheckIO<typeof action, any, string>>();
+    assertIO<typeof action, any, string>();
   });
 
   it(".isEmpty() on Iterator", () => {
     const action = constant([1, 2]).iterate().isEmpty();
-    assertExact<CheckIO<typeof action, any, boolean>>();
+    assertIO<typeof action, any, boolean>();
   });
 
   it(".take(n) on Iterator", () => {
     const action = constant([1, 2, 3]).iterate().take(2);
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".skip(n) on Iterator", () => {
     const action = constant([1, 2, 3]).iterate().skip(1);
-    assertExact<CheckIO<typeof action, any, Iterator<number>>>();
+    assertIO<typeof action, any, Iterator<number>>();
   });
 
   it(".splitFirst() on Iterator", () => {
     const action = constant([1, 2, 3]).iterate().splitFirst();
-    assertExact<
-      CheckIO<typeof action, any, Option<[number, Iterator<number>]>>
-    >();
+    assertIO<typeof action, any, Option<[number, Iterator<number>]>>();
   });
 
   it(".splitLast() on Iterator", () => {
     const action = constant([1, 2, 3]).iterate().splitLast();
-    assertExact<
-      CheckIO<typeof action, any, Option<[Iterator<number>, number]>>
-    >();
+    assertIO<typeof action, any, Option<[Iterator<number>, number]>>();
   });
 
   it("full chain: array.iterate().map(f).filter(p).collect()", () => {
@@ -166,7 +160,7 @@ describe("Iterator postfix type info", () => {
       .map(constant("x"))
       .filter(constant(true))
       .collect();
-    assertExact<CheckIO<typeof action, any, Array<string>>>();
+    assertIO<typeof action, any, Array<string>>();
   });
 });
 
@@ -180,12 +174,12 @@ describe("Iterator.fold type info", () => {
       constant("init"),
       bindInput<[string, number], string>((state) => {
         const [acc, element] = state.split();
-        assertExact<CheckIO<typeof acc, any, string>>();
-        assertExact<CheckIO<typeof element, any, number>>();
+        assertIO<typeof acc, any, string>();
+        assertIO<typeof element, any, number>();
         return acc;
       }),
     );
-    assertExact<CheckIO<typeof action, Iterator<number>, string>>();
+    assertIO<typeof action, Iterator<number>, string>();
   });
 });
 
