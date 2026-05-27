@@ -89,6 +89,14 @@ Note: `Iterator.fold` already uses VarRef callback form. No change needed.
 5. Update all tests and demos to use callback form
 6. Verify all tests pass
 
-## Open Questions
+## Decision: Deferred
 
-1. Should `.then()` change? It's the lowest-level connector. `.then(foo)` becoming `.then(x => x.then(foo))` is stuttery. Alternatively `.then()` stays as-is (accepts `Pipeable`) since it IS the escape hatch from VarRef back into pipeline form.
+After discussion, the conclusion is:
+- Methods (`map`, `filter`, etc.) stay as-is — accept Pipeable directly
+- `bindInput` is user-facing: the explicit opt-in when you need VarRefs/fan-out
+- Users pass `bindInput(...)` as the Pipeable argument when they need the callback form
+- No method signature changes needed
+
+This refactor is deferred. If we later want methods to accept callbacks directly, it's a backwards-compatible addition (overload). See also:
+- `VARREF_AS_PIPELINE_PRIMITIVE.md` — exploration of Source/Transform distinction
+- `MULTI_INPUT_PIPELINES.md` — multi-input / tuple destructuring idea
