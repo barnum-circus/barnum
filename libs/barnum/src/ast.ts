@@ -638,15 +638,15 @@ function branchMethod(
   this: TypedAction,
   cases: Record<string, Action>,
 ): TypedAction {
-  return chain(toAction(this), toAction(branch(cases)));
+  return typedAction({ kind: "Chain", first: this, rest: branch(cases) });
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(flattenBuiltin()));
+  return typedAction({ kind: "Chain", first: this, rest: flattenBuiltin() });
 }
 
 function dropMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(drop));
+  return typedAction({ kind: "Chain", first: this, rest: drop });
 }
 
 function tagMethod(
@@ -654,296 +654,283 @@ function tagMethod(
   kind: string,
   enumName: string,
 ): TypedAction {
-  return chain(toAction(this), toAction(tag(kind, enumName)));
+  return typedAction({ kind: "Chain", first: this, rest: tag(kind, enumName) });
 }
 
 function someMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(Option.some()));
+  return typedAction({ kind: "Chain", first: this, rest: Option.some() });
 }
 
 function okMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(Result.ok()));
+  return typedAction({ kind: "Chain", first: this, rest: Result.ok() });
 }
 
 function errMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(Result.err()));
+  return typedAction({ kind: "Chain", first: this, rest: Result.err() });
 }
 
 function getFieldMethod(this: TypedAction, field: string): TypedAction {
-  return chain(toAction(this), toAction(getField(field)));
+  return typedAction({ kind: "Chain", first: this, rest: getField(field) });
 }
 
 function getIndexMethod(this: TypedAction, index: number): TypedAction {
-  return chain(toAction(this), toAction(getIndex(index)));
+  return typedAction({ kind: "Chain", first: this, rest: getIndex(index) });
 }
 
 function wrapInFieldMethod(this: TypedAction, field: string): TypedAction {
-  return chain(toAction(this), toAction(wrapInField(field)));
+  return typedAction({ kind: "Chain", first: this, rest: wrapInField(field) });
 }
 
 function pickMethod(this: TypedAction, ...keys: Array<string>): TypedAction {
-  return chain(toAction(this), toAction(pick(...keys)));
+  return typedAction({ kind: "Chain", first: this, rest: pick(...keys) });
 }
 
 function splitFirstMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Iterator: IteratorNs.splitFirst(),
-        Array: splitFirst(),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Iterator: IteratorNs.splitFirst(),
+      Array: splitFirst(),
+    }),
+  });
 }
 
 function splitLastMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Iterator: IteratorNs.splitLast(),
-        Array: splitLast(),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Iterator: IteratorNs.splitLast(),
+      Array: splitLast(),
+    }),
+  });
 }
 
 // --- Shared postfix methods (Option + Result) — dispatch via branchFamily ---
 
 function mapMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Result: branch({
-          Ok: chain(toAction(action), toAction(Result.ok())),
-          Err: Result.err(),
-        }),
-        Option: branch({
-          Some: chain(toAction(action), toAction(Option.some())),
-          None: Option.none(),
-        }),
-        Iterator: IteratorNs.map(action),
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Result: branch({
+        Ok: chain(action, Result.ok()),
+        Err: Result.err(),
       }),
-    ),
-  );
+      Option: branch({
+        Some: chain(action, Option.some()),
+        None: Option.none(),
+      }),
+      Iterator: IteratorNs.map(action),
+    }),
+  });
 }
 
 function unwrapMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
-        Option: branch({
-          Some: identity(),
-          None: chain(drop, panic("called unwrap on None")),
-        }),
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
+      Option: branch({
+        Some: identity(),
+        None: chain(drop, panic("called unwrap on None")),
       }),
-    ),
-  );
+    }),
+  });
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Result: branch({ Ok: identity(), Err: defaultAction }),
-        Option: branch({ Some: identity(), None: defaultAction }),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Result: branch({ Ok: identity(), Err: defaultAction }),
+      Option: branch({ Some: identity(), None: defaultAction }),
+    }),
+  });
 }
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Result: branch({ Ok: action, Err: Result.err() }),
-        Option: branch({ Some: action, None: Option.none() }),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Result: branch({ Ok: action, Err: Result.err() }),
+      Option: branch({ Some: action, None: Option.none() }),
+    }),
+  });
 }
 
 function transposeMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Option: branch({
-          Some: branch({
-            Ok: chain(toAction(Option.some()), toAction(Result.ok())),
-            Err: Result.err(),
-          }),
-          None: chain(
-            toAction(chain(toAction(drop), toAction(Option.none()))),
-            toAction(Result.ok()),
-          ),
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Option: branch({
+        Some: branch({
+          Ok: chain(Option.some(), Result.ok()),
+          Err: Result.err(),
         }),
-        Result: branch({
-          Ok: branch({
-            Some: chain(toAction(Result.ok()), toAction(Option.some())),
-            None: chain(toAction(drop), toAction(Option.none())),
-          }),
-          Err: chain(toAction(Result.err()), toAction(Option.some())),
-        }),
+        None: chain(chain(drop, Option.none()), Result.ok()),
       }),
-    ),
-  );
+      Result: branch({
+        Ok: branch({
+          Some: chain(Result.ok(), Option.some()),
+          None: chain(drop, Option.none()),
+        }),
+        Err: chain(Result.err(), Option.some()),
+      }),
+    }),
+  });
 }
 
 // --- Result-only postfix methods ---
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Ok: Result.ok(),
-        Err: chain(toAction(action), toAction(Result.err())),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Ok: Result.ok(),
+      Err: chain(action, Result.err()),
+    }),
+  });
 }
 
 function orMethod(this: TypedAction, fallback: Action): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Ok: Result.ok(),
-        Err: fallback,
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Ok: Result.ok(),
+      Err: fallback,
+    }),
+  });
 }
 
 function asOkOptionMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Ok: Option.some(),
-        Err: chain(toAction(drop), toAction(Option.none())),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Ok: Option.some(),
+      Err: chain(drop, Option.none()),
+    }),
+  });
 }
 
 function asErrOptionMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Ok: chain(toAction(drop), toAction(Option.none())),
-        Err: Option.some(),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Ok: chain(drop, Option.none()),
+      Err: Option.some(),
+    }),
+  });
 }
 
 function isOkMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Ok: constant(true),
-        Err: constant(false),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Ok: constant(true),
+      Err: constant(false),
+    }),
+  });
 }
 
 function isErrMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Ok: constant(false),
-        Err: constant(true),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Ok: constant(false),
+      Err: constant(true),
+    }),
+  });
 }
 
 // --- Option-only postfix methods ---
 
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Option: branch({
-          Some: predicate,
-          None: Option.none(),
-        }),
-        Iterator: IteratorNs.filter(predicate),
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Option: branch({
+        Some: predicate,
+        None: Option.none(),
       }),
-    ),
-  );
+      Iterator: IteratorNs.filter(predicate),
+    }),
+  });
 }
 
 function isSomeMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Some: constant(true),
-        None: constant(false),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Some: constant(true),
+      None: constant(false),
+    }),
+  });
 }
 
 function isNoneMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branch({
-        Some: constant(false),
-        None: constant(true),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branch({
+      Some: constant(false),
+      None: constant(true),
+    }),
+  });
 }
 
 function asOptionMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(asOptionStandalone()));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: asOptionStandalone(),
+  });
 }
 
 // --- Iterator postfix methods ---
 
 function iterateMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Option: IteratorNs.fromOption(),
-        Result: IteratorNs.fromResult(),
-        Array: IteratorNs.fromArray(),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Option: IteratorNs.fromOption(),
+      Result: IteratorNs.fromResult(),
+      Array: IteratorNs.fromArray(),
+    }),
+  });
 }
 
 function flatMapMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(IteratorNs.flatMap(action)));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: IteratorNs.flatMap(action),
+  });
 }
 
 function collectMethod(this: TypedAction): TypedAction {
-  return chain(
-    toAction(this),
-    toAction(
-      branchFamily({
-        Array: Option.collect(),
-        Iterator: IteratorNs.collect(),
-      }),
-    ),
-  );
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: branchFamily({
+      Array: Option.collect(),
+      Iterator: IteratorNs.collect(),
+    }),
+  });
 }
 
 function foldMethod(
@@ -951,11 +938,19 @@ function foldMethod(
   init: Action,
   body: (acc: VarRef<any>, element: VarRef<any>) => Action,
 ): TypedAction {
-  return chain(toAction(this), toAction(IteratorNs.fold(init, body)));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: IteratorNs.fold(init, body),
+  });
 }
 
 function isEmptyMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(IteratorNs.isEmpty()));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: IteratorNs.isEmpty(),
+  });
 }
 
 function sliceMethod(
@@ -963,15 +958,19 @@ function sliceMethod(
   start: number,
   end?: number,
 ): TypedAction {
-  return chain(toAction(this), toAction(IteratorNs.slice(start, end)));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: IteratorNs.slice(start, end),
+  });
 }
 
 function takeMethod(this: TypedAction, n: number): TypedAction {
-  return chain(toAction(this), toAction(IteratorNs.take(n)));
+  return typedAction({ kind: "Chain", first: this, rest: IteratorNs.take(n) });
 }
 
 function skipMethod(this: TypedAction, n: number): TypedAction {
-  return chain(toAction(this), toAction(IteratorNs.skip(n)));
+  return typedAction({ kind: "Chain", first: this, rest: IteratorNs.skip(n) });
 }
 
 function bindMethod(
@@ -979,18 +978,30 @@ function bindMethod(
   bindings: Array<Action>,
   body: (vars: any) => Action,
 ): TypedAction {
-  return chain(toAction(this), toAction(bindStandalone(bindings, body)));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: bindStandalone(bindings, body),
+  });
 }
 
 function bindInputMethod(
   this: TypedAction,
   body: (input: any) => Action,
 ): TypedAction {
-  return chain(toAction(this), toAction(bindInputStandalone(body)));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: bindInputStandalone(body),
+  });
 }
 
 function tapMethod(this: TypedAction, action: Pipeable<any, any>): TypedAction {
-  return chain(toAction(this), toAction(tapStandalone(action)));
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: tapStandalone(action),
+  });
 }
 
 /**
