@@ -85,6 +85,15 @@ function splitMethod(this: TypedAction): unknown {
           };
         }
         if (typeof key === "string") {
+          // Numeric string keys (e.g. "0", "1") → getIndex for tuple index access
+          if (/^\d+$/.test(key)) {
+            return typedAction({
+              kind: "Chain",
+              first: self,
+              rest: toAction(getIndex(parseInt(key, 10)).unwrap()),
+            });
+          }
+          // Named string keys → getField for object property access
           return typedAction({
             kind: "Chain",
             first: self,
