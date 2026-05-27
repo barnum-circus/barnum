@@ -439,7 +439,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   fold<TIn, TElement, TAcc>(
     this: TypedAction<TIn, Iterator<TElement>>,
     init: Pipeable<void, TAcc>,
-    body: (acc: VarRef<TAcc>, element: VarRef<TElement>) => BodyResult<TAcc>,
+    body: Pipeable<[TAcc, TElement], TAcc>,
   ): TypedAction<TIn, TAcc>;
 
   /** Check if iterator is empty. `Iterator<T> → boolean` */
@@ -938,7 +938,7 @@ function collectMethod(this: TypedAction): TypedAction {
 function foldMethod(
   this: TypedAction,
   init: Action,
-  body: (acc: VarRef<any>, element: VarRef<any>) => Action,
+  body: Pipeable<[any, any], any>,
 ): TypedAction {
   return typedAction({
     kind: "Chain",

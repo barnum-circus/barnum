@@ -5,6 +5,7 @@ import {
   type OptionDef,
   type Result,
   type ResultDef,
+  bindInput,
   pipe,
 } from "../src/ast.js";
 import { constant, identity, tag } from "../src/builtins/index.js";
@@ -115,14 +116,18 @@ describe("Iterator postfix type info", () => {
     assertExact<CheckIO<typeof action, any, Array<number>>>();
   });
 
-  it(".fold() types: input, output, and VarRef types in callback", () => {
+  it(".fold() types: input and output", () => {
     const action = constant([1, 2, 3])
       .iterate()
-      .fold(constant(""), (acc, element) => {
-        assertExact<CheckIO<typeof acc, any, string>>();
-        assertExact<CheckIO<typeof element, any, number>>();
-        return constant("result");
-      });
+      .fold(
+        constant(""),
+        bindInput<[string, number], string>((state) => {
+          const [acc, element] = state.split();
+          assertExact<CheckIO<typeof acc, any, string>>();
+          assertExact<CheckIO<typeof element, any, number>>();
+          return acc;
+        }),
+      );
     assertExact<CheckIO<typeof action, any, string>>();
   });
 
@@ -171,11 +176,15 @@ describe("Iterator postfix type info", () => {
 
 describe("Iterator.fold type info", () => {
   it("fold infers input from Iterator, output from accumulator", () => {
-    const action = I.fold<number, string>(constant("init"), (acc, element) => {
-      assertExact<CheckIO<typeof acc, any, string>>();
-      assertExact<CheckIO<typeof element, any, number>>();
-      return constant("next");
-    });
+    const action = I.fold<number, string>(
+      constant("init"),
+      bindInput<[string, number], string>((state) => {
+        const [acc, element] = state.split();
+        assertExact<CheckIO<typeof acc, any, string>>();
+        assertExact<CheckIO<typeof element, any, number>>();
+        return acc;
+      }),
+    );
     assertExact<CheckIO<typeof action, Iterator<number>, string>>();
   });
 });

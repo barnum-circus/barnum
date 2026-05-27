@@ -36,16 +36,17 @@ runPipeline(
         .branch({
           None: constant<null>(null).then(done),
 
-          Some: bindInput<[string, Iterator<string>], never>((pair) =>
-            pipe(
-              pair.getIndex(0).unwrap(),
+          Some: bindInput<[string, Iterator<string>], never>((pair) => {
+            const [service, rest] = pair.split();
+            return pipe(
+              service,
               deployService,
               verifyService,
               drop,
-              pair.getIndex(1).unwrap(),
+              rest,
               recur,
-            ),
-          ),
+            );
+          }),
         }),
     ),
   ),

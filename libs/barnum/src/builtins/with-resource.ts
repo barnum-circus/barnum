@@ -1,11 +1,5 @@
-import {
-  type BodyResult,
-  type Pipeable,
-  type TypedAction,
-  type VarRef,
-  bindInput,
-  typedAction,
-} from "../ast.js";
+import { type Pipeable, type TypedAction, bindInput } from "../ast.js";
+import { all } from "../all.js";
 
 // ---------------------------------------------------------------------------
 // WithResource — RAII-style create/action/dispose
@@ -15,7 +9,7 @@ import {
  * RAII-style resource management combinator.
  * ```
  * TIn → create → TResource
- *     → action(resourceRef, inputRef) → TOut
+ *     → action([TResource, TIn]) → TOut
  *     → dispose(TResource) → ()
  *     → TOut
  * ```
@@ -26,15 +20,16 @@ export function withResource<TIn, TResource, TOut>({
   dispose,
 }: {
   create: Pipeable<TIn, TResource>;
-  action: (resource: VarRef<TResource>, input: VarRef<TIn>) => BodyResult<TOut>;
+  action: Pipeable<[TResource, TIn], TOut>;
   dispose: Pipeable<TResource, any>;
 }): TypedAction<TIn, TOut> {
   return bindInput<TIn, TOut>((inputRef) =>
-    typedAction<TIn, TResource>(create).bindInput<TOut>((resourceRef) =>
-      typedAction<void, TOut>(action(resourceRef, inputRef)).bindInput<TOut>(
-        (outputRef) =>
-          typedAction<TResource, any>(dispose).drop().then(outputRef),
-      ),
+    inputRef.then(create).bindInput<TOut>((resourceRef) =>
+      all(resourceRef, inputRef)
+        .then(action)
+        .bindInput<TOut>((outputRef) =>
+          resourceRef.then(dispose).drop().then(outputRef),
+        ),
     ),
   );
 }

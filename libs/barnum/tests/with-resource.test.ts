@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { all, pipe } from "../src/ast.js";
-import { constant, withResource } from "../src/builtins/index.js";
+import { bindInput, pipe } from "../src/ast.js";
+import { constant, identity, withResource } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { type CheckIO, assertExact } from "./type-utils.js";
 
@@ -16,7 +16,7 @@ describe("withResource type tests", () => {
       { output: string }
     >({
       create: constant({ resource: "res" }),
-      action: () => constant({ output: "output" }),
+      action: constant({ output: "output" }),
       dispose: constant(null),
     });
 
@@ -24,15 +24,20 @@ describe("withResource type tests", () => {
       CheckIO<typeof action, { input: string }, { output: string }>
     >();
   });
-  it("varRefs passed to withResource have the correct types", () => {
+
+  it("action receives [resource, input] as input type", () => {
     withResource<{ input: string }, { resource: string }, { output: string }>({
       create: constant({ resource: "res" }),
-      action: (resourceRef, inputRef) => {
-        assertExact<CheckIO<typeof resourceRef, any, { resource: string }>>();
-        assertExact<CheckIO<typeof inputRef, any, { input: string }>>();
+      action: bindInput<
+        [{ resource: string }, { input: string }],
+        { output: string }
+      >((state) => {
+        const [resource, input] = state.split();
+        assertExact<CheckIO<typeof resource, any, { resource: string }>>();
+        assertExact<CheckIO<typeof input, any, { input: string }>>();
 
-        return constant({ output: "output" });
-      },
+        return resource.then(constant({ output: "output" }));
+      }),
       dispose: constant(null),
     });
   });
@@ -47,13 +52,12 @@ describe("withResource type tests", () => {
 
 describe("withResource execution", () => {
   it("create acquires, action uses resource, returns action output", async () => {
-    // action receives [resource, input] tuple; constant ignores input
     const result = await runPipeline(
       pipe(
         constant({ host: "localhost" }),
         withResource({
           create: constant({ conn: "acquired" }),
-          action: () => constant("action-output"),
+          action: constant("action-output"),
           dispose: constant(null),
         }),
       ),
@@ -62,18 +66,36 @@ describe("withResource execution", () => {
   });
 
   it("action receives [resource, input] tuple", async () => {
-    // identity() passes the tuple through so we can assert its shape
     const result = await runPipeline(
       pipe(
         constant({ input: "input" }),
         withResource({
           create: constant({ resource: "resource" }),
-          action: (resource, input) => all(resource, input),
+          action: identity(),
           dispose: constant(null),
         }),
       ),
     );
     expect(result).toEqual([{ resource: "resource" }, { input: "input" }]);
+  });
+
+  it("action can use split to destructure", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant({ input: "hello" }),
+        withResource({
+          create: constant({ resource: "world" }),
+          action: bindInput<[{ resource: string }, { input: string }], string>(
+            (state) => {
+              const [resource, _input] = state.split();
+              return resource.getField("resource");
+            },
+          ),
+          dispose: constant(null),
+        }),
+      ),
+    );
+    expect(result).toBe("world");
   });
 
   it("dispose runs and result is discarded", async () => {
@@ -83,7 +105,7 @@ describe("withResource execution", () => {
         constant({ x: 1 }),
         withResource({
           create: constant({ r: true }),
-          action: () => constant("action-result"),
+          action: constant("action-result"),
           dispose: constant("dispose-should-be-discarded"),
         }),
       ),

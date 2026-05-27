@@ -11,7 +11,13 @@ import {
   taggedUnionSchema,
   optionSchema,
 } from "@barnum/barnum/runtime";
-import { allObject, pipe, loop, pick, VarRef } from "@barnum/barnum/pipeline";
+import {
+  allObject,
+  bindInput,
+  pipe,
+  loop,
+  pick,
+} from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -377,10 +383,11 @@ import { createWorktree, createPR } from "./git";
 
 type WorktreeResource = { worktreePath: string; branch: string };
 
-export const implementAndReview = (
-  resource: VarRef<WorktreeResource>,
-  refactor: VarRef<Refactor>,
-) => {
+export const implementAndReview = bindInput<
+  [WorktreeResource, Refactor],
+  { prUrl: string }
+>((state) => {
+  const [resource, refactor] = state.split();
   return pipe(
     allObject({
       worktreePath: resource.getField("worktreePath"),
@@ -414,7 +421,7 @@ export const implementAndReview = (
       createPR,
     ),
   );
-};
+});
 
 export const createBranchWorktree = pipe(
   pick<Refactor, ["description"]>("description"),
