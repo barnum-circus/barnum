@@ -31,7 +31,7 @@ interface UntypedHandlerDefinition {
   outputValidator?: z.ZodType;
   stepConfigValidator?: z.ZodType;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handle: (...args: any[]) => Promise<unknown>;
+  handle: (...args: Array<any>) => Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------

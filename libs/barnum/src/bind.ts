@@ -44,11 +44,11 @@ function createVarRef<TValue>(
  * Maps each binding's output type to a VarRef. TypeScript resolves
  * ExtractOutput from each binding expression.
  *
- * Constraint is `Action[]` (not `Pipeable<any, any>[]`) so that
+ * Constraint is `Array<Action>` (not `Array<Pipeable<any, any>>`) so that
  * `ExtractOutput` extracts the correct output type from the phantom
  * fields on the concrete types without fighting invariant `__in` checks.
  */
-export type InferVarRefs<TBindings extends Action[]> = {
+export type InferVarRefs<TBindings extends Array<Action>> = {
   [K in keyof TBindings]: VarRef<ExtractOutput<TBindings[K]>>;
 };
 
@@ -96,7 +96,7 @@ function readVar(n: number): Action {
  *   )
  */
 
-export function bind<TBindings extends Action[], TOut>(
+export function bind<TBindings extends Array<Action>, TOut>(
   bindings: [...TBindings],
   body: (vars: InferVarRefs<TBindings>) => BodyResult<TOut>,
 ): TypedAction<ExtractInput<TBindings[number]>, TOut> {

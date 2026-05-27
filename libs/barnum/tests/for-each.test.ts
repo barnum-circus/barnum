@@ -18,9 +18,11 @@ import { assertExact, type IsExact } from "./type-utils.js";
 describe("forEach type tests", () => {
   it("forEach: wraps input/output in arrays", () => {
     const action = forEach(verify);
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }[]>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>
+      IsExact<ExtractInput<typeof action>, Array<{ artifact: string }>>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Array<{ verified: boolean }>>
     >();
     expect(action.kind).toBe("ForEach");
   });
@@ -58,7 +60,7 @@ describe("forEach execution", () => {
 
   it("forEach on empty array returns []", async () => {
     const result = await runPipeline(
-      pipe(constant([] as { x: number }[]), forEach(getField("x"))),
+      pipe(constant([] as Array<{ x: number }>), forEach(getField("x"))),
     );
     expect(result).toEqual([]);
   });

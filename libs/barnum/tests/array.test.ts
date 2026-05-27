@@ -27,14 +27,14 @@ describe("array type tests", () => {
   it("range: any -> number[]", () => {
     const action = range(0, 10);
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number[]>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Array<number>>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("flatten: T[][] -> T[]", () => {
     const action = flatten<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, number[][]>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<Array<number>>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Array<number>>>();
     expect(action.kind).toBe("Invoke");
   });
 
@@ -49,31 +49,31 @@ describe("array type tests", () => {
 
   it("splitFirst: T[] -> Option<[T, T[]]>", () => {
     const action = splitFirst<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, number[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<[number, number[]]>>
+      IsExact<ExtractOutput<typeof action>, Option<[number, Array<number>]>>
     >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("splitLast: T[] -> Option<[T[], T]>", () => {
     const action = splitLast<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, number[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<[number[], number]>>
+      IsExact<ExtractOutput<typeof action>, Option<[Array<number>, number]>>
     >();
     expect(action.kind).toBe("Invoke");
   });
 
-  it("first: T[] -> Option<T>", () => {
+  it("first: Array<T> -> Option<T>", () => {
     const action = first<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, readonly number[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
   });
 
-  it("last: T[] -> Option<T>", () => {
+  it("last: Array<T> -> Option<T>", () => {
     const action = last<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, readonly number[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
   });
 });
@@ -122,7 +122,7 @@ describe("array execution", () => {
 
   it("flatten([]) -> []", async () => {
     const result = await runPipeline(
-      pipe(constant([] as number[][]), flatten()),
+      pipe(constant([] as Array<Array<number>>), flatten()),
     );
     expect(result).toEqual([]);
   });
@@ -150,7 +150,7 @@ describe("array execution", () => {
 
   it("getIndex(0) on [] -> None", async () => {
     const result = await runPipeline(
-      pipe(constant([] as number[]), getIndex(0)),
+      pipe(constant([] as Array<number>), getIndex(0)),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
@@ -168,7 +168,7 @@ describe("array execution", () => {
 
   it("splitFirst on [] -> None", async () => {
     const result = await runPipeline(
-      pipe(constant([] as number[]), splitFirst()),
+      pipe(constant([] as Array<number>), splitFirst()),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
@@ -186,7 +186,7 @@ describe("array execution", () => {
 
   it("splitLast on [] -> None", async () => {
     const result = await runPipeline(
-      pipe(constant([] as number[]), splitLast()),
+      pipe(constant([] as Array<number>), splitLast()),
     );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
@@ -198,7 +198,9 @@ describe("array execution", () => {
   });
 
   it("first on [] -> None", async () => {
-    const result = await runPipeline(pipe(constant([] as number[]), first()));
+    const result = await runPipeline(
+      pipe(constant([] as Array<number>), first()),
+    );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
@@ -209,7 +211,9 @@ describe("array execution", () => {
   });
 
   it("last on [] -> None", async () => {
-    const result = await runPipeline(pipe(constant([] as number[]), last()));
+    const result = await runPipeline(
+      pipe(constant([] as Array<number>), last()),
+    );
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 });

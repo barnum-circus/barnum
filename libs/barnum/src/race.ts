@@ -52,7 +52,7 @@ function breakPerform(restartHandlerId: RestartHandlerId): Action {
  * Branch takes Break arm → identity → `RestartHandle` exits with winner's value.
  */
 export function race<TIn, TOut>(
-  ...actions: Pipeable<TIn, TOut>[]
+  ...actions: Array<Pipeable<TIn, TOut>>
 ): TypedAction<TIn, TOut> {
   const restartHandlerId = allocateRestartHandlerId();
   const perform = breakPerform(restartHandlerId);

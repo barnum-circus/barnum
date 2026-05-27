@@ -34,11 +34,11 @@ import { bindInput } from "./bind.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap a single value in an array. `T → T[]`
+ * Wrap a single value in an array. `T → Array<T>`
  * Implemented as `all(identity())`. May warrant a dedicated builtin later.
  */
-function wrapInArray<TElement>(): TypedAction<TElement, TElement[]> {
-  return all(identity()) as TypedAction<TElement, TElement[]>;
+function wrapInArray<TElement>(): TypedAction<TElement, Array<TElement>> {
+  return all(identity()) as TypedAction<TElement, Array<TElement>>;
 }
 
 /**
@@ -57,8 +57,8 @@ const intoIteratorNormalize = branchFamily({
 // ---------------------------------------------------------------------------
 
 export const Iterator = {
-  /** Wrap an array as Iterator. `T[] → Iterator<T>` */
-  fromArray<TElement>(): TypedAction<TElement[], IteratorT<TElement>> {
+  /** Wrap an array as Iterator. `Array<T> → Iterator<T>` */
+  fromArray<TElement>(): TypedAction<Array<TElement>, IteratorT<TElement>> {
     return tag<"Iterator", IteratorDef<TElement>, "Iterator">(
       "Iterator",
       "Iterator",
@@ -69,7 +69,10 @@ export const Iterator = {
   fromOption<TElement>(): TypedAction<OptionT<TElement>, IteratorT<TElement>> {
     return branch({
       Some: chain(wrapInArray<TElement>(), Iterator.fromArray<TElement>()),
-      None: chain(constant<TElement[]>([]), Iterator.fromArray<TElement>()),
+      None: chain(
+        constant<Array<TElement>>([]),
+        Iterator.fromArray<TElement>(),
+      ),
     }) as TypedAction<OptionT<TElement>, IteratorT<TElement>>;
   },
 
@@ -80,13 +83,16 @@ export const Iterator = {
   > {
     return branch({
       Ok: chain(wrapInArray<TElement>(), Iterator.fromArray<TElement>()),
-      Err: chain(constant<TElement[]>([]), Iterator.fromArray<TElement>()),
+      Err: chain(constant<Array<TElement>>([]), Iterator.fromArray<TElement>()),
     }) as TypedAction<ResultT<TElement, TError>, IteratorT<TElement>>;
   },
 
-  /** Unwrap Iterator to array. `Iterator<T> → T[]` */
-  collect<TElement>(): TypedAction<IteratorT<TElement>, TElement[]> {
-    return getField("value") as TypedAction<IteratorT<TElement>, TElement[]>;
+  /** Unwrap Iterator to array. `Iterator<T> → Array<T>` */
+  collect<TElement>(): TypedAction<IteratorT<TElement>, Array<TElement>> {
+    return getField("value") as TypedAction<
+      IteratorT<TElement>,
+      Array<TElement>
+    >;
   },
 
   /** Transform each element. `Iterator<T> → Iterator<U>` */
@@ -139,8 +145,8 @@ export const Iterator = {
       .then(
         Option.map(
           all(
-            getIndex<[TElement, TElement[]], 0>(0).unwrap(),
-            getIndex<[TElement, TElement[]], 1>(1).unwrap().iterate(),
+            getIndex<[TElement, Array<TElement>], 0>(0).unwrap(),
+            getIndex<[TElement, Array<TElement>], 1>(1).unwrap().iterate(),
           ),
         ),
       );
@@ -156,8 +162,8 @@ export const Iterator = {
       .then(
         Option.map(
           all(
-            getIndex<[TElement[], TElement], 0>(0).unwrap().iterate(),
-            getIndex<[TElement[], TElement], 1>(1).unwrap(),
+            getIndex<[Array<TElement>, TElement], 0>(0).unwrap().iterate(),
+            getIndex<[Array<TElement>, TElement], 1>(1).unwrap(),
           ),
         ),
       );
@@ -169,24 +175,24 @@ export const Iterator = {
     body: Pipeable<[TAcc, TElement], TAcc>,
   ): TypedAction<IteratorT<TElement>, TAcc> {
     return Iterator.collect<TElement>().then(
-      bindInput<TElement[]>((elements) =>
+      bindInput<Array<TElement>>((elements) =>
         all(init, elements).then(
-          loop<TAcc, [TAcc, TElement[]]>((recur, done) => {
+          loop<TAcc, [TAcc, Array<TElement>]>((recur, done) => {
             // Re-wrap done to bridge VoidToNull<TAcc> → TAcc (TypeScript
             // can't simplify the conditional type for generic TAcc).
             const doneTAcc = typedAction<TAcc, never>(toAction(done));
 
             // Wrap return with typedAction — branch output inference fails
             // for generic types inside loop bodies.
-            return typedAction<[TAcc, TElement[]], never>(
+            return typedAction<[TAcc, Array<TElement>], never>(
               toAction(
-                bindInput<[TAcc, TElement[]]>((state) => {
+                bindInput<[TAcc, Array<TElement>]>((state) => {
                   const acc = state.getIndex(0).unwrap();
                   const remaining = state.getIndex(1).unwrap();
 
                   return remaining.splitFirst().branch({
                     None: acc.then(doneTAcc),
-                    Some: bindInput<[TElement, TElement[]]>((headTail) => {
+                    Some: bindInput<[TElement, Array<TElement>]>((headTail) => {
                       const head = headTail.getIndex(0).unwrap();
                       const tail = headTail.getIndex(1).unwrap();
 

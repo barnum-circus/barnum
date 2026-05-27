@@ -46,10 +46,9 @@ export function wrapInField<TField extends string, TValue>(
 // Merge — merge a tuple of objects into a single object
 // ---------------------------------------------------------------------------
 
-export function merge<TTuple extends Record<string, unknown>[]>(): TypedAction<
-  TTuple,
-  MergeTuple<TTuple>
-> {
+export function merge<
+  TTuple extends Array<Record<string, unknown>>,
+>(): TypedAction<TTuple, MergeTuple<TTuple>> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Merge" } },
@@ -62,7 +61,7 @@ export function merge<TTuple extends Record<string, unknown>[]>(): TypedAction<
 
 export function pick<
   TObj extends Record<string, unknown>,
-  TKeys extends (keyof TObj & string)[],
+  TKeys extends Array<keyof TObj & string>,
 >(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>> {
   const actions = keys.map((key) =>
     toAction(chain(toAction(getField(key)), toAction(wrapInField(key)))),

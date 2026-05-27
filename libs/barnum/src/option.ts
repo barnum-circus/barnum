@@ -99,9 +99,9 @@ export const Option = {
 
   /**
    * Collect Some values from an array, discarding Nones.
-   * `Option<T>[] → T[]`
+   * `Array<Option<T>> → Array<T>`
    */
-  collect<T = any>(): TypedAction<OptionT<T>[], T[]> {
+  collect<T = any>(): TypedAction<Array<OptionT<T>>, Array<T>> {
     return typedAction({
       kind: "Invoke",
       handler: { kind: "Builtin", builtin: { kind: "CollectSome" } },
@@ -162,19 +162,19 @@ export const Option = {
 
 /**
  * Extract the first element of an array.
- * `readonly TElement[] → Option<TElement>`
+ * `Array<TElement> → Option<TElement>`
  *
- * Composes `splitFirst` (which returns `Option<[TElement, TElement[]]>`)
+ * Composes `splitFirst` (which returns `Option<[TElement, Array<TElement>]>`)
  * with `Option.map(getIndex(0))` to extract just the element.
  */
 export function first<TElement>(): TypedAction<
-  readonly TElement[],
+  Array<TElement>,
   OptionT<TElement>
 > {
   return chain(
     toAction(splitFirst()),
     toAction(Option.map(toAction(getIndex(0).unwrap()))),
-  ) as TypedAction<readonly TElement[], OptionT<TElement>>;
+  ) as TypedAction<Array<TElement>, OptionT<TElement>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,17 +183,17 @@ export function first<TElement>(): TypedAction<
 
 /**
  * Extract the last element of an array.
- * `readonly TElement[] → Option<TElement>`
+ * `Array<TElement> → Option<TElement>`
  *
- * Composes `splitLast` (which returns `Option<[TElement[], TElement]>`)
+ * Composes `splitLast` (which returns `Option<[Array<TElement>, TElement]>`)
  * with `Option.map(getIndex(1))` to extract just the element.
  */
 export function last<TElement>(): TypedAction<
-  readonly TElement[],
+  Array<TElement>,
   OptionT<TElement>
 > {
   return chain(
     toAction(splitLast()),
     toAction(Option.map(toAction(getIndex(1).unwrap()))),
-  ) as TypedAction<readonly TElement[], OptionT<TElement>>;
+  ) as TypedAction<Array<TElement>, OptionT<TElement>>;
 }

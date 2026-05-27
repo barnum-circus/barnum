@@ -164,8 +164,8 @@ describe("Option namespace types", () => {
 
   it("Option.collect(): Option<T>[] -> T[]", () => {
     const action = O.collect<string>();
-    assertExact<IsExact<ExtractInput<typeof action>, Option<string>[]>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<Option<string>>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Array<string>>>();
   });
 
   it("Option.isSome(): Option<T> -> boolean", () => {
@@ -196,10 +196,10 @@ describe("Option namespace types", () => {
       O.collect<{ verified: boolean }>(),
     );
     assertExact<
-      IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>[]>
+      IsExact<ExtractInput<typeof action>, Array<Option<{ artifact: string }>>>
     >();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>
+      IsExact<ExtractOutput<typeof action>, Array<{ verified: boolean }>>
     >();
   });
 
@@ -465,7 +465,7 @@ describe("Option execution", () => {
           { kind: "Option.Some", value: 1 },
           { kind: "Option.None", value: null },
           { kind: "Option.Some", value: 3 },
-        ] as Option<number>[]),
+        ] as Array<Option<number>>),
         O.collect(),
       ),
     );
@@ -474,7 +474,7 @@ describe("Option execution", () => {
 
   it("Option.collect on [] -> []", async () => {
     const result = await runPipeline(
-      pipe(constant([] as Option<number>[]), O.collect()),
+      pipe(constant([] as Array<Option<number>>), O.collect()),
     );
     expect(result).toEqual([]);
   });

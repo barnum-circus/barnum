@@ -59,6 +59,10 @@
     "unicorn/numeric-separators-style": "off",
     "unicorn/text-encoding-identifier-case": "off",
     "unicorn/prefer-number-properties": "off",
-    "typescript/explicit-function-return-type": "off"
+    "typescript/explicit-function-return-type": "off",
+    "typescript/array-type": [
+      "error",
+      { "default": "generic", "readonly": "generic" }
+    ]
   }
 }

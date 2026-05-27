@@ -1091,7 +1091,7 @@ export function pipe<
   a30: Pipeable<TStep30, TStep31>,
   a31: Pipeable<TStep31, TStep32>,
 ): TypedAction<PipeIn<TStep1>, TStep32>;
-export function pipe(...actions: Action[]): Action {
+export function pipe(...actions: Array<Action>): Action {
   if (actions.length === 0) {
     return identity();
   }

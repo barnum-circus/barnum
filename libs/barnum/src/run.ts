@@ -173,8 +173,8 @@ function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
       stdio: ["inherit", "pipe", "pipe"],
     });
 
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+    const stdoutChunks: Array<Buffer> = [];
+    const stderrChunks: Array<Buffer> = [];
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdoutChunks.push(chunk);

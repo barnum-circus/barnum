@@ -52,11 +52,11 @@ describe("branch type tests", () => {
       HasErrors: forEach(fix),
       Clean: drop,
     });
-    assertExact<IsExact<ExtractInput<typeof action>, TypeError[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<TypeError>>>();
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        { file: string; fixed: boolean }[] | null
+        Array<{ file: string; fixed: boolean }> | null
       >
     >();
     expect(action.kind).toBe("Chain");
@@ -64,7 +64,7 @@ describe("branch type tests", () => {
 
   it("postfix .branch() + .drop() compose in chain", () => {
     const action = pipe(
-      constant(null) as TypedAction<any, TypeError[]>,
+      constant(null) as TypedAction<any, Array<TypeError>>,
       classifyErrors,
     ).branch({
       HasErrors: forEach(fix),
@@ -111,7 +111,7 @@ describe("{ kind, value } convention", () => {
     assertExact<
       IsExact<
         Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>,
-        { kind: "ClassifyResult.HasErrors"; value: TypeError[] }
+        { kind: "ClassifyResult.HasErrors"; value: Array<TypeError> }
       >
     >();
   });
@@ -130,11 +130,15 @@ describe("{ kind, value } convention", () => {
 
 describe("phantom __def on tagged unions", () => {
   it("ClassifyResult variants carry __def phantom field", () => {
-    type Def = { HasErrors: TypeError[]; Clean: void };
+    type Def = { HasErrors: Array<TypeError>; Clean: void };
     assertExact<
       IsExact<
         Extract<ClassifyResult, { kind: "ClassifyResult.HasErrors" }>,
-        { kind: "ClassifyResult.HasErrors"; value: TypeError[]; __def?: Def }
+        {
+          kind: "ClassifyResult.HasErrors";
+          value: Array<TypeError>;
+          __def?: Def;
+        }
       >
     >();
   });
@@ -185,7 +189,7 @@ describe("branch AST structure", () => {
 
   it("postfix .branch() produces valid AST for loop pattern", () => {
     const action = pipe(
-      constant(null) as TypedAction<any, TypeError[]>,
+      constant(null) as TypedAction<any, Array<TypeError>>,
       classifyErrors,
     ).branch({
       HasErrors: forEach(fix),

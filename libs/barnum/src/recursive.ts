@@ -24,7 +24,7 @@ import { allocateResumeHandlerId } from "./effect-id.js";
 
 type FunctionDef = [input: unknown, output: unknown];
 
-type FunctionRefs<TDefs extends FunctionDef[]> = {
+type FunctionRefs<TDefs extends Array<FunctionDef>> = {
   [K in keyof TDefs]: TypedAction<TDefs[K][0], TDefs[K][1]>;
 };
 
@@ -56,7 +56,7 @@ const UNUSED_STATE = null;
  * execute independently. Use sequential calls (chain/then) instead of
  * concurrent calls (all) when calling recursive functions multiple times.
  */
-export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
+export function defineRecursiveFunctions<TDefs extends Array<FunctionDef>>(
   bodiesFn: (...fns: FunctionRefs<TDefs>) => {
     [K in keyof TDefs]: Pipeable<TDefs[K][0], TDefs[K][1]>;
   },
@@ -85,7 +85,7 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
 
   // Get function body ASTs
   const bodyActions = (
-    bodiesFn(...(callTokens as FunctionRefs<TDefs>)) as Pipeable[]
+    bodiesFn(...(callTokens as FunctionRefs<TDefs>)) as Array<Pipeable>
   ).map(toAction);
 
   // Branch cases: CallN → GetField("value") → bodyN

@@ -84,7 +84,9 @@ describe("handler types", () => {
         { initialized: boolean; project: string }
       >
     >();
-    assertExact<IsExact<ExtractOutput<typeof action>, { file: string }[]>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Array<{ file: string }>>
+    >();
     expect(action.kind).toBe("Invoke");
   });
 
@@ -101,7 +103,10 @@ describe("handler types", () => {
     const action = typeCheck;
     assertExact<IsExact<ExtractInput<typeof action>, never>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, { file: string; message: string }[]>
+      IsExact<
+        ExtractOutput<typeof action>,
+        Array<{ file: string; message: string }>
+      >
     >();
     expect(action.kind).toBe("Invoke");
   });
@@ -172,7 +177,7 @@ describe("createHandler optional types", () => {
       "handler",
     );
     assertExact<IsExact<ExtractInput<typeof handler>, void>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, string[]>>();
+    assertExact<IsExact<ExtractOutput<typeof handler>, Array<string>>>();
   });
 
   // --- explicit type params without validators ---

@@ -8,7 +8,7 @@ import {
 // GetIndex — extract a single element from an array by index
 // ---------------------------------------------------------------------------
 
-export function getIndex<TTuple extends unknown[], TIndex extends number>(
+export function getIndex<TTuple extends Array<unknown>, TIndex extends number>(
   index: TIndex,
 ): TypedAction<TTuple, OptionT<TTuple[TIndex]>> {
   return typedAction({
@@ -24,7 +24,10 @@ export function getIndex<TTuple extends unknown[], TIndex extends number>(
 // Flatten — flatten a nested array one level
 // ---------------------------------------------------------------------------
 
-export function flatten<TElement>(): TypedAction<TElement[][], TElement[]> {
+export function flatten<TElement>(): TypedAction<
+  Array<Array<TElement>>,
+  Array<TElement>
+> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Flatten" } },
@@ -37,7 +40,7 @@ export function flatten<TElement>(): TypedAction<TElement[][], TElement[]> {
 
 /**
  * Deconstruct an array into its first element and the remaining elements.
- * `TElement[] → Option<[TElement, TElement[]]>`
+ * `Array<TElement> → Option<[TElement, Array<TElement>]>`
  *
  * Returns `Some([first, rest])` for non-empty arrays, `None` for empty arrays.
  * This is the array equivalent of cons/uncons — enables recursive iteration
@@ -47,8 +50,8 @@ export function flatten<TElement>(): TypedAction<TElement[][], TElement[]> {
  * that can't be composed from existing AST nodes.
  */
 export function splitFirst<TElement>(): TypedAction<
-  TElement[],
-  OptionT<[TElement, TElement[]]>
+  Array<TElement>,
+  OptionT<[TElement, Array<TElement>]>
 > {
   return typedAction({
     kind: "Invoke",
@@ -62,7 +65,7 @@ export function splitFirst<TElement>(): TypedAction<
 
 /**
  * Deconstruct an array into the leading elements and the last element.
- * `TElement[] → Option<[TElement[], TElement]>`
+ * `Array<TElement> → Option<[Array<TElement>, TElement]>`
  *
  * Returns `Some([init, last])` for non-empty arrays, `None` for empty arrays.
  * Mirror of `splitFirst` — enables processing from the tail end.
@@ -71,8 +74,8 @@ export function splitFirst<TElement>(): TypedAction<
  * that can't be composed from existing AST nodes.
  */
 export function splitLast<TElement>(): TypedAction<
-  TElement[],
-  OptionT<[TElement[], TElement]>
+  Array<TElement>,
+  OptionT<[Array<TElement>, TElement]>
 > {
   return typedAction({
     kind: "Invoke",
@@ -86,7 +89,7 @@ export function splitLast<TElement>(): TypedAction<
 
 /**
  * Slice an array from `start` (inclusive) to `end` (exclusive).
- * `T[] → T[]`
+ * `Array<T> → Array<T>`
  *
  * Both indices are clamped to array length. If `end` is omitted, slices
  * to the end of the array. Returns empty array if `start >= end`.
@@ -94,7 +97,7 @@ export function splitLast<TElement>(): TypedAction<
 export function slice<TElement>(
   start: number,
   end?: number,
-): TypedAction<TElement[], TElement[]> {
+): TypedAction<Array<TElement>, Array<TElement>> {
   const builtin: { kind: "Slice"; start: number; end?: number } =
     end === undefined
       ? { kind: "Slice", start }
@@ -109,8 +112,11 @@ export function slice<TElement>(
 // Range — produce an integer array [start, start+1, ..., end-1]
 // ---------------------------------------------------------------------------
 
-export function range(start: number, end: number): TypedAction<any, number[]> {
-  const result: number[] = [];
+export function range(
+  start: number,
+  end: number,
+): TypedAction<any, Array<number>> {
+  const result: Array<number> = [];
   for (let i = start; i < end; i++) {
     result.push(i);
   }

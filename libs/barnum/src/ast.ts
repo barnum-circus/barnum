@@ -73,7 +73,7 @@ export interface ForEachAction {
 
 export interface AllAction {
   kind: "All";
-  actions: Action[];
+  actions: Array<Action>;
 }
 
 export interface BranchAction {
@@ -175,9 +175,8 @@ type UnionToIntersection<TUnion> = (
   : never;
 
 /** Merge a tuple of objects into a single intersection type. */
-export type MergeTuple<TTuple> = TTuple extends unknown[]
-  ? UnionToIntersection<TTuple[number]>
-  : never;
+export type MergeTuple<TTuple> =
+  TTuple extends Array<unknown> ? UnionToIntersection<TTuple[number]> : never;
 
 // ---------------------------------------------------------------------------
 // Phantom Types — type-safe input/output tracking
@@ -212,10 +211,10 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   >(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>>;
-  /** Flatten one level of array nesting. `TElement[][] → TElement[]` */
+  /** Flatten one level of array nesting. `Array<Array<TElement>> → Array<TElement>` */
   flatten<TIn, TElement>(
-    this: TypedAction<TIn, TElement[][]>,
-  ): TypedAction<TIn, TElement[]>;
+    this: TypedAction<TIn, Array<Array<TElement>>>,
+  ): TypedAction<TIn, Array<TElement>>;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
   drop(): TypedAction<In, null>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
@@ -238,7 +237,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     field: TField,
   ): TypedAction<In, Out[TField]>;
   /** Extract an element from the output array by index. Returns Option. */
-  getIndex<TIn, TTuple extends unknown[], TIndex extends number>(
+  getIndex<TIn, TTuple extends Array<unknown>, TIndex extends number>(
     this: TypedAction<TIn, TTuple>,
     index: TIndex,
   ): TypedAction<TIn, Option<TTuple[TIndex]>>;
@@ -247,25 +246,25 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     field: TField,
   ): TypedAction<In, Record<TField, Out>>;
   /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
-  pick<TKeys extends (keyof Out & string)[]>(
+  pick<TKeys extends Array<keyof Out & string>>(
     ...keys: TKeys
   ): TypedAction<In, Pick<Out, TKeys[number]>>;
   /** Head/tail decomposition for Iterator. `Iterator<T> → Option<[T, Iterator<T>]>` */
   splitFirst<TIn, TElement>(
     this: TypedAction<TIn, Iterator<TElement>>,
   ): TypedAction<TIn, Option<[TElement, Iterator<TElement>]>>;
-  /** Head/tail decomposition. Only callable when Out is TElement[]. */
+  /** Head/tail decomposition. Only callable when Out is Array<TElement>. */
   splitFirst<TIn, TElement>(
-    this: TypedAction<TIn, TElement[]>,
-  ): TypedAction<TIn, Option<[TElement, TElement[]]>>;
+    this: TypedAction<TIn, Array<TElement>>,
+  ): TypedAction<TIn, Option<[TElement, Array<TElement>]>>;
   /** Init/last decomposition for Iterator. `Iterator<T> → Option<[Iterator<T>, T]>` */
   splitLast<TIn, TElement>(
     this: TypedAction<TIn, Iterator<TElement>>,
   ): TypedAction<TIn, Option<[Iterator<TElement>, TElement]>>;
-  /** Init/last decomposition. Only callable when Out is TElement[]. */
+  /** Init/last decomposition. Only callable when Out is Array<TElement>. */
   splitLast<TIn, TElement>(
-    this: TypedAction<TIn, TElement[]>,
-  ): TypedAction<TIn, Option<[TElement[], TElement]>>;
+    this: TypedAction<TIn, Array<TElement>>,
+  ): TypedAction<TIn, Option<[Array<TElement>, TElement]>>;
   /**
    * Transform the inner value. Dispatches: Option.map, Result.map.
    */
@@ -352,14 +351,14 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Option<TValue>>,
   ): TypedAction<TIn, boolean>;
 
-  /** Collect Some values from an array, discarding Nones. `Option<T>[] → T[]` */
+  /** Collect Some values from an array, discarding Nones. `Array<Option<T>> → Array<T>` */
   collect<TIn, TValue>(
-    this: TypedAction<TIn, Option<TValue>[]>,
-  ): TypedAction<TIn, TValue[]>;
-  /** Unwrap Iterator to array. `Iterator<T> → T[]` */
+    this: TypedAction<TIn, Array<Option<TValue>>>,
+  ): TypedAction<TIn, Array<TValue>>;
+  /** Unwrap Iterator to array. `Iterator<T> → Array<T>` */
   collect<TIn, TElement>(
     this: TypedAction<TIn, Iterator<TElement>>,
-  ): TypedAction<TIn, TElement[]>;
+  ): TypedAction<TIn, Array<TElement>>;
 
   /** Fallback on Err. `Result<T,E> → Result<T,F>` */
   or<TIn, TValue, TError, TErrorOut>(
@@ -410,9 +409,9 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   iterate<TIn, TElement, TError>(
     this: TypedAction<TIn, Result<TElement, TError>>,
   ): TypedAction<TIn, Iterator<TElement>>;
-  /** Enter Iterator from array. `T[] → Iterator<T>` */
+  /** Enter Iterator from array. `Array<T> → Iterator<T>` */
   iterate<TIn, TElement>(
-    this: TypedAction<TIn, TElement[]>,
+    this: TypedAction<TIn, Array<TElement>>,
   ): TypedAction<TIn, Iterator<TElement>>;
 
   /** Flat-map each element. `f` returns Iterator. `Iterator<T> → Iterator<U>` */
@@ -433,7 +432,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   /** Flat-map each element. `f` returns array. `Iterator<T> → Iterator<U>` */
   flatMap<TIn, TElement, TOut>(
     this: TypedAction<TIn, Iterator<TElement>>,
-    action: Pipeable<TElement, TOut[]>,
+    action: Pipeable<TElement, Array<TOut>>,
   ): TypedAction<TIn, Iterator<TOut>>;
 
   /** Fold elements with accumulator. `Iterator<T> → TAcc` */
@@ -468,7 +467,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   ): TypedAction<TIn, Iterator<TElement>>;
 
   /** Bind concurrent values as VarRefs available throughout the body. */
-  bind<TBindings extends Action[], TOut>(
+  bind<TBindings extends Array<Action>, TOut>(
     bindings: [...TBindings],
     body: (vars: InferVarRefs<TBindings>) => Action & { __out?: () => TOut },
   ): TypedAction<In, TOut>;
@@ -589,7 +588,7 @@ export type Result<TValue, TError> = TaggedUnion<
 // Iterator<T> — sequence wrapper (single-variant TaggedUnion)
 // ---------------------------------------------------------------------------
 
-export type IteratorDef<TElement> = { Iterator: TElement[] };
+export type IteratorDef<TElement> = { Iterator: Array<TElement> };
 export type Iterator<TElement> = TaggedUnion<"Iterator", IteratorDef<TElement>>;
 
 /** Extract all `kind` string literals from a discriminated union. */
@@ -682,7 +681,7 @@ function wrapInFieldMethod(this: TypedAction, field: string): TypedAction {
   return chain(toAction(this), toAction(wrapInField(field)));
 }
 
-function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
+function pickMethod(this: TypedAction, ...keys: Array<string>): TypedAction {
   return chain(toAction(this), toAction(pick(...keys)));
 }
 
@@ -977,7 +976,7 @@ function skipMethod(this: TypedAction, n: number): TypedAction {
 
 function bindMethod(
   this: TypedAction,
-  bindings: Action[],
+  bindings: Array<Action>,
   body: (vars: any) => Action,
 ): TypedAction {
   return chain(toAction(this), toAction(bindStandalone(bindings, body)));
@@ -1103,7 +1102,7 @@ export { race, sleep, withTimeout } from "./race.js";
 
 export function forEach<In, Out>(
   action: Pipeable<In, Out>,
-): TypedAction<In[], Out[]> {
+): TypedAction<Array<In>, Array<Out>> {
   return typedAction({ kind: "ForEach", action: toAction(action) });
 }
 

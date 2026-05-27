@@ -1720,7 +1720,7 @@ export function all<
     TOut32,
   ]
 >;
-export function all(...actions: Action[]): Action {
+export function all(...actions: Array<Action>): Action {
   if (actions.length === 0) {
     return constant([]);
   }

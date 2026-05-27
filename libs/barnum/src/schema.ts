@@ -4,7 +4,7 @@ import { type z, toJSONSchema } from "zod";
 // Zod v4 schema def types that have child schemas.
 // Verified against Zod 4.3.6 internals — every compound type's def
 // shape and child property name is listed here.
-const CHILD_ACCESSORS: Record<string, (def: any) => z.ZodType[]> = {
+const CHILD_ACCESSORS: Record<string, (def: any) => Array<z.ZodType>> = {
   object: (def) => Object.values(def.shape),
   array: (def) => [def.element],
   tuple: (def) => [...def.items, ...(def.rest ? [def.rest] : [])],
@@ -61,7 +61,7 @@ function assertNoUnsupportedPatterns(
   }
 
   // Reject custom checks (from .refine() and .superRefine())
-  const checks: any[] | undefined = def.checks;
+  const checks: Array<any> | undefined = def.checks;
   if (checks) {
     for (const check of checks) {
       if (check._zod.def.check === "custom") {

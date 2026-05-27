@@ -99,7 +99,7 @@ export type TypeError = { file: string; message: string };
 export const typeCheck = createHandler(
   {
     inputValidator: z.never(),
-    handle: async (): Promise<TypeError[]> => [
+    handle: async (): Promise<Array<TypeError>> => [
       { file: "src/index.ts", message: "Type error" },
     ],
   },
@@ -108,7 +108,7 @@ export const typeCheck = createHandler(
 
 // classifyErrors: TypeError[] → ClassifyResult
 export type ClassifyResultDef = {
-  HasErrors: TypeError[];
+  HasErrors: Array<TypeError>;
   Clean: void;
 };
 export type ClassifyResult = TaggedUnion<"ClassifyResult", ClassifyResultDef>;

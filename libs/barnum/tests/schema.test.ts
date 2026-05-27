@@ -450,7 +450,7 @@ describe("zodToCheckedJsonSchema", () => {
       ]);
       const result = convert(schema);
       expect(result.anyOf).toHaveLength(2);
-      expect((result.anyOf as Record<string, unknown>[])[0]).toEqual({
+      expect((result.anyOf as Array<Record<string, unknown>>)[0]).toEqual({
         type: "object",
         properties: {
           kind: { type: "string", const: "HasErrors" },
@@ -470,7 +470,7 @@ describe("zodToCheckedJsonSchema", () => {
         required: ["kind", "value"],
         additionalProperties: false,
       });
-      expect((result.anyOf as Record<string, unknown>[])[1]).toEqual({
+      expect((result.anyOf as Array<Record<string, unknown>>)[1]).toEqual({
         type: "object",
         properties: {
           kind: { type: "string", const: "Clean" },
@@ -501,7 +501,7 @@ describe("zodToCheckedJsonSchema", () => {
       const result = convert(schema);
       expect(result.anyOf).toHaveLength(2);
       // First variant: { approved: true }
-      expect((result.anyOf as Record<string, unknown>[])[0]).toEqual({
+      expect((result.anyOf as Array<Record<string, unknown>>)[0]).toEqual({
         type: "object",
         properties: {
           approved: { type: "boolean", const: true },
@@ -510,7 +510,7 @@ describe("zodToCheckedJsonSchema", () => {
         additionalProperties: false,
       });
       // Second variant: { approved: false, instructions: string }
-      expect((result.anyOf as Record<string, unknown>[])[1]).toEqual({
+      expect((result.anyOf as Array<Record<string, unknown>>)[1]).toEqual({
         type: "object",
         properties: {
           approved: { type: "boolean", const: false },

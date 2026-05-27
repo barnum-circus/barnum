@@ -243,9 +243,9 @@ describe("loop execution", () => {
     const result = await runPipeline(
       pipe(
         constant([1, 2, 3]),
-        loop<string, number[]>((recur, done) =>
+        loop<string, Array<number>>((recur, done) =>
           splitFirst<number>().branch({
-            Some: pipe(drop, constant([] as number[]), recur),
+            Some: pipe(drop, constant([] as Array<number>), recur),
             None: pipe(constant("done"), done),
           }),
         ),
@@ -285,9 +285,9 @@ describe("recur execution", () => {
     const result = await runPipeline(
       pipe(
         constant([1, 2]),
-        recurCombinator<number[], string>((restart) =>
+        recurCombinator<Array<number>, string>((restart) =>
           splitFirst<number>().branch({
-            Some: pipe(drop, constant([] as number[]), restart),
+            Some: pipe(drop, constant([] as Array<number>), restart),
             None: constant("done"),
           }),
         ),

@@ -22,7 +22,7 @@ import { assertExact, type IsExact } from "./type-utils.js";
 describe("Iterator constructor type info", () => {
   it("Iterator.fromArray<T>(): T[] → Iterator<T>", () => {
     const action = I.fromArray<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, number[]>>();
+    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
   });
 
@@ -41,7 +41,7 @@ describe("Iterator constructor type info", () => {
   it("Iterator.collect<T>(): Iterator<T> → T[]", () => {
     const action = I.collect<number>();
     assertExact<IsExact<ExtractInput<typeof action>, Iterator<number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number[]>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Array<number>>>();
   });
 
   it("Iterator.map<T,U>(f): Iterator<T> → Iterator<U>", () => {
@@ -119,7 +119,7 @@ describe("Iterator postfix type info", () => {
 
   it(".collect() on Iterator", () => {
     const action = constant([1, 2]).iterate().collect();
-    assertExact<IsExact<ExtractOutput<typeof action>, number[]>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Array<number>>>();
   });
 
   it("full chain: array.iterate().map(f).filter(p).collect()", () => {
@@ -128,7 +128,7 @@ describe("Iterator postfix type info", () => {
       .map(constant("x"))
       .filter(constant(true))
       .collect();
-    assertExact<IsExact<ExtractOutput<typeof action>, string[]>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Array<string>>>();
   });
 });
 
@@ -374,7 +374,7 @@ describe("Iterator execution", () => {
   it("map on empty Iterator → empty", async () => {
     const result = await runPipeline(
       pipe(
-        constant([] as number[]),
+        constant([] as Array<number>),
         I.fromArray<number>(),
         I.map<number, string>(constant("x")),
         I.collect<string>(),
@@ -386,7 +386,7 @@ describe("Iterator execution", () => {
   it("filter on empty Iterator → empty", async () => {
     const result = await runPipeline(
       pipe(
-        constant([] as number[]),
+        constant([] as Array<number>),
         I.fromArray<number>(),
         I.filter<number>(constant(true)),
         I.collect<number>(),
@@ -398,7 +398,7 @@ describe("Iterator execution", () => {
   it("flatMap on empty Iterator → empty", async () => {
     const result = await runPipeline(
       pipe(
-        constant([] as number[]),
+        constant([] as Array<number>),
         I.fromArray<number>(),
         I.flatMap<number, string>(constant(["a"])),
         I.collect<string>(),
