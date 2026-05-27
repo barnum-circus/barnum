@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
+import {
+  type ExtractInput,
+  type ExtractOutput,
+  pipe,
+  type TypedAction,
+} from "../src/ast.js";
 import {
   allObject,
   constant,
@@ -73,6 +78,54 @@ describe("struct type tests", () => {
     assertExact<
       IsExact<ExtractOutput<typeof action>, { name: string; count: number }>
     >();
+  });
+
+  it("allObjects has the correct input type (one key)", () => {
+    const acceptsNumber: TypedAction<number, null> = null as any;
+
+    const action = allObject({
+      name: acceptsNumber,
+    });
+
+    assertExact<IsExact<ExtractInput<typeof action>, number>>();
+  });
+
+  it("allObjects has the correct input type (multiple keys, identical input)", () => {
+    const acceptsNumber: TypedAction<number, null> = null as any;
+
+    const action = allObject({
+      foo: acceptsNumber,
+      bar: acceptsNumber,
+    });
+
+    assertExact<IsExact<ExtractInput<typeof action>, number>>();
+  });
+
+  it("allObjects rejects invalid inputs (multiple keys, overlapping input)", () => {
+    const acceptsNumber: TypedAction<number, null> = null as any;
+    const acceptsStringOrNumber: TypedAction<string | number, null> =
+      null as any;
+
+    // You may want or expect this to infer that allObject accepts numbers! But that would open
+    // the door to Pipeable<{ foo }> accepting { foo, bar }, which we do not want.
+
+    allObject({
+      // @ts-expect-error number != number | string
+      foo: acceptsNumber,
+      bar: acceptsStringOrNumber,
+    });
+  });
+
+  it("allObjects rejects invalid inputs (multiple keys, non-overlapping input)", () => {
+    const acceptsNumber: TypedAction<number, null> = null as any;
+    const acceptsString: TypedAction<string, null> = null as any;
+
+    allObject({
+      // @ts-expect-error number != string
+      foo: acceptsNumber,
+      // @ts-expect-error number != string
+      bar: acceptsString,
+    });
   });
 });
 
