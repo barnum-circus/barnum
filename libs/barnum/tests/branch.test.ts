@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  type TypedAction,
-  branch,
-  forEach,
-  pipe,
-} from "../src/ast.js";
+import { type TypedAction, branch, forEach, pipe } from "../src/ast.js";
 import {
   constant,
   drop,
@@ -24,7 +17,7 @@ import {
   fix,
   verify,
 } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -37,13 +30,13 @@ describe("branch type tests", () => {
       No: deploy,
     });
     assertExact<
-      IsExact<
-        ExtractInput<typeof action>,
+      CheckIO<
+        typeof action,
         | { kind: "Yes"; value: { verified: boolean } }
-        | { kind: "No"; value: { verified: boolean } }
+        | { kind: "No"; value: { verified: boolean } },
+        { deployed: boolean }
       >
     >();
-    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
     expect(action.kind).toBe("Branch");
   });
 
@@ -52,10 +45,10 @@ describe("branch type tests", () => {
       HasErrors: forEach(fix),
       Clean: drop,
     });
-    assertExact<IsExact<ExtractInput<typeof action>, Array<TypeError>>>();
     assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
+      CheckIO<
+        typeof action,
+        Array<TypeError>,
         Array<{ file: string; fixed: boolean }> | null
       >
     >();

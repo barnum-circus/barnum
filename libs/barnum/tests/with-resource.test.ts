@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  all,
-  pipe,
-} from "../src/ast.js";
+import { all, pipe } from "../src/ast.js";
 import { constant, withResource } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -25,21 +20,16 @@ describe("withResource type tests", () => {
       dispose: constant(null),
     });
 
-    assertExact<IsExact<ExtractInput<typeof action>, { input: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { output: string }>>();
+    assertExact<
+      CheckIO<typeof action, { input: string }, { output: string }>
+    >();
   });
   it("varRefs passed to withResource have the correct types", () => {
     withResource<{ input: string }, { resource: string }, { output: string }>({
       create: constant({ resource: "res" }),
       action: (resourceRef, inputRef) => {
-        assertExact<IsExact<ExtractInput<typeof resourceRef>, any>>();
-        assertExact<
-          IsExact<ExtractOutput<typeof resourceRef>, { resource: string }>
-        >();
-        assertExact<IsExact<ExtractInput<typeof inputRef>, any>>();
-        assertExact<
-          IsExact<ExtractOutput<typeof inputRef>, { input: string }>
-        >();
+        assertExact<CheckIO<typeof resourceRef, any, { resource: string }>>();
+        assertExact<CheckIO<typeof inputRef, any, { input: string }>>();
 
         return constant({ output: "output" });
       },

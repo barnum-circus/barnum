@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  all,
-  config,
-  pipe,
-} from "../src/ast.js";
+import { all, config, pipe } from "../src/ast.js";
 import { constant, getField, identity } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { build, setup, verify } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -18,10 +12,10 @@ import { type IsExact, assertExact } from "./type-utils.js";
 describe("all type tests", () => {
   it("all: same input, tuple output", () => {
     const action = all(verify, verify);
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
+      CheckIO<
+        typeof action,
+        { artifact: string },
         [{ verified: boolean }, { verified: boolean }]
       >
     >();

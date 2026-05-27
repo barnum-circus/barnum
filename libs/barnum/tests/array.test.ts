@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  type Option,
-  forEach,
-  pipe,
-} from "../src/ast.js";
+import { type Option, forEach, pipe } from "../src/ast.js";
 import {
   constant,
   flatten,
@@ -17,7 +11,7 @@ import {
 import { first, last } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -26,55 +20,48 @@ import { type IsExact, assertExact } from "./type-utils.js";
 describe("array type tests", () => {
   it("range: any -> number[]", () => {
     const action = range(0, 10);
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Array<number>>>();
+    assertExact<CheckIO<typeof action, any, Array<number>>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("flatten: T[][] -> T[]", () => {
     const action = flatten<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Array<Array<number>>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Array<number>>>();
+    assertExact<CheckIO<typeof action, Array<Array<number>>, Array<number>>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("getIndex: Tuple -> Option<Tuple[N]>", () => {
     const action = getIndex<[string, number, boolean], 1>(1);
     assertExact<
-      IsExact<ExtractInput<typeof action>, [string, number, boolean]>
+      CheckIO<typeof action, [string, number, boolean], Option<number>>
     >();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("splitFirst: T[] -> Option<[T, T[]]>", () => {
     const action = splitFirst<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<[number, Array<number>]>>
+      CheckIO<typeof action, Array<number>, Option<[number, Array<number>]>>
     >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("splitLast: T[] -> Option<[T[], T]>", () => {
     const action = splitLast<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<[Array<number>, number]>>
+      CheckIO<typeof action, Array<number>, Option<[Array<number>, number]>>
     >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("first: Array<T> -> Option<T>", () => {
     const action = first<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
+    assertExact<CheckIO<typeof action, Array<number>, Option<number>>>();
   });
 
   it("last: Array<T> -> Option<T>", () => {
     const action = last<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Array<number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
+    assertExact<CheckIO<typeof action, Array<number>, Option<number>>>();
   });
 });
 

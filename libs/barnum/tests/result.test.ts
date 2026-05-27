@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  type ExtractInput,
   type ExtractOutput,
   type Option,
   type OptionDef,
@@ -17,7 +16,7 @@ import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Result as R } from "../src/result.js";
 import { runPipeline } from "../src/run.js";
 import { deploy, setup } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, type IsExact, assertExact } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {
@@ -65,28 +64,27 @@ function expectedTagAst(kind: string) {
 describe("Result constructor type info", () => {
   it("Result.ok<T>() retains value type with explicit param", () => {
     const ok = R.ok<string>();
-    assertExact<IsExact<ExtractInput<typeof ok>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof ok>, Result<string, never>>>();
+    assertExact<CheckIO<typeof ok, string, Result<string, never>>>();
   });
 
   it("Result.err<T>() retains error type with explicit param", () => {
     const err = R.err<never, number>();
-    assertExact<IsExact<ExtractInput<typeof err>, number>>();
+    assertExact<CheckIO<typeof err, number, Result<never, number>>>();
   });
 
   it("postfix .ok() infers type from output", () => {
     const result = constant("hello").ok();
-    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, never>>>();
+    assertExact<CheckIO<typeof result, any, Result<string, never>>>();
   });
 
   it("postfix .err() infers type from output", () => {
     const result = constant(42).err();
-    assertExact<IsExact<ExtractOutput<typeof result>, Result<never, number>>>();
+    assertExact<CheckIO<typeof result, any, Result<never, number>>>();
   });
 
   it("pipe(x, Result.ok<T>()) retains type with explicit param", () => {
     const result = pipe(constant("hello"), R.ok<string>());
-    assertExact<IsExact<ExtractOutput<typeof result>, Result<string, never>>>();
+    assertExact<CheckIO<typeof result, any, Result<string, never>>>();
   });
 
   it("pipe(x, Result.ok()) does not infer TValue from pipe context", () => {
@@ -102,10 +100,7 @@ describe("Result types", () => {
       constant(42) as TypedAction<string, number>,
     );
     assertExact<
-      IsExact<ExtractInput<typeof action>, Result<string, boolean>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Result<number, boolean>>
+      CheckIO<typeof action, Result<string, boolean>, Result<number, boolean>>
     >();
   });
 
@@ -113,9 +108,8 @@ describe("Result types", () => {
     const action = R.mapErr<string, number, boolean>(
       constant(true) as TypedAction<number, boolean>,
     );
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Result<string, boolean>>
+      CheckIO<typeof action, Result<string, number>, Result<string, boolean>>
     >();
   });
 
@@ -127,10 +121,7 @@ describe("Result types", () => {
       >,
     );
     assertExact<
-      IsExact<ExtractInput<typeof action>, Result<string, boolean>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Result<number, boolean>>
+      CheckIO<typeof action, Result<string, boolean>, Result<number, boolean>>
     >();
   });
 
@@ -141,9 +132,8 @@ describe("Result types", () => {
         Result<string, boolean>
       >,
     );
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Result<string, boolean>>
+      CheckIO<typeof action, Result<string, number>, Result<string, boolean>>
     >();
   });
 
@@ -151,42 +141,42 @@ describe("Result types", () => {
     const action = R.unwrapOr<string, number>(
       constant("fallback") as TypedAction<number, string>,
     );
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, Result<string, number>, string>>();
   });
 
   it("Result.asOkOption converts to Option<TValue>", () => {
     const action = R.asOkOption<string, number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
+    assertExact<
+      CheckIO<typeof action, Result<string, number>, Option<string>>
+    >();
   });
 
   it("Result.asErrOption converts to Option<TError>", () => {
     const action = R.asErrOption<string, number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
+    assertExact<
+      CheckIO<typeof action, Result<string, number>, Option<number>>
+    >();
   });
 
   it("Result.transpose swaps Result/Option nesting", () => {
     const action = R.transpose<string, number>();
     assertExact<
-      IsExact<ExtractInput<typeof action>, Result<Option<string>, number>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<Result<string, number>>>
+      CheckIO<
+        typeof action,
+        Result<Option<string>, number>,
+        Option<Result<string, number>>
+      >
     >();
   });
 
   it("Result.isOk returns boolean", () => {
     const action = R.isOk<string, number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+    assertExact<CheckIO<typeof action, Result<string, number>, boolean>>();
   });
 
   it("Result.isErr returns boolean", () => {
     const action = R.isErr<string, number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+    assertExact<CheckIO<typeof action, Result<string, number>, boolean>>();
   });
 
   it("Result branches with Ok/Err cases", () => {
@@ -197,8 +187,7 @@ describe("Result types", () => {
       ),
       R.unwrapOr<number, number>(identity()),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, string, number>>();
   });
 });
 
@@ -217,8 +206,7 @@ describe("Result.unwrapOr with throw tokens", () => {
       restart_handler_id: allocateRestartHandlerId(),
     });
     const action = R.unwrapOr<string, string>(throwToken);
-    assertExact<IsExact<ExtractInput<typeof action>, Result<string, string>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, Result<string, string>, string>>();
   });
 
   it(".unwrapOr() infers types from this constraint", () => {
@@ -231,8 +219,7 @@ describe("Result.unwrapOr with throw tokens", () => {
       restart_handler_id: allocateRestartHandlerId(),
     });
     const action = resultAction.unwrapOr(throwToken);
-    assertExact<IsExact<ExtractInput<typeof action>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, string, string>>();
   });
 
   it(".unwrapOr() composes in tryCatch pipeline", () => {
@@ -244,8 +231,7 @@ describe("Result.unwrapOr with throw tokens", () => {
       (throwError) => handler.unwrapOr(throwError),
       pipe(drop, constant({ data: "fallback" })),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { data: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { data: string }>>();
+    assertExact<CheckIO<typeof action, { data: string }, { data: string }>>();
   });
 
   it(".unwrapOr() chains into further pipeline steps", () => {
@@ -257,8 +243,9 @@ describe("Result.unwrapOr with throw tokens", () => {
       (throwError) => pipe(handler.unwrapOr(throwError), deploy),
       pipe(drop, constant({ deployed: false })),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
+    assertExact<
+      CheckIO<typeof action, { artifact: string }, { deployed: boolean }>
+    >();
   });
 
   it(".unwrapOr() produces Chain AST node", () => {

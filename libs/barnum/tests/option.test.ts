@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  type ExtractInput,
   type ExtractOutput,
   type Option,
   type OptionDef,
@@ -13,7 +12,7 @@ import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Option as O } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, type IsExact, assertExact } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {
@@ -61,23 +60,22 @@ function expectedTagAst(kind: string) {
 describe("Option constructor type info", () => {
   it("Option.some<T>() retains element type with explicit param", () => {
     const some = O.some<number>();
-    assertExact<IsExact<ExtractInput<typeof some>, number>>();
-    assertExact<IsExact<ExtractOutput<typeof some>, Option<number>>>();
+    assertExact<CheckIO<typeof some, number, Option<number>>>();
   });
 
   it("Option.none<T>() retains element type with explicit param", () => {
     const none = O.none<string>();
-    assertExact<IsExact<ExtractOutput<typeof none>, Option<string>>>();
+    assertExact<CheckIO<typeof none, void, Option<string>>>();
   });
 
   it("postfix .some() infers type from output", () => {
     const result = constant(42).some();
-    assertExact<IsExact<ExtractOutput<typeof result>, Option<number>>>();
+    assertExact<CheckIO<typeof result, any, Option<number>>>();
   });
 
   it("pipe(x, Option.some<T>()) retains type with explicit param", () => {
     const result = pipe(constant(42), O.some<number>());
-    assertExact<IsExact<ExtractOutput<typeof result>, Option<number>>>();
+    assertExact<CheckIO<typeof result, any, Option<number>>>();
   });
 
   it("pipe(x, Option.some()) does not infer T from pipe context", () => {
@@ -91,10 +89,11 @@ describe("Option namespace types", () => {
   it("Option.map(action): Option<T> -> Option<U>", () => {
     const action = O.map<{ artifact: string }, { verified: boolean }>(verify);
     assertExact<
-      IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+      CheckIO<
+        typeof action,
+        Option<{ artifact: string }>,
+        Option<{ verified: boolean }>
+      >
     >();
   });
 
@@ -103,9 +102,12 @@ describe("Option namespace types", () => {
       tag<"Option", OptionDef<{ artifact: string }>, "Some">("Some", "Option"),
       O.map(verify),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+      CheckIO<
+        typeof action,
+        { artifact: string },
+        Option<{ verified: boolean }>
+      >
     >();
   });
 
@@ -120,10 +122,11 @@ describe("Option namespace types", () => {
       ),
     );
     assertExact<
-      IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+      CheckIO<
+        typeof action,
+        Option<{ artifact: string }>,
+        Option<{ verified: boolean }>
+      >
     >();
   });
 
@@ -140,16 +143,18 @@ describe("Option namespace types", () => {
         ),
       ),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>
+      CheckIO<
+        typeof action,
+        { artifact: string },
+        Option<{ verified: boolean }>
+      >
     >();
   });
 
   it("Option.unwrapOr(defaultAction): Option<T> -> T", () => {
     const action = O.unwrapOr<string>(constant("fallback"));
-    assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, Option<string>, string>>();
   });
 
   it("Option.filter(predicate): Option<T> -> Option<T>", () => {
@@ -158,26 +163,22 @@ describe("Option namespace types", () => {
       tag<"Option", OptionDef<string>, "Some">("Some", "Option"),
     );
     const action = O.filter<string>(predicate);
-    assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
+    assertExact<CheckIO<typeof action, Option<string>, Option<string>>>();
   });
 
   it("Option.collect(): Option<T>[] -> T[]", () => {
     const action = O.collect<string>();
-    assertExact<IsExact<ExtractInput<typeof action>, Array<Option<string>>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Array<string>>>();
+    assertExact<CheckIO<typeof action, Array<Option<string>>, Array<string>>>();
   });
 
   it("Option.isSome(): Option<T> -> boolean", () => {
     const action = O.isSome<string>();
-    assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+    assertExact<CheckIO<typeof action, Option<string>, boolean>>();
   });
 
   it("Option.isNone(): Option<T> -> boolean", () => {
     const action = O.isNone<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Option<number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+    assertExact<CheckIO<typeof action, Option<number>, boolean>>();
   });
 
   it("full Option pipeline: construct -> map -> unwrapOr", () => {
@@ -186,8 +187,9 @@ describe("Option namespace types", () => {
       O.map(verify),
       O.unwrapOr(constant({ verified: false })),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+    assertExact<
+      CheckIO<typeof action, { artifact: string }, { verified: boolean }>
+    >();
   });
 
   it("forEach + Option.collect pipeline", () => {
@@ -196,26 +198,27 @@ describe("Option namespace types", () => {
       O.collect<{ verified: boolean }>(),
     );
     assertExact<
-      IsExact<ExtractInput<typeof action>, Array<Option<{ artifact: string }>>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Array<{ verified: boolean }>>
+      CheckIO<
+        typeof action,
+        Array<Option<{ artifact: string }>>,
+        Array<{ verified: boolean }>
+      >
     >();
   });
 
   it("Option.unwrap: Option<T> -> T", () => {
     const action = O.unwrap<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, Option<number>>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, Option<number>, number>>();
   });
 
   it("Option.transpose: Option<Result<T,E>> -> Result<Option<T>,E>", () => {
     const action = O.transpose<string, number>();
     assertExact<
-      IsExact<ExtractInput<typeof action>, Option<Result<string, number>>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Result<Option<string>, number>>
+      CheckIO<
+        typeof action,
+        Option<Result<string, number>>,
+        Result<Option<string>, number>
+      >
     >();
   });
 });

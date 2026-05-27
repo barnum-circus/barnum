@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  type ExtractInput,
-  type ExtractOutput,
   type Result,
   type TypedAction,
   pipe,
@@ -14,7 +12,7 @@ import {
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { build, setup, verify } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // tryCatch type tests
@@ -30,8 +28,9 @@ describe("tryCatch type tests", () => {
       (_throwError) => pipe(setup, build),
       pipe(drop, constant({ artifact: "fallback" })),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { artifact: string }>>();
+    assertExact<
+      CheckIO<typeof action, { project: string }, { artifact: string }>
+    >();
   });
 
   it("throwError token is TypedAction<TError, never>", () => {
@@ -47,7 +46,7 @@ describe("tryCatch type tests", () => {
         pipe(drop, constant("ok")),
       getField<{ code: number; msg: string }, "msg">("msg"),
     );
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, any, string>>();
   });
 
   it("nested tryCatch: each throwError has independent TError", () => {
@@ -90,8 +89,9 @@ describe("race type tests", () => {
 
   it("race: all branches same input/output, result matches", () => {
     const action = race(verify, verify);
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+    assertExact<
+      CheckIO<typeof action, { artifact: string }, { verified: boolean }>
+    >();
   });
 
   it("race produces Chain(Tag(Continue), Handle(...)) AST", () => {
@@ -101,8 +101,7 @@ describe("race type tests", () => {
 
   it("sleep: any → null", () => {
     const action = sleep(1000);
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, null>>();
+    assertExact<CheckIO<typeof action, any, null>>();
   });
 
   it("sleep produces Invoke AST", () => {
@@ -122,9 +121,12 @@ describe("withTimeout type tests", () => {
 
   it("withTimeout: preserves input, wraps output in Result<TOut, void>", () => {
     const action = withTimeout(constant(5000), verify);
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Result<{ verified: boolean }, void>>
+      CheckIO<
+        typeof action,
+        { artifact: string },
+        Result<{ verified: boolean }, void>
+      >
     >();
   });
 
@@ -135,8 +137,7 @@ describe("withTimeout type tests", () => {
 
   it("withTimeout with any-input body", () => {
     const action = withTimeout(constant(3000), constant("result"));
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, void>>>();
+    assertExact<CheckIO<typeof action, any, Result<string, void>>>();
   });
 });
 

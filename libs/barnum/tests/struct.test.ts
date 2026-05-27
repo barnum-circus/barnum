@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  type TypedAction,
-  pipe,
-} from "../src/ast.js";
+import { type TypedAction, pipe } from "../src/ast.js";
 import {
   allObject,
   constant,
@@ -14,7 +9,7 @@ import {
 } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -24,16 +19,14 @@ describe("struct type tests", () => {
   it("getField: { key: V } -> V", () => {
     const action = getField<{ name: string; age: number }, "name">("name");
     assertExact<
-      IsExact<ExtractInput<typeof action>, { name: string; age: number }>
+      CheckIO<typeof action, { name: string; age: number }, string>
     >();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("wrapInField: T -> Record<F, T>", () => {
     const action = wrapInField<"foo", number>("foo");
-    assertExact<IsExact<ExtractInput<typeof action>, number>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Record<"foo", number>>>();
+    assertExact<CheckIO<typeof action, number, Record<"foo", number>>>();
     expect(action.kind).toBe("Invoke");
   });
 
@@ -43,11 +36,9 @@ describe("struct type tests", () => {
       "b",
     );
     assertExact<
-      IsExact<ExtractInput<typeof action>, { a: number; b: string; c: boolean }>
-    >();
-    assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
+      CheckIO<
+        typeof action,
+        { a: number; b: string; c: boolean },
         Pick<{ a: number; b: string; c: boolean }, "a" | "b">
       >
     >();
@@ -58,9 +49,7 @@ describe("struct type tests", () => {
       name: constant("hello"),
       count: constant(42),
     });
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, { name: string; count: number }>
-    >();
+    assertExact<CheckIO<typeof action, any, { name: string; count: number }>>();
   });
 
   it("allObjects has the correct input type (one key)", () => {
@@ -70,7 +59,7 @@ describe("struct type tests", () => {
       name: acceptsNumber,
     });
 
-    assertExact<IsExact<ExtractInput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, number, { name: null }>>();
   });
 
   it("allObjects has the correct input type (multiple keys, identical input)", () => {
@@ -81,7 +70,7 @@ describe("struct type tests", () => {
       bar: acceptsNumber,
     });
 
-    assertExact<IsExact<ExtractInput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, number, { foo: null; bar: null }>>();
   });
 
   it("allObjects rejects invalid inputs (multiple keys, overlapping input)", () => {

@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  type Option,
-  pipe,
-} from "../src/ast.js";
+import { type Option, pipe } from "../src/ast.js";
 import { asOption, constant } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -16,18 +11,17 @@ import { type IsExact, assertExact } from "./type-utils.js";
 describe("AsOption type tests", () => {
   it("asOption() standalone: boolean → Option<null>", () => {
     const action = asOption();
-    assertExact<IsExact<ExtractInput<typeof action>, boolean>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<null>>>();
+    assertExact<CheckIO<typeof action, boolean, Option<null>>>();
   });
 
   it(".asOption() postfix: infers from preceding output", () => {
     const action = constant(true).asOption();
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<null>>>();
+    assertExact<CheckIO<typeof action, any, Option<null>>>();
   });
 
   it("asOption() composes in pipe", () => {
     const action = pipe(constant(true), asOption());
-    assertExact<IsExact<ExtractOutput<typeof action>, Option<null>>>();
+    assertExact<CheckIO<typeof action, any, Option<null>>>();
   });
 });
 

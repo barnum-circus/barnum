@@ -1,17 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  branch,
-  config,
-  pipe,
-  tap,
-} from "../src/ast.js";
+import { branch, config, pipe, tap } from "../src/ast.js";
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { chain } from "../src/chain.js";
 import { runPipeline } from "../src/run.js";
 import { build, classifyErrors, deploy, setup, verify } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -20,8 +13,9 @@ import { type IsExact, assertExact } from "./type-utils.js";
 describe("pipe type tests", () => {
   it("pipe: input of first, output of last", () => {
     const action = pipe(setup, build, verify);
-    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+    assertExact<
+      CheckIO<typeof action, { project: string }, { verified: boolean }>
+    >();
     expect(action.kind).toBe("Chain");
   });
 
@@ -65,8 +59,7 @@ describe("pipe type tests", () => {
       verify,
       deploy,
     );
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
+    assertExact<CheckIO<typeof action, any, { deployed: boolean }>>();
     expect(action.kind).toBe("Chain");
   });
 });

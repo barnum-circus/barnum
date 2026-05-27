@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  config,
-  forEach,
-  pipe,
-} from "../src/ast.js";
+import { config, forEach, pipe } from "../src/ast.js";
 import { constant, getField, wrapInField } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { listFiles, migrate, setup, verify } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -19,10 +13,11 @@ describe("forEach type tests", () => {
   it("forEach: wraps input/output in arrays", () => {
     const action = forEach(verify);
     assertExact<
-      IsExact<ExtractInput<typeof action>, Array<{ artifact: string }>>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Array<{ verified: boolean }>>
+      CheckIO<
+        typeof action,
+        Array<{ artifact: string }>,
+        Array<{ verified: boolean }>
+      >
     >();
     expect(action.kind).toBe("ForEach");
   });

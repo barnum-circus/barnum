@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  type ExtractInput,
-  type ExtractOutput,
   config,
   earlyReturn,
   forEach,
@@ -21,7 +19,7 @@ import {
   setup,
   typeCheck,
 } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {
@@ -75,8 +73,9 @@ describe("loop type tests", () => {
     const action = loop<{ stable: true }, { deployed: boolean }>(
       (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
+    assertExact<
+      CheckIO<typeof action, { deployed: boolean }, { stable: true }>
+    >();
     expect(action.kind).toBe("Chain");
   });
 
@@ -87,7 +86,7 @@ describe("loop type tests", () => {
         Clean: done,
       }),
     );
-    assertExact<IsExact<ExtractOutput<typeof action>, null>>();
+    assertExact<CheckIO<typeof action, any, null>>();
     expect(action.kind).toBe("Chain");
   });
 
@@ -98,21 +97,21 @@ describe("loop type tests", () => {
         Clean: done,
       }),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, null>>();
+    assertExact<CheckIO<typeof action, any, null>>();
   });
 
   it("loop<TBreak, TIn>: both explicit for stateful loops", () => {
     const action = loop<{ stable: true }, { deployed: boolean }>(
       (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
+    assertExact<
+      CheckIO<typeof action, { deployed: boolean }, { stable: true }>
+    >();
   });
 
   it("without explicit TBreak, done has input=null (accepts void variants)", () => {
     loop((recur, done) => {
-      assertExact<IsExact<ExtractInput<typeof done>, null>>();
+      assertExact<CheckIO<typeof done, null, never>>();
       classifyErrors.branch({ HasErrors: forEach(fix), Clean: done });
       return recur;
     });
@@ -127,23 +126,9 @@ describe("loop type tests", () => {
   });
 
   it("done and recur both output never", () => {
-    loop((recur, done) => {
-      assertExact<IsExact<ExtractOutput<typeof recur>, never>>();
-      assertExact<IsExact<ExtractOutput<typeof done>, never>>();
-      return recur;
-    });
-  });
-
-  it("recur's input type is TIn", () => {
-    loop<{ stable: true }, { deployed: boolean }>((recur, _done) => {
-      assertExact<IsExact<ExtractInput<typeof recur>, { deployed: boolean }>>();
-      return healthCheck.branch({ Continue: recur, Break: _done });
-    });
-  });
-
-  it("done's input type is TBreak", () => {
     loop<{ stable: true }, { deployed: boolean }>((recur, done) => {
-      assertExact<IsExact<ExtractInput<typeof done>, { stable: true }>>();
+      assertExact<CheckIO<typeof recur, { deployed: boolean }, never>>();
+      assertExact<CheckIO<typeof done, { stable: true }, never>>();
       return healthCheck.branch({ Continue: recur, Break: done });
     });
   });
@@ -155,14 +140,16 @@ describe("loop type tests", () => {
         Clean: done,
       }),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<CheckIO<typeof action, any, null>>();
   });
 
   it("loop with explicit TIn has exact input", () => {
     const action = loop<{ stable: true }, { deployed: boolean }>(
       (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
+    assertExact<
+      CheckIO<typeof action, { deployed: boolean }, { stable: true }>
+    >();
   });
 
   it(".drop() before recur connects void output to void input", () => {

@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createHandler, createHandlerWithConfig } from "../src/handler.js";
-import {
-  type ExtractInput,
-  type ExtractOutput,
-  type LoopResult,
-  config,
-  pipe,
-} from "../src/ast.js";
+import { type LoopResult, config, pipe } from "../src/ast.js";
 import {
   build,
   deploy,
@@ -19,7 +13,7 @@ import {
   typeCheck,
   verify,
 } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Handler type tests — test fixture handlers
@@ -28,10 +22,10 @@ import { type IsExact, assertExact } from "./type-utils.js";
 describe("handler types", () => {
   it("setup: { project: string } -> { initialized: boolean, project: string }", () => {
     const action = setup;
-    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
     assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
+      CheckIO<
+        typeof action,
+        { project: string },
         { initialized: boolean; project: string }
       >
     >();
@@ -41,35 +35,37 @@ describe("handler types", () => {
   it("build: { initialized: boolean, project: string } -> { artifact: string }", () => {
     const action = build;
     assertExact<
-      IsExact<
-        ExtractInput<typeof action>,
-        { initialized: boolean; project: string }
+      CheckIO<
+        typeof action,
+        { initialized: boolean; project: string },
+        { artifact: string }
       >
     >();
-    assertExact<IsExact<ExtractOutput<typeof action>, { artifact: string }>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("verify: { artifact: string } -> { verified: boolean }", () => {
     const action = verify;
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+    assertExact<
+      CheckIO<typeof action, { artifact: string }, { verified: boolean }>
+    >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("deploy: { verified: boolean } -> { deployed: boolean }", () => {
     const action = deploy;
-    assertExact<IsExact<ExtractInput<typeof action>, { verified: boolean }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
+    assertExact<
+      CheckIO<typeof action, { verified: boolean }, { deployed: boolean }>
+    >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("healthCheck: { deployed: boolean } -> LoopResult<{ deployed: boolean }, { stable: true }>", () => {
     const action = healthCheck;
-    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
     assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
+      CheckIO<
+        typeof action,
+        { deployed: boolean },
         LoopResult<{ deployed: boolean }, { stable: true }>
       >
     >();
@@ -79,34 +75,31 @@ describe("handler types", () => {
   it("listFiles: { initialized: boolean, project: string } -> { file: string }[]", () => {
     const action = listFiles;
     assertExact<
-      IsExact<
-        ExtractInput<typeof action>,
-        { initialized: boolean; project: string }
+      CheckIO<
+        typeof action,
+        { initialized: boolean; project: string },
+        Array<{ file: string }>
       >
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, Array<{ file: string }>>
     >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("migrate: { file: string } -> { file: string, migrated: boolean }", () => {
     const action = migrate;
-    assertExact<IsExact<ExtractInput<typeof action>, { file: string }>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, { file: string; migrated: boolean }>
+      CheckIO<
+        typeof action,
+        { file: string },
+        { file: string; migrated: boolean }
+      >
     >();
     expect(action.kind).toBe("Invoke");
   });
 
   it("typeCheck: never -> TypeError[]", () => {
     const action = typeCheck;
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
     assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
-        Array<{ file: string; message: string }>
-      >
+      CheckIO<typeof action, never, Array<{ file: string; message: string }>>
     >();
     expect(action.kind).toBe("Invoke");
   });
@@ -114,10 +107,11 @@ describe("handler types", () => {
   it("fix: { file: string, message: string } -> { file: string, fixed: boolean }", () => {
     const action = fix;
     assertExact<
-      IsExact<ExtractInput<typeof action>, { file: string; message: string }>
-    >();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, { file: string; fixed: boolean }>
+      CheckIO<
+        typeof action,
+        { file: string; message: string },
+        { file: string; fixed: boolean }
+      >
     >();
     expect(action.kind).toBe("Invoke");
   });
@@ -138,8 +132,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, { name: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, number>>();
+    assertExact<CheckIO<typeof handler, { name: string }, number>>();
   });
 
   it("inputValidator + outputValidator infers both", () => {
@@ -151,8 +144,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, number>>();
+    assertExact<CheckIO<typeof handler, string, number>>();
   });
 
   // --- source handler (no inputValidator) ---
@@ -164,8 +156,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, void>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, string>>();
+    assertExact<CheckIO<typeof handler, void, string>>();
   });
 
   it("source handler with outputValidator", () => {
@@ -176,8 +167,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, void>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, Array<string>>>();
+    assertExact<CheckIO<typeof handler, void, Array<string>>>();
   });
 
   // --- explicit type params without validators ---
@@ -189,8 +179,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, { id: number }>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, string>>();
+    assertExact<CheckIO<typeof handler, { id: number }, string>>();
   });
 
   it("explicit type params with outputValidator", () => {
@@ -201,8 +190,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, number>>();
+    assertExact<CheckIO<typeof handler, string, number>>();
   });
 
   // --- handle must match declared types ---
@@ -300,8 +288,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, number>>();
+    assertExact<CheckIO<typeof handler, string, number>>();
   });
 
   it("accepts outputValidator that exactly matches explicit TOutput", () => {
@@ -313,8 +300,7 @@ describe("createHandler optional types", () => {
       },
       "handler",
     );
-    assertExact<IsExact<ExtractInput<typeof handler>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof handler>, number>>();
+    assertExact<CheckIO<typeof handler, string, number>>();
   });
 
   // --- source handlers in workflows ---
@@ -347,8 +333,7 @@ describe("createHandler optional types", () => {
       "double",
     );
     const pipeline = pipe(toLength, double);
-    assertExact<IsExact<ExtractInput<typeof pipeline>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof pipeline>, number>>();
+    assertExact<CheckIO<typeof pipeline, string, number>>();
   });
 
   it("explicit-typed handlers compose in pipe", () => {
@@ -365,8 +350,7 @@ describe("createHandler optional types", () => {
       "double",
     );
     const pipeline = pipe(toLength, double);
-    assertExact<IsExact<ExtractInput<typeof pipeline>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof pipeline>, number>>();
+    assertExact<CheckIO<typeof pipeline, string, number>>();
   });
 
   it("mixed validator + explicit compose in pipe", () => {
@@ -384,8 +368,7 @@ describe("createHandler optional types", () => {
       "double",
     );
     const pipeline = pipe(toLength, double);
-    assertExact<IsExact<ExtractInput<typeof pipeline>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof pipeline>, number>>();
+    assertExact<CheckIO<typeof pipeline, string, number>>();
   });
 
   it("pipe rejects mismatched adjacent types", () => {
@@ -422,8 +405,7 @@ describe("createHandler optional types", () => {
       "double",
     );
     const pipeline = pipe(source, double);
-    assertExact<IsExact<ExtractInput<typeof pipeline>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof pipeline>, number>>();
+    assertExact<CheckIO<typeof pipeline, any, number>>();
   });
 
   it("postfix .then() works with explicit-typed handler", () => {
@@ -441,8 +423,7 @@ describe("createHandler optional types", () => {
       "double",
     );
     const chained = toLength.then(double);
-    assertExact<IsExact<ExtractInput<typeof chained>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof chained>, number>>();
+    assertExact<CheckIO<typeof chained, string, number>>();
   });
 });
 
@@ -461,8 +442,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory("anything");
-    assertExact<IsExact<ExtractInput<typeof action>, void>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, void, string>>();
   });
 
   it("stepConfigValidator provided: stepConfig is typed", () => {
@@ -474,8 +454,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory({ retries: 3 });
-    assertExact<IsExact<ExtractInput<typeof action>, void>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, void, number>>();
   });
 
   it("explicit TStepConfig without validator", () => {
@@ -486,8 +465,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory({ retries: 3 });
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, never, string>>();
   });
 
   // --- inputValidator optional ---
@@ -503,8 +481,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory({ retries: 3 });
-    assertExact<IsExact<ExtractInput<typeof action>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, string, string>>();
   });
 
   it("without inputValidator: input defaults to void", () => {
@@ -515,8 +492,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory("anything");
-    assertExact<IsExact<ExtractInput<typeof action>, void>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    assertExact<CheckIO<typeof action, void, string>>();
   });
 
   it("explicit type params without inputValidator", () => {
@@ -532,8 +508,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory({ retries: 3 });
-    assertExact<IsExact<ExtractInput<typeof action>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, string, number>>();
   });
 
   // --- all validators present ---
@@ -550,8 +525,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory({ retries: 3 });
-    assertExact<IsExact<ExtractInput<typeof action>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, string, number>>();
   });
 
   // --- type errors when lying ---
@@ -615,8 +589,7 @@ describe("createHandlerWithConfig optional types", () => {
       "handler",
     );
     const action = factory({ retries: 3 });
-    assertExact<IsExact<ExtractInput<typeof action>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
+    assertExact<CheckIO<typeof action, string, number>>();
   });
 
   // --- pipeline composition ---
@@ -638,8 +611,7 @@ describe("createHandlerWithConfig optional types", () => {
       "withRetries",
     );
     const pipeline = pipe(source, withRetries({ retries: 3 }));
-    assertExact<IsExact<ExtractInput<typeof pipeline>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof pipeline>, string>>();
+    assertExact<CheckIO<typeof pipeline, any, string>>();
   });
 
   it("explicit-typed withConfig handler composes in pipe", () => {
@@ -656,7 +628,6 @@ describe("createHandlerWithConfig optional types", () => {
       "transform",
     );
     const pipeline = pipe(source, transform({ n: 10 }));
-    assertExact<IsExact<ExtractInput<typeof pipeline>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof pipeline>, number>>();
+    assertExact<CheckIO<typeof pipeline, any, number>>();
   });
 });

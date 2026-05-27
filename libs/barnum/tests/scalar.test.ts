@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
+import { pipe } from "../src/ast.js";
 import { constant, drop, identity, panic } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
-import { type IsExact, assertExact } from "./type-utils.js";
+import { type CheckIO, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests
@@ -12,28 +12,24 @@ import { type IsExact, assertExact } from "./type-utils.js";
 describe("scalar type tests", () => {
   it("constant: any -> T", () => {
     const action = constant({ x: 1 });
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { x: number }>>();
+    assertExact<CheckIO<typeof action, any, { x: number }>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("identity: T -> T", () => {
     const action = identity<{ x: number }>();
-    assertExact<IsExact<ExtractInput<typeof action>, { x: number }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { x: number }>>();
+    assertExact<CheckIO<typeof action, { x: number }, { x: number }>>();
     expect(action.kind).toBe("Invoke");
   });
 
   it("drop: any -> null", () => {
-    assertExact<IsExact<ExtractInput<typeof drop>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof drop>, null>>();
+    assertExact<CheckIO<typeof drop, any, null>>();
     expect(drop.kind).toBe("Invoke");
   });
 
   it("panic: any -> never", () => {
     const action = panic("boom");
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, never>>();
+    assertExact<CheckIO<typeof action, any, never>>();
     expect(action.kind).toBe("Invoke");
   });
 });
