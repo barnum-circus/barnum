@@ -42,3 +42,8 @@ Requires the void vs never change to land first (drop/sleep/.drop() output `void
 - **Con:** More verbose — every use of constant/VarRef/etc. after a value-producing step needs `.drop()`.
 
 This is a refinement, not urgent. The `any` input works correctly today.
+
+------
+
+- seems like we decided against this?
+- I am not opposed, explicitness seems good. But perhaps there was a reason.

@@ -91,3 +91,7 @@ Users never write `getIndex` or deal with `Option` unwrapping for framework-prov
 ## Priority
 
 High. This is a significant ergonomics win that touches the most common user-facing patterns (fold, withResource). The implementation is mechanical — wrap existing body actions in bind + getIndex extraction.
+
+-----
+
+- agree, this seems doable now.

@@ -147,3 +147,10 @@ Input is `never` — the timer doesn't consume pipeline data. It's a side-channe
 4. Timer action (Invoke that external driver resolves after duration)
 5. Tests per above
 6. Demo: add timeout and error handling to an existing demo workflow
+
+-----
+
+- sleep exists, can we clean this up?
+- withTimeout seems like a nice thing to expose tho, if we don't already. It should return a Result<T, null>
+- it probably already exists
+- we have an raii doc, is this needed?

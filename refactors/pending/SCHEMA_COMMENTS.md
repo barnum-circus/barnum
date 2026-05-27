@@ -81,3 +81,9 @@ Option A is the most expressive but hardest to implement correctly. Option C is 
 1. Does the Rust validator (`jsonschema` crate) correctly ignore `$comment`? (It should per spec, but worth verifying.)
 2. Should `description` (from `.describe()`) also be preserved in the JSON Schema output? Currently untested whether `toJSONSchema` includes it.
 3. Is there a use case for comments beyond handler schemas — e.g., annotating the serialized AST config itself?
+
+-----
+
+- obviously we go thru A
+- I have no idea what description is, the only visible output of this is comments in either the JSON schema and in particular in the JSON schema as printed for the LLM
+- everything else is unrelated

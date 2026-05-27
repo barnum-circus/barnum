@@ -64,3 +64,7 @@ raw = toJSONSchema(schema, {
 - Add a test in `libs/barnum/tests/schema.test.ts` with a recursive `z.lazy()` schema (tree node, linked list).
 - Add an execution test that actually passes recursive data through a handler and validates it round-trips correctly through the Rust engine.
 - Verify the Rust JSON Schema validator resolves `$ref` within `$defs` for a recursive schema.
+
+-----
+
+- why do we care, now that we go thru a file

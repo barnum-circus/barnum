@@ -78,3 +78,13 @@ Option A is the cleanest UX. The engine already tracks in-flight work per ForEac
 2. Should backpressure be FIFO (dispatch in order) or allow out-of-order dispatch with ordered collection?
 3. Does this interact with `withTimeout` — if a slot times out, does it free the concurrency slot?
 4. Naming: `mapLimited`, `mapWithConcurrency`, `mapN`, `mapBounded`?
+
+------
+
+- this is to be done in userland with no extra primitives, if possible. A is out. B or C are the only options.
+- a chunks method seems appropriate (i.e. is userland enough)
+- I think we can only achieve "three at a time, they finish, then the next three" rather than "max three in flight" with current primitives. What would it take to support that?
+- this probably requires new primitives. Can we do it with algebraic effect handlers? e.g. a resume handler that is called multiple times? What if the current map (parallel map) is just a resume handler called n times in parallel?
+- this feels like the right way to tackle this
+- a userland three-at-a-time thing seems prudent to do initially anyway.
+- alternative is that three-at-a-time is easy enough to do in userland, and we recommend that (that is the current state of the docs)

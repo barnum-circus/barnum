@@ -135,3 +135,7 @@ There's a middle ground we haven't used: **Rust-side transforms during flattenin
 This gives the scheduler semantic information without adding new AST nodes to the TS → Rust serialization boundary. The TS side emits the expansion (cheap to add), and the Rust flattener recovers the semantic intent (cheap to consume).
 
 We don't need this yet, but it's worth noting as a future escape hatch. It's how many compilers work: the source language has a large set of surface constructs, the IR has a small set of primitives, and optimization passes recognize patterns in the IR to recover high-level intent.
+
+-----
+
+- interesting, can we put into past

@@ -189,3 +189,9 @@ Both compile to Handle/Perform. Both use HOAS to scope the effect tokens.
 | `libs/barnum/tests/types.test.ts` | Type-level tests |
 | `libs/barnum/tests/patterns.test.ts` | AST shape tests |
 | Rust engine | Handle frames already support state + state_update. No engine changes needed — only new handler DAGs. |
+
+
+--------
+
+- doesn't this already work? don't we haev withState?
+- wtf is update?

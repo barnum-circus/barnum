@@ -231,3 +231,7 @@ Add to `libs/barnum/tests/`:
 ### Demo: `demos/peano-arithmetic/`
 
 Mutual recursion with `defineRecursiveFunctions`. isEven calls isOdd, isOdd calls isEven, both subtract one each step. See the pattern doc for the full code.
+
+-----
+
+- doesn't this exist? e.g. peano exists? can we close this?

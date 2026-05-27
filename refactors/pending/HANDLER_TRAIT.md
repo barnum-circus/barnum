@@ -126,3 +126,7 @@ Recommendation: `HandlerError` as a `#[non_exhaustive]` enum. Each handler crate
 - Adding new handler types without modifying the scheduler
 - Testing workflows with mock handlers (`struct MockHandler { output: Value }`)
 - Plugin-style handler registration for third-party handler types
+
+------
+
+- we need to serialize this eventually, will it be possible to add a bound e.g. + Serialize + Deserialize?

@@ -50,3 +50,7 @@ This would reject `withResource(...)` (whose `__in` is `(input: Record<string, u
 ## Risk
 
 This might break other valid patterns where the body expression has a narrow input type but is always preceded by a VarRef in practice. Needs audit of existing `bindInput` usage across demos.
+
+-----
+
+- wtf is this? does this still apply if we modify withResource to pass a tuple?

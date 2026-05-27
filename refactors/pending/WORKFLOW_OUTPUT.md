@@ -183,3 +183,7 @@ Callers that want the result can now capture it:
 const result = await runPipeline(pipe(constant({ x: 1 }), transform));
 console.log(result);  // typed as ExtractOutput<typeof pipeline>
 ```
+
+---------
+
+- seems done?

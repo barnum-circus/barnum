@@ -196,3 +196,7 @@ A future robustness pass should:
 2. **Generalize to handler panics.** If the handler DAG dispatches an external task and the task panics/fails, the engine needs a way to un-suspend the Handle. Options: propagate the error as a Discard (tears down body, Handle exits with error), or propagate as a special "handler failed" signal that the TypeScript layer can catch.
 
 3. **Interact with RAII/Bracket (Phase 5).** If a Handle is inside a `withResource` block and the handler fails, the resource's dispose action must still run. The recovery path must not skip dispose.
+
+-----
+
+wtf is this?

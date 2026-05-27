@@ -275,3 +275,7 @@ All phases complete.
 - **Phase A: Iterator.splitFirst / splitLast** — `libs/barnum/src/iterator.ts` + branchFamily dispatch in `ast.ts`
 - **Phase B: Iterator.fold + isEmpty** — `libs/barnum/src/iterator.ts` + postfix methods in `ast.ts`
 - **Phase C: Sequential deploy demo** — `demos/sequential-deploy/`
+
+-----
+
+- do we have some of this done?

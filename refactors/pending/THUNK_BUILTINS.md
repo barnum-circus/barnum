@@ -98,3 +98,7 @@ This is a fundamental limitation of the handler-as-export-name architecture. A h
 ## Alternative considered
 
 Loop-with-closure (`loop(({ recur, done }) => body)`) solves recur/done specifically but doesn't help drop, identity, merge, flatten. The thunk approach is orthogonal and more general.
+
+------
+
+- seems worth doing, and not blocked by any other work?

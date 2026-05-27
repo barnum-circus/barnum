@@ -637,3 +637,8 @@ These Rust Iterator methods don't translate to barnum's eager model:
 - `.chunks(n)` / `.windows(n)` — new builtins
 - `.position(pred)` — needs enumerate
 - `.findMap(f)` — compose only
+
+
+--------
+
+- can we update this to note what's been impl'd

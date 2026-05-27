@@ -150,3 +150,7 @@ The effect system (Handle/Perform) doesn't add value here because the "event sou
 One thing the simple pattern doesn't handle well is event batching. If three CI status events arrive in quick succession, you might want to process only the latest. This is a runtime concern (the event source handler can debounce), not a workflow concern. But it's worth noting as a pattern that users will need guidance on.
 
 Similarly: if the workflow is mid-processing when a new event arrives, the event is naturally queued — the engine won't call `waitForPrEvent` again until the current iteration completes and recurs. This is correct serial-processing behavior, but users should understand it.
+
+-----
+
+- is this just event bus?

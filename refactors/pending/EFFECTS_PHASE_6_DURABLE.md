@@ -128,3 +128,11 @@ Recommend: Suspend pauses the entire workflow. The driver serializes the full st
 5. `pause()` TypeScript function
 6. CLI: `barnum resume --state <file> --event <json>`
 7. Tests per above
+
+-------
+
+- this doesnt' feel like an alg effect thing. As in, can't we just serialize the stack tree, then resume?
+- then anything that's in flight get's re-executed?
+- and if we have some sort of "poll for user input" thing just keeps running and proceeds when there is state
+- can use event bus primitives
+- it's possible that we need a "suspend until" primitive tho, as polling is a lame way to do this

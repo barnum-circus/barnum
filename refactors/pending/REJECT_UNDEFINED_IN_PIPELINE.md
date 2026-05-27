@@ -32,3 +32,8 @@ A constraint like `TValue extends {} | null` or a conditional `undefined extends
 ## Scope
 
 Small. The handler factory is the only internal caller that passes an unconstrained type to `constant`. The fix is threading the generic through one function.
+
+-----
+
+- seems worth doing
+- let's do the research now tho? the fucking point of these docs is to do the fucking research.

@@ -101,3 +101,7 @@ The builder warns at build time using best-effort type checking. The scheduler e
 3. **Interaction with `all` and variable sharing.** If a second-class function is passed to multiple branches of an `all`, each branch can use it, but none can return it. The `all` node's output type must not contain it. This is straightforward in principle but requires the type machinery to track second-class markers through combinators.
 
 4. **Should plain values derived from second-class functions be restricted?** If `getConn()` returns a connection handle (a plain value, not a function), should that handle also be second-class? The connection handle is just as dangling as the accessor after dispose. This pushes toward linear/affine types for resource handles, which is a larger design space than second-class functions alone.
+
+----
+
+- doesn't seem worth doing yet

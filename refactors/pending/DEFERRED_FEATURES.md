@@ -372,3 +372,8 @@ Whether a dedicated `Bool` tagged union (True/False) is still worth adding is an
 `z.void()` cannot be represented in JSON Schema, so handlers that return `Result<void, E>` (or any type containing void) fail at runtime when `createHandler` attempts to convert the Zod validator. The workaround is to use `null` instead of `void` in Result types at the handler boundary (e.g., `Result<null, string>`).
 
 The proper fix would be for the schema conversion layer (`zodToCheckedJsonSchema`) to transparently map `z.void()` to `z.null()` — void and null are semantically equivalent in the JSON wire format (both serialize to `null`). This would let handler authors write `Result<void, string>` naturally without thinking about JSON Schema limitations.
+
+----
+
+- let's review this, see what's still needed? some are covered by other docs (e.g. stream covered by event bus?) and others maybe implemented
+- void -> null ... why do we need this?

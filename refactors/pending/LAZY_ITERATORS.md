@@ -296,3 +296,11 @@ This is significantly more complex but would give the best of both worlds. Proba
 4. **Can we optimize the eager model instead?** The Rust engine could detect chains like `ForEach(f) → ForEach(filter_expand) → GetField("value")` and fuse them into a single pass, without any changes to the TypeScript API. This is Option A from the old doc — engine-level optimization of the existing eager AST. Less general but zero API change.
 
 5. **Naming**: `realize()`, `materialize()`, `evaluate()`, `run()`, `execute()`? The Rust ecosystem uses `collect()` as the terminal, but we already use `collect()` for "unwrap Iterator to array." If lazy `.collect()` means "realize + unwrap," that's consistent. Then maybe we don't need a separate `realize()` — `.collect()` is the terminal, and `.lazy().filter(pred).collect().iterate()` is the way back to eager.
+
+-----------
+
+this doesn't strike me as correct.
+1. lazy iteration is all we need
+2. items.iterate().filter(x).map(y).collect() is fine, and can be done in parallel. At the time of collect we have steps: [filter(x), map(y)]. Great! We dispatch those in parallel and then collect (flatten) to an array. Where did that flatMap come in? Well, every step is a flatMap: [flatMap(filter(x)), flatMap(map(y).wrapInArray())] (this is a silly impl but suffices to demonstrate). And we still have the same execution model: for each, call filter; for each of those, call map.wrapInArray, then collect the Array<Array<T>>
+3. Please simplify accordingly.
+4. note that alternatively, having a flatMap + a map primitives seems fine if needed

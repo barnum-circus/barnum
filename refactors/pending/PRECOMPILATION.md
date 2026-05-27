@@ -141,3 +141,12 @@ This is a significant extension. It should wait until the core workflow algebra 
 1. **Pre-compiled workflow files** — Low effort, immediate value. The `FlatConfig` is already JSON-serializable. Just need a `compile` CLI subcommand.
 2. **Resumption checkpoints** — Medium effort. Need to make `WorkflowState` serializable (it currently contains non-serializable tokio primitives in the event loop layer, but the core state in `barnum_engine` is pure data).
 3. **Contextual effects** — High effort, speculative value. Defer until real usage reveals the need.
+
+-------
+
+- runPipeline is executed from JS, seems like this can be `pipeline.compile().run()` and `JSON.deserialize(compiledPipeline).run()` with this being in userland
+- seems worth doing
+- `pipeline.run()` as shorthand for `.compile().run()` seems good, maybe
+- regardless, postfix seems better than `runPipeline(pipeline)`
+- the rest requires a bigger change: default export pipeline handling. We should write that up in a separate doc.
+- postfix stuff is g2g tho
