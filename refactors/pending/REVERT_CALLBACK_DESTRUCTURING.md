@@ -30,17 +30,6 @@ withResource({
 })
 ```
 
-Or with a `destructureObject` variant:
-```typescript
-withResource({
-  create: createDb,
-  action: destructureObject<{ resource: Db, input: Config }>((refs) => 
-    refs.resource.then(query(refs.input))
-  ),
-  dispose: closeDb,
-})
-```
-
 ### Iterator.fold (src/iterator.ts)
 
 Currently accepts:
@@ -61,7 +50,7 @@ Iterator.fold(
 )
 ```
 
-## New Primitives Needed
+## New Primitive Needed
 
 ### splitInput (tuple destructuring)
 
@@ -72,20 +61,9 @@ splitInput<[A, B, C]>((a, b, c) => ...): TypedAction<[A, B, C], Out>
 
 Sugar for `bindInput` + `getIndex(0)`, `getIndex(1)`, etc.
 
-### destructureObject (object destructuring)
-
-```typescript
-destructureObject<{ name: string, age: number }>(
-  (refs: { name: VarRef<string>, age: VarRef<number> }) => BodyResult<Out>
-): TypedAction<{ name: string, age: number }, Out>
-```
-
-Sugar for `bindInput` + `getField("name")`, `getField("age")`, etc.
-
 ## Implementation Order
 
-1. Implement `splitInput` 
-2. Implement `destructureObject`
-3. Revert `withResource` action param to Pipeable (input is tuple or object)
-4. Revert `fold` body param to Pipeable (input is `[TAcc, TElement]`)
-5. Update tests
+1. Implement `splitInput`
+2. Revert `withResource` action param to Pipeable (input is `[TResource, TIn]`)
+3. Revert `fold` body param to Pipeable (input is `[TAcc, TElement]`)
+4. Update tests
