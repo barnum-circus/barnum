@@ -1,5 +1,7 @@
 # Phase 5: Advanced Patterns (RAII, Timeout)
 
+**Status: Partially obsolete.** `sleep` and `withTimeout` already exist. The RAII portions overlap with RAII.md. Review whether anything here isn't covered elsewhere. Note: `withTimeout` should return `Result<T, null>`.
+
 ## Goal
 
 Two features that stress-test Handle/Perform in different ways. Each is TypeScript sugar over the existing substrate. No scheduler changes — only new handler DAGs and TS surface functions.
@@ -148,9 +150,3 @@ Input is `never` — the timer doesn't consume pipeline data. It's a side-channe
 5. Tests per above
 6. Demo: add timeout and error handling to an existing demo workflow
 
------
-
-- sleep exists, can we clean this up?
-- withTimeout seems like a nice thing to expose tho, if we don't already. It should return a Result<T, null>
-- it probably already exists
-- we have an raii doc, is this needed?

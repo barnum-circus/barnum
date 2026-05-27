@@ -75,6 +75,18 @@ eventBus<PrEvent, PrUrl, PrResult>(({ send, receive }) =>
 
 Multiple producers send into the same bus. One consumer processes events sequentially in arrival order.
 
+## Direction
+
+- **Build on resume handle, not a new primitive.** Fix resume handle to support the needed capabilities rather than adding a dedicated event bus primitive.
+- **Non-deterministic dequeue order is fine** — preferred, even, to prevent accidental ordering dependencies.
+- **Target API: just `maybeDequeue`.** Selective resumption via a `maybeDequeue` function is sufficient. This may eliminate the need for state + suspense.
+- **No actual channel primitive needed.** The implementation is just state (a vec/queue) in userland.
+- **No new queue-specific primitives.** Implement the queue entirely in userland.
+- **Multiple consumers = just state with array pop.** No broadcast primitive needed.
+- **All other details below are over-engineering.** The priority is simple primitives.
+
+---
+
 ## Why this requires a new executor primitive
 
 Current handler DAGs are pure data transformations. They receive `{ payload, state }` and immediately produce `{ kind: "Resume", value, state_update }`. A handler cannot say "don't resume yet — park this branch until something else happens."
@@ -176,14 +188,3 @@ The event bus fills the gap between "shared state" (immediate, racy) and "extern
 
 4. **Interaction with `race`.** If the body is wrapped in `race` and one branch finishes, parked `receive` branches are cancelled. This is correct (same as any cancelled branch), but worth documenting.
 
------
-
-- concurrent performs. More info on why we have this.
-- I would rather fix resume handle than add another basic primitive, and instead build this on result handler.
-- it seems fine to not have a deterministic order when dequeueing, and even preferable, so that no one accidentally relies on that behavior.
-- selective resumption: if we can only support a maybeDequeue fn, that seems fine too, i.e. this might get rid of the need for state + suspense
-- I don't think we need an actual channel, right? The actual impl of the channel is a vec of where to send data + a queue, right? Or, if we don't have suspense,  then we don't have to store "where to send the data" i.e. nothing parks
-- let's rewrite with the goal of just maybeDequeue, and see what we need to add to support this in userland
-- goal is no new queue-specific primitives and do impl queue in userland
-- all the other details are over engineering, the priority is simple primitives and that's it.
-- multiple consumers -> no, that's just state where you pop onto an array and read that state

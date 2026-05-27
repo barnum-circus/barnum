@@ -175,14 +175,10 @@ For postfix dispatch via `branchFamily`, the newtype's case handler is always: `
 
 ---
 
-## Open questions
+## Decisions
 
-1. **Should newtypes have a type-level marker?** E.g., a `Newtype<TName, TInner>` alias that's sugar for `TaggedUnion<TName, { [TName]: TInner }>`. This would make the single-variant pattern explicit in the type system without changing runtime behavior.
+1. **Type-level marker:** Yes. Newtypes should have a `Newtype<TName, TInner>` alias (sugar for `TaggedUnion<TName, { [TName]: TInner }>`). Makes the single-variant pattern explicit in the type system.
 
-2. **`branch()` vs `getField("value")` for unwrapping:** When a postfix method dispatches via `branchFamily` and the newtype case needs to unwrap, is `getField("value")` or `branch({ Foo: handler })` preferred? Both work. `getField("value")` is more direct. `branch({ Foo: handler })` is more self-documenting and auto-unwraps. Either way, it's the case handler inside `branchFamily`, not a top-level concern.
+2. **Unwrapping:** `branch()` is preferred over `getField("value")`. More self-documenting and auto-unwraps.
 
--------
-
-- yes they should, duh
-- branch is preferable
-- we should use this everywhere, this is an obvious win
+3. **Adoption:** This pattern should be used universally across the codebase. Obvious win.

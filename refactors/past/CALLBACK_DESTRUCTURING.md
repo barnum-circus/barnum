@@ -92,8 +92,7 @@ Users never write `getIndex` or deal with `Option` unwrapping for framework-prov
 
 High. This is a significant ergonomics win that touches the most common user-facing patterns (fold, withResource). The implementation is mechanical — wrap existing body actions in bind + getIndex extraction.
 
------
+## Completed
 
-- agree, this seems doable now.
-- **DONE: withResource** — refactored in a002b1b1 to use `(resource: VarRef<TResource>, input: VarRef<TIn>) => BodyResult<TOut>` callback style.
-- **Remaining: fold** — still uses `Pipeable<[TAcc, TElement], TAcc>` tuple. Could use `(acc: VarRef<TAcc>, element: VarRef<TElement>) => BodyResult<TAcc>` style.
+- **withResource** — refactored in a002b1b1 to use `(resource: VarRef<TResource>, input: VarRef<TIn>) => BodyResult<TOut>` callback style.
+- **fold** — refactored in 1102ff74 to use `(acc: VarRef<TAcc>, element: VarRef<TElement>) => BodyResult<TAcc>` callback style.

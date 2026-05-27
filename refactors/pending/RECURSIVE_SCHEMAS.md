@@ -65,6 +65,6 @@ raw = toJSONSchema(schema, {
 - Add an execution test that actually passes recursive data through a handler and validates it round-trips correctly through the Rust engine.
 - Verify the Rust JSON Schema validator resolves `$ref` within `$defs` for a recursive schema.
 
------
+## Status
 
-- why do we care, now that we go thru a file
+May no longer be needed — schemas are now serialized through files rather than inline, so recursive schema limitations in JSON Schema may not apply.

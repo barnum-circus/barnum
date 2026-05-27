@@ -72,18 +72,6 @@ export function zodToCheckedJsonSchema(
 
 This only supports a top-level comment per schema. Sufficient for handler-level annotations ("this handler is deprecated", "output shape matches X"). Doesn't support per-field comments.
 
-## Recommendation
+## Decision
 
-Option A is the most expressive but hardest to implement correctly. Option C is trivial but limited to top-level. Start with Option C (top-level `$comment` per handler schema) since the immediate use case is documenting handler schemas, not individual fields. If per-field comments become needed later, revisit Option A.
-
-## Open questions
-
-1. Does the Rust validator (`jsonschema` crate) correctly ignore `$comment`? (It should per spec, but worth verifying.)
-2. Should `description` (from `.describe()`) also be preserved in the JSON Schema output? Currently untested whether `toJSONSchema` includes it.
-3. Is there a use case for comments beyond handler schemas — e.g., annotating the serialized AST config itself?
-
------
-
-- obviously we go thru A
-- I have no idea what description is, the only visible output of this is comments in either the JSON schema and in particular in the JSON schema as printed for the LLM
-- everything else is unrelated
+Option A (Zod `.describe()` → JSON Schema `$comment`/`description`). The only consumer is the JSON Schema as printed for the LLM. Everything else in this doc is unrelated scope creep — remove or ignore.

@@ -119,20 +119,19 @@ Recommend: Suspend pauses the entire workflow. The driver serializes the full st
 6. Suspend with variables: declare bindings are preserved across suspend/resume.
 7. Round-trip serialization: serialize → deserialize → verify identical state.
 
+## Direction
+
+Durability should NOT be built on algebraic effects. Instead:
+
+1. **Serialize the stack tree, then resume.** The frame slab is already data — serialize it directly.
+2. **Re-execute in-flight work on resume.** Anything that was in flight when the workflow suspended gets re-dispatched. Handlers should be idempotent or the runtime handles dedup.
+3. **"Wait for user input" patterns use event bus primitives.** A polling loop that checks for state is one approach, but...
+4. **May need a "suspend until" primitive** to avoid polling. Polling works but is inelegant — a proper "park until condition" primitive would be cleaner.
+
 ## Deliverables
 
-1. `EffectType::Suspend` variant
-2. Top-level `WorkflowResult::Suspended` return from scheduler
-3. `WorkflowState` serialization (Serialize/Deserialize on all frame kinds)
-4. `resume_continuation` method on WorkflowState
-5. `pause()` TypeScript function
-6. CLI: `barnum resume --state <file> --event <json>`
-7. Tests per above
-
--------
-
-- this doesnt' feel like an alg effect thing. As in, can't we just serialize the stack tree, then resume?
-- then anything that's in flight get's re-executed?
-- and if we have some sort of "poll for user input" thing just keeps running and proceeds when there is state
-- can use event bus primitives
-- it's possible that we need a "suspend until" primitive tho, as polling is a lame way to do this
+1. `WorkflowState` serialization (Serialize/Deserialize on all frame kinds)
+2. Resume mechanism that re-executes in-flight work
+3. Integration with event bus for "wait for external input" patterns
+4. Possibly a `suspendUntil` primitive (to avoid polling)
+5. Tests per above

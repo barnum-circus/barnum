@@ -1,5 +1,7 @@
 # Effect: Mutable State
 
+**Status: May already be implemented** — `withState` exists. The `update` concept in this doc needs clarification or may be unnecessary.
+
 ## The API
 
 ```ts
@@ -191,7 +193,3 @@ Both compile to Handle/Perform. Both use HOAS to scope the effect tokens.
 | Rust engine | Handle frames already support state + state_update. No engine changes needed — only new handler DAGs. |
 
 
---------
-
-- doesn't this already work? don't we haev withState?
-- wtf is update?

@@ -113,10 +113,6 @@ The `branch` matches on the `LoopSignal` variants (after namespace stripping, `"
 1. **Variant names**: `Continue`/`Done` vs `Recur`/`Break` vs `Next`/`Done`. `Continue`/`Done` reads naturally in handler return statements and matches the user's existing code. `Recur`/`Break` matches the `loop` parameter names.
 2. **Postfix**: should there be a `.unfold(body)` postfix on any `TypedAction` whose output is `TState`? Probably yes — `initState.then(unfold(step))` vs `initState.unfold(step)`.
 
------
+## Direction
 
-- seems worth doing, yes to postfix
-- recur/done are only because the others are reserved words in JS, and I like the existing names
-- is the naming good tho? foo.fold(...) makes sense, it's array -> item, item -> array is not this? I mean, I get how it is, but then the return value should be an array! (The return value should be TDone, that's fine)
-- is this just post-fix loop?
-- in some form, this should exist, perhaps it's just post-fix loop though? I don't necessarily see the benefit of unfold(pipeline) vs the explicit loop((recur, done) => ... )
+Approved in concept, postfix preferred. Keep recur/done naming. However — this may just be postfix loop. The benefit of `unfold(pipeline)` over explicit `loop((recur, done) => ...)` is unclear. Resolve: is this distinct from POSTFIX_LOOP.md or should they merge?

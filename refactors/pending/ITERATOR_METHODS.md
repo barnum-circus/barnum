@@ -1,5 +1,20 @@
 # Iterator Methods — Full Catalog
 
+## Status
+
+Implemented in `libs/barnum/src/iterator.ts`:
+- `fromArray`, `fromOption`, `fromResult`
+- `collect`
+- `map`, `flatMap`, `filter`
+- `fold` (callback destructuring style)
+- `splitFirst`, `splitLast`
+- `take`, `skip`, `slice`
+- `isEmpty`
+
+Not yet implemented: `filterMap`, `flatten`, `enumerate`, `scan`, `reduce`, `first`, `last`, `find`, `count`, `any`, `collectResult`, `sortBy`, `zip`, and others listed below.
+
+---
+
 Reference for all Iterator methods. Organized by category. Rust equivalents noted for each.
 
 All barnum Iterators are **eager** (backed by `T[]`), not lazy. This means:
@@ -639,6 +654,3 @@ These Rust Iterator methods don't translate to barnum's eager model:
 - `.findMap(f)` — compose only
 
 
---------
-
-- can we update this to note what's been impl'd

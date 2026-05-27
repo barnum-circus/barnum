@@ -51,8 +51,4 @@ This would reject `withResource(...)` (whose `__in` is `(input: Record<string, u
 
 This might break other valid patterns where the body expression has a narrow input type but is always preceded by a VarRef in practice. Needs audit of existing `bindInput` usage across demos.
 
------
-
-- wtf is this? does this still apply if we modify withResource to pass a tuple?
-- **Moot for withResource**: refactored to VarRef callback style in a002b1b1, no longer passes tuples.
-- The general principle may still apply to other `bindInput` / `bind` body patterns, but nothing currently triggers the issue.
+**Note:** This concern may be moot now that `withResource` uses callback destructuring with VarRefs (commit a002b1b1) instead of tuples. The original motivating case (bare `withResource(...)` as a `bindInput` body return) no longer exists. The general principle may still apply to other `bindInput` / `bind` body patterns, but nothing currently triggers the issue.

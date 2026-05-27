@@ -68,23 +68,20 @@ listFiles.iterate().limitConcurrency(5).map(processFile).collect()
 
 This would modify how the following `ForEach` is dispatched. Requires either a new AST node or a transform that rewrites the ForEach into a chunked loop.
 
-## Recommendation
+## Decision
 
-Option A is the cleanest UX. The engine already tracks in-flight work per ForEach frame — extending it with a concurrency cap is natural. The postfix form `.mapLimited(n, action)` avoids ambiguity about what `.limitConcurrency()` modifies.
+**Option A (engine-level concurrency) is OUT.** This must be done in userland with no extra primitives if possible. Only Options B or C are viable.
 
-## Open questions
+### Initial approach: `chunks` (batch N at a time)
 
-1. Should the concurrency parameter be a constant or a `Pipeable<void, number>` (dynamic)?
-2. Should backpressure be FIFO (dispatch in order) or allow out-of-order dispatch with ordered collection?
-3. Does this interact with `withTimeout` — if a slot times out, does it free the concurrency slot?
-4. Naming: `mapLimited`, `mapWithConcurrency`, `mapN`, `mapBounded`?
+A `chunks(n)` method on Iterator is the right initial primitive. This gives "three at a time, they all finish, then the next three" semantics — achievable today with no engine changes.
 
-------
+This is good enough for most use cases and is the recommended approach.
 
-- this is to be done in userland with no extra primitives, if possible. A is out. B or C are the only options.
-- a chunks method seems appropriate (i.e. is userland enough)
-- I think we can only achieve "three at a time, they finish, then the next three" rather than "max three in flight" with current primitives. What would it take to support that?
-- this probably requires new primitives. Can we do it with algebraic effect handlers? e.g. a resume handler that is called multiple times? What if the current map (parallel map) is just a resume handler called n times in parallel?
-- this feels like the right way to tackle this
-- a userland three-at-a-time thing seems prudent to do initially anyway.
-- alternative is that three-at-a-time is easy enough to do in userland, and we recommend that (that is the current state of the docs)
+### Future: true "max N in flight"
+
+True sliding-window concurrency ("max N in flight at any time, dispatch next as each completes") cannot be expressed with current primitives. It requires new engine capabilities.
+
+**Proposed direction:** algebraic effect handlers where the resume handler is called multiple times. The current parallel `map` (ForEach) could itself be expressible as a resume handler called N times in parallel. This framing unifies concurrency-limited map with the existing parallel dispatch model and avoids bespoke engine nodes.
+
+This is the right longer-term direction but is not blocking — the chunked approach covers the immediate need.

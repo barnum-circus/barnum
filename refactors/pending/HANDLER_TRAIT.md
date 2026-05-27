@@ -112,6 +112,10 @@ Currently each handler type has its own error (`BuiltinError`, `TypeScriptHandle
 
 Recommendation: `HandlerError` as a `#[non_exhaustive]` enum. Each handler crate provides a `From` impl. This preserves error specificity while keeping trait objects usable.
 
+### Serialization
+
+Will need `+ Serialize + Deserialize` bounds on the `Handler` trait (or on a related trait) when persistence/durability is added.
+
 ## Implementation order
 
 1. Create `barnum_handler` crate with the `Handler` trait
@@ -127,6 +131,3 @@ Recommendation: `HandlerError` as a `#[non_exhaustive]` enum. Each handler crate
 - Testing workflows with mock handlers (`struct MockHandler { output: Value }`)
 - Plugin-style handler registration for third-party handler types
 
-------
-
-- we need to serialize this eventually, will it be possible to add a bound e.g. + Serialize + Deserialize?

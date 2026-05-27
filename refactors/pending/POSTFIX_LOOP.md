@@ -53,6 +53,6 @@ function loopMethod(this: TypedAction, bodyFn: Function): TypedAction {
 1. The `VoidToNull<TBreak>` in the return type doesn't simplify for generic `TBreak` — same issue that plagues the standalone form. Postfix doesn't fix this, but it doesn't make it worse either.
 2. Should the postfix form still accept explicit `TBreak` type parameter, or can it be inferred from `done` usage? Likely needs to be explicit since TypeScript can't infer from callback argument usage.
 
------
+## Usage Example
 
-- show example of usage
+TODO: Add usage example

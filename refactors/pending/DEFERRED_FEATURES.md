@@ -1,5 +1,7 @@
 # Deferred Features
 
+**Status: Needs review.** Some features may be covered by other docs (e.g., streaming is likely covered by EVENT_BUS.md) or already implemented. The void-to-null issue may no longer be relevant.
+
 Features removed from the initial implementation to keep the surface area minimal. To be added incrementally as needed.
 
 ## Language-Aware Coalescing and Builtin Placement
@@ -373,7 +375,3 @@ Whether a dedicated `Bool` tagged union (True/False) is still worth adding is an
 
 The proper fix would be for the schema conversion layer (`zodToCheckedJsonSchema`) to transparently map `z.void()` to `z.null()` — void and null are semantically equivalent in the JSON wire format (both serialize to `null`). This would let handler authors write `Result<void, string>` naturally without thinking about JSON Schema limitations.
 
-----
-
-- let's review this, see what's still needed? some are covered by other docs (e.g. stream covered by event bus?) and others maybe implemented
-- void -> null ... why do we need this?

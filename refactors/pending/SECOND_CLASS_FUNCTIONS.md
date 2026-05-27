@@ -102,6 +102,6 @@ The builder warns at build time using best-effort type checking. The scheduler e
 
 4. **Should plain values derived from second-class functions be restricted?** If `getConn()` returns a connection handle (a plain value, not a function), should that handle also be second-class? The connection handle is just as dangling as the accessor after dispose. This pushes toward linear/affine types for resource handles, which is a larger design space than second-class functions alone.
 
-----
+## Priority
 
-- doesn't seem worth doing yet
+Deferred — not worth doing yet.

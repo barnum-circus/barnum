@@ -151,6 +151,4 @@ One thing the simple pattern doesn't handle well is event batching. If three CI 
 
 Similarly: if the workflow is mid-processing when a new event arrives, the event is naturally queued — the engine won't call `waitForPrEvent` again until the current iteration completes and recurs. This is correct serial-processing behavior, but users should understand it.
 
------
-
-- is this just event bus?
+**Status: May be subsumed by EVENT_BUS.md — this pattern is likely implementable on top of event bus primitives.**

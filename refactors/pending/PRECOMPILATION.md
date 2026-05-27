@@ -142,11 +142,6 @@ This is a significant extension. It should wait until the core workflow algebra 
 2. **Resumption checkpoints** — Medium effort. Need to make `WorkflowState` serializable (it currently contains non-serializable tokio primitives in the event loop layer, but the core state in `barnum_engine` is pure data).
 3. **Contextual effects** — High effort, speculative value. Defer until real usage reveals the need.
 
--------
+## Direction
 
-- runPipeline is executed from JS, seems like this can be `pipeline.compile().run()` and `JSON.deserialize(compiledPipeline).run()` with this being in userland
-- seems worth doing
-- `pipeline.run()` as shorthand for `.compile().run()` seems good, maybe
-- regardless, postfix seems better than `runPipeline(pipeline)`
-- the rest requires a bigger change: default export pipeline handling. We should write that up in a separate doc.
-- postfix stuff is g2g tho
+Postfix API is approved: `pipeline.compile().run()` with `.run()` as shorthand for `.compile().run()`. This is userland (no engine changes). Default export pipeline handling needs a separate doc. Postfix is ready to implement.

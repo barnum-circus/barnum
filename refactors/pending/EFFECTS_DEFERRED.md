@@ -1,3 +1,5 @@
+**Status: Unclear if this doc is still needed. May overlap with other effects docs.**
+
 # Deferred: Provider, Capabilities, State Monad, Coroutine RPC
 
 These are extensions to the Handle/Perform architecture that are NOT part of the current implementation plan. Captured here so the ideas aren't lost and so the current design doesn't accidentally preclude them.
@@ -197,6 +199,3 @@ A future robustness pass should:
 
 3. **Interact with RAII/Bracket (Phase 5).** If a Handle is inside a `withResource` block and the handler fails, the resource's dispose action must still run. The recovery path must not skip dispose.
 
------
-
-wtf is this?

@@ -172,9 +172,6 @@ The ordering: error handling first, then RAII. RAII without error handling is eq
 
 4. **Interaction with lazy let bindings**: If bindings are lazy and a binding creates a resource, does the thunk carry a dispose? If the thunk is never forced, no resource is created and no cleanup is needed. If it is forced, the resource exists and needs cleanup. This is natural — lazy evaluation + RAII means resources are created on-demand and cleaned up on scope exit.
 
-----------
+## Direction
 
-- yes, `withResource` is "enough" for now, but it's bad
-- we need primitive changes to support destructors
-- the order of destructors should more-or-less match what rust gives us
-- i don't understand how this can be "done in userland" as you imply, otherwise the cleanup doesn't get registered and done, defeating the purpose
+withResource is the interim solution but insufficient long-term. Proper RAII requires new engine primitives for destructor registration — cannot be done purely in userland (cleanup must be guaranteed even on error paths). Destructor ordering should match Rust's model (reverse declaration order). This is NOT a userland-only concern.
