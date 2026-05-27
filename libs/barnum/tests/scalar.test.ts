@@ -3,15 +3,7 @@ import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
 import { constant, identity, drop, panic } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
-
-// ---------------------------------------------------------------------------
-// Type assertion helpers (compile-time only)
-// ---------------------------------------------------------------------------
-
-type IsExact<T, U> = [T] extends [U] ? ([U] extends [T] ? true : false) : false;
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function assertExact<_T extends true>(): void {}
+import { assertExact, type IsExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests

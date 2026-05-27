@@ -13,15 +13,7 @@ import { constant, identity, tag } from "../src/builtins/index.js";
 import { Iterator as I } from "../src/iterator.js";
 import { Option as O } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
-
-// ---------------------------------------------------------------------------
-// Type assertion helpers (compile-time only)
-// ---------------------------------------------------------------------------
-
-type IsExact<T, U> = [T] extends [U] ? ([U] extends [T] ? true : false) : false;
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function assertExact<_T extends true>(): void {}
+import { assertExact, type IsExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests — standalone constructors

@@ -21,15 +21,7 @@ import {
   listFiles,
   migrate,
 } from "./handlers.js";
-
-// ---------------------------------------------------------------------------
-// Type assertion helpers (compile-time only)
-// ---------------------------------------------------------------------------
-
-type IsExact<T, U> = [T] extends [U] ? ([U] extends [T] ? true : false) : false;
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function assertExact<_T extends true>(): void {}
+import { assertExact, type IsExact } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {
