@@ -37,5 +37,5 @@ Deferred/unclear:
 - [x] are you fucking crazy? You fucking implemented the "assertIO" thing but didnt' fucking go back and use it. FUCKING GO BACK AND FUCKING USE IT.
 - [x] ast.ts remaining toAction uses in exported fns (forEach, branch, loop, etc.) — these are legitimate (erasing phantoms for Action-typed struct fields). May not need further cleanup.
 - [x] type tests need improvement: assertions should test input and output types are what we expect, var refs have appropriate types, and negative cases are tested
-- [ ] all methods should accept var ref's — see VARREF_CALLBACK_OVERLOADS.md
-- [ ] replace `assertExact<CheckIO<...>>` with a single `assertIO<TAction, TIn, TOut>()` helper and migrate all tests
+- [x] all methods should accept var ref's — see VARREF_CALLBACK_OVERLOADS.md (deferred; methods stay as Pipeable, bindInput is user-facing opt-in)
+- [x] replace `assertExact<CheckIO<...>>` with a single `assertIO<TAction, TIn, TOut>()` helper and migrate all tests
