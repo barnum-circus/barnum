@@ -11,14 +11,7 @@ import {
   taggedUnionSchema,
   optionSchema,
 } from "@barnum/barnum/runtime";
-import {
-  allObject,
-  bindInput,
-  getIndex,
-  pipe,
-  loop,
-  pick,
-} from "@barnum/barnum/pipeline";
+import { allObject, pipe, loop, pick, VarRef } from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -384,50 +377,44 @@ import { createWorktree, createPR } from "./git";
 
 type WorktreeResource = { worktreePath: string; branch: string };
 
-export const implementAndReview = bindInput<[WorktreeResource, Refactor]>(
-  (params) => {
-    const resource = params
-      .then(getIndex<[WorktreeResource, Refactor], 0>(0))
-      .unwrap();
-    const refactor = params
-      .then(getIndex<[WorktreeResource, Refactor], 1>(1))
-      .unwrap();
+export const implementAndReview = (
+  resource: VarRef<WorktreeResource>,
+  refactor: VarRef<Refactor>,
+) => {
+  return pipe(
+    allObject({
+      worktreePath: resource.getField("worktreePath"),
+      description: refactor.getField("description"),
+    })
+      .then(implement)
+      .drop(),
+    resource.pick("worktreePath").then(typeCheckFix).drop(),
 
-    return pipe(
+    // Judge quality; revise and re-check if needed.
+    loop((recur, done) =>
+      judgeRefactor.then(classifyJudgment).branch({
+        NeedsWork: applyFeedback
+          .drop()
+          .then(resource.pick("worktreePath"))
+          .then(typeCheckFix)
+          .drop()
+          .then(recur),
+        Approved: done,
+      }),
+    ).drop(),
+
+    // Commit and open a PR only after all fixes and revisions are done.
+    resource.pick("worktreePath").then(commit).drop(),
+    pipe(
       allObject({
-        worktreePath: resource.getField("worktreePath"),
+        branch: resource.getField("branch"),
         description: refactor.getField("description"),
-      })
-        .then(implement)
-        .drop(),
-      resource.pick("worktreePath").then(typeCheckFix).drop(),
-
-      // Judge quality; revise and re-check if needed.
-      loop((recur, done) =>
-        judgeRefactor.then(classifyJudgment).branch({
-          NeedsWork: applyFeedback
-            .drop()
-            .then(resource.pick("worktreePath"))
-            .then(typeCheckFix)
-            .drop()
-            .then(recur),
-          Approved: done,
-        }),
-      ).drop(),
-
-      // Commit and open a PR only after all fixes and revisions are done.
-      resource.pick("worktreePath").then(commit).drop(),
-      pipe(
-        allObject({
-          branch: resource.getField("branch"),
-          description: refactor.getField("description"),
-        }),
-        preparePRInput,
-        createPR,
-      ),
-    );
-  },
-);
+      }),
+      preparePRInput,
+      createPR,
+    ),
+  );
+};
 
 export const createBranchWorktree = pipe(
   pick<Refactor, ["description"]>("description"),

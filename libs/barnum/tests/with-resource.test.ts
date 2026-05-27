@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
-import { constant, identity, withResource } from "../src/builtins/index.js";
+import {
+  all,
+  type ExtractInput,
+  type ExtractOutput,
+  pipe,
+} from "../src/ast.js";
+import { constant, withResource } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 
 // ---------------------------------------------------------------------------
@@ -16,31 +21,38 @@ function assertExact<_T extends true>(): void {}
 // Type tests
 // ---------------------------------------------------------------------------
 
-describe("with-resource type tests", () => {
-  it("withResource: TIn -> TOut", () => {
-    const action = withResource<{ project: string }, { conn: string }, number>({
-      create: constant({ conn: "db://localhost" }),
-      action: constant(42),
-      dispose: constant(null),
-    });
-    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
-  });
-
-  it("action receives [TResource, TIn] tuple", () => {
+describe("withResource type tests", () => {
+  it("withResource has the correct type", () => {
     const action = withResource<
-      { x: number },
-      { r: string },
-      [{ r: string }, { x: number }]
+      { input: string },
+      { resource: string },
+      { output: string }
     >({
-      create: constant({ r: "res" }),
-      action: identity(),
+      create: constant({ resource: "res" }),
+      action: () => constant({ output: "output" }),
       dispose: constant(null),
     });
-    assertExact<IsExact<ExtractInput<typeof action>, { x: number }>>();
-    assertExact<
-      IsExact<ExtractOutput<typeof action>, [{ r: string }, { x: number }]>
-    >();
+
+    assertExact<IsExact<ExtractInput<typeof action>, { input: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { output: string }>>();
+  });
+  it("varRefs passed to withResource have the correct types", () => {
+    withResource<{ input: string }, { resource: string }, { output: string }>({
+      create: constant({ resource: "res" }),
+      action: (resourceRef, inputRef) => {
+        assertExact<IsExact<ExtractInput<typeof resourceRef>, any>>();
+        assertExact<
+          IsExact<ExtractOutput<typeof resourceRef>, { resource: string }>
+        >();
+        assertExact<IsExact<ExtractInput<typeof inputRef>, any>>();
+        assertExact<
+          IsExact<ExtractOutput<typeof inputRef>, { input: string }>
+        >();
+
+        return constant({ output: "output" });
+      },
+      dispose: constant(null),
+    });
   });
 });
 
@@ -51,7 +63,7 @@ describe("with-resource type tests", () => {
 // multiple cargo build + handler invocations per pipeline.
 // ---------------------------------------------------------------------------
 
-describe("with-resource execution", () => {
+describe("withResource execution", () => {
   it("create acquires, action uses resource, returns action output", async () => {
     // action receives [resource, input] tuple; constant ignores input
     const result = await runPipeline(
@@ -59,7 +71,7 @@ describe("with-resource execution", () => {
         constant({ host: "localhost" }),
         withResource({
           create: constant({ conn: "acquired" }),
-          action: constant("action-output"),
+          action: () => constant("action-output"),
           dispose: constant(null),
         }),
       ),
@@ -71,15 +83,15 @@ describe("with-resource execution", () => {
     // identity() passes the tuple through so we can assert its shape
     const result = await runPipeline(
       pipe(
-        constant({ x: "input" }),
+        constant({ input: "input" }),
         withResource({
-          create: constant({ r: "resource" }),
-          action: identity(),
+          create: constant({ resource: "resource" }),
+          action: (resource, input) => all(resource, input),
           dispose: constant(null),
         }),
       ),
     );
-    expect(result).toEqual([{ r: "resource" }, { x: "input" }]);
+    expect(result).toEqual([{ resource: "resource" }, { input: "input" }]);
   });
 
   it("dispose runs and result is discarded", async () => {
@@ -89,7 +101,7 @@ describe("with-resource execution", () => {
         constant({ x: 1 }),
         withResource({
           create: constant({ r: true }),
-          action: constant("action-result"),
+          action: () => constant("action-result"),
           dispose: constant("dispose-should-be-discarded"),
         }),
       ),
