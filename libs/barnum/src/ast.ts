@@ -46,6 +46,15 @@ export type Action =
   | RestartHandleAction
   | RestartPerformAction;
 
+/**
+ * Constraint for the entry-point callback return type. Only requires the
+ * output phantom field — omits __in and __in_co so that actions with
+ * any input type (e.g. pipelines starting from a call token) are assignable.
+ */
+export type BodyResult<TOut> = Action & {
+  __out?: () => TOut;
+};
+
 export interface InvokeAction {
   kind: "Invoke";
   handler: HandlerKind;

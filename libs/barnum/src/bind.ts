@@ -1,5 +1,6 @@
 import {
   type Action,
+  type BodyResult,
   type ExtractInput,
   type ExtractOutput,
   type Pipeable,
@@ -94,14 +95,6 @@ function readVar(n: number): Action {
  *     )
  *   )
  */
-/**
- * Constraint for the body callback return type. Only requires the output
- * phantom field — omits `__in` and `__in_co` so that body actions with
- * any input type (e.g. pipelines starting from a VarRef) are assignable.
- */
-type BodyResult<TOut> = Action & {
-  __out?: () => TOut;
-};
 
 export function bind<TBindings extends Action[], TOut>(
   bindings: [...TBindings],
