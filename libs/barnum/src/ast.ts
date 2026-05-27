@@ -477,6 +477,8 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   ): TypedAction<In, TOut>;
   /** Run a side effect, pass the original value through unchanged. `T → T` */
   tap(action: Pipeable<Out, any>): TypedAction<In, Out>;
+  /** Destructure into component VarRefs. Supports tuple and object patterns. */
+  split(): Split<Out>;
 };
 
 /**
@@ -1004,6 +1006,47 @@ function tapMethod(this: TypedAction, action: Pipeable<any, any>): TypedAction {
   });
 }
 
+function createSplitProxy(source: TypedAction): unknown {
+  return new Proxy(
+    {},
+    {
+      get(_, key) {
+        if (key === Symbol.iterator) {
+          return function* splitIterator() {
+            let i = 0;
+            while (true) {
+              yield typedAction({
+                kind: "Chain",
+                first: source,
+                rest: toAction(getIndex(i).unwrap()),
+              });
+              i++;
+            }
+          };
+        }
+        if (typeof key === "string") {
+          if (/^\d+$/.test(key)) {
+            return typedAction({
+              kind: "Chain",
+              first: source,
+              rest: toAction(getIndex(parseInt(key, 10)).unwrap()),
+            });
+          }
+          return typedAction({
+            kind: "Chain",
+            first: source,
+            rest: toAction(getField(key)),
+          });
+        }
+      },
+    },
+  );
+}
+
+function splitMethod(this: TypedAction): unknown {
+  return createSplitProxy(this);
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -1056,6 +1099,7 @@ export function typedAction<In = unknown, Out = unknown>(
       bind: { value: bindMethod, configurable: true },
       bindInput: { value: bindInputMethod, configurable: true },
       tap: { value: tapMethod, configurable: true },
+      split: { value: splitMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out>;
@@ -1101,6 +1145,21 @@ export {
   type VarRef,
   type InferVarRefs,
 } from "./bind.js";
+
+/**
+ * Maps each field/index of T to a VarRef of that field's type.
+ * For tuples: Split<[A, B]> = [VarRef<A>, VarRef<B>]
+ * For objects: Split<{a: A, b: B}> = {a: VarRef<A>, b: VarRef<B>}
+ * For primitives: never (split is only meaningful on structured types).
+ *
+ * The `0 extends (1 & T)` guard detects `any` and collapses to `any`,
+ * preventing mapped-type expansion from breaking TypedAction assignability.
+ */
+export type Split<T> = 0 extends 1 & T
+  ? any
+  : [T] extends [object]
+    ? { [K in keyof T]: VarRef<T[K]> }
+    : never;
 export { defineRecursiveFunctions } from "./recursive.js";
 export { resetEffectIdCounter } from "./effect-id.js";
 import {
