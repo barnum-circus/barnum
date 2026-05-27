@@ -1,4 +1,4 @@
-import type { Result, Option } from "./ast.js";
+import type { Option, Result } from "./ast.js";
 
 export function ok<TValue, TError = unknown>(
   value: TValue,

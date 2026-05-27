@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Result, Option, LoopResult } from "./ast.js";
+import type { LoopResult, Option, Result } from "./ast.js";
 
 export function resultSchema<TValue, TError>(
   okSchema: z.ZodType<TValue>,

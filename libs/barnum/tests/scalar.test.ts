@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { type ExtractInput, type ExtractOutput, pipe } from "../src/ast.js";
-import { constant, identity, drop, panic } from "../src/builtins/index.js";
+import { constant, drop, identity, panic } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests

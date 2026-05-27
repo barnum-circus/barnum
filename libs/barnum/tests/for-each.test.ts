@@ -1,15 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
-  pipe,
-  forEach,
   config,
+  forEach,
+  pipe,
 } from "../src/ast.js";
 import { constant, getField, wrapInField } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
-import { setup, listFiles, migrate, verify } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { listFiles, migrate, setup, verify } from "./handlers.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests

@@ -1,5 +1,5 @@
 import type { JSONSchema7 } from "json-schema";
-import { type z, toJSONSchema } from "zod";
+import { toJSONSchema, type z } from "zod";
 
 // Zod v4 schema def types that have child schemas.
 // Verified against Zod 4.3.6 internals — every compound type's def

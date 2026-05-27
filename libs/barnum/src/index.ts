@@ -1,4 +1,4 @@
-import type { TaggedUnion, OptionDef, ResultDef, IteratorDef } from "./ast.js";
+import type { IteratorDef, OptionDef, ResultDef, TaggedUnion } from "./ast.js";
 
 export * from "./ast.js";
 export {

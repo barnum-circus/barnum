@@ -18,7 +18,7 @@
     "eslint/id-length": "off",
     "eslint/no-magic-numbers": "off",
     "eslint/max-params": "off",
-    "eslint/sort-imports": "off",
+    "eslint/sort-imports": ["error", { "ignoreDeclarationSort": true }],
     "eslint/no-ternary": "off",
     "eslint/no-undefined": "off",
     "eslint/max-statements": "off",

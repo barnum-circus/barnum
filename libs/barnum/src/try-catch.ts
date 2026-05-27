@@ -1,9 +1,9 @@
 import {
   type Pipeable,
   type TypedAction,
+  buildRestartBranchAction,
   toAction,
   typedAction,
-  buildRestartBranchAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
 import { tag } from "./builtins/index.js";

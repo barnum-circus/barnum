@@ -1,6 +1,7 @@
 import type { JSONSchema7 } from "json-schema";
 import { chain } from "./chain.js";
 import {
+  asOption as asOptionStandalone,
   constant,
   drop,
   extractPrefix,
@@ -14,7 +15,6 @@ import {
   splitLast,
   tag,
   wrapInField,
-  asOption as asOptionStandalone,
 } from "./builtins/index.js";
 import { Option } from "./option.js";
 import { Result } from "./result.js";
@@ -24,11 +24,11 @@ import { Iterator as IteratorNs } from "./iterator.js";
 // Lazy import — bind.ts imports from ast.ts, but these are only called inside
 // methods (after all modules load), so the circular reference is safe at runtime.
 import {
-  bind as bindStandalone,
-  bindInput as bindInputStandalone,
-  tap as tapStandalone,
-  type VarRef,
   type InferVarRefs,
+  type VarRef,
+  bindInput as bindInputStandalone,
+  bind as bindStandalone,
+  tap as tapStandalone,
 } from "./bind.js";
 
 // ---------------------------------------------------------------------------

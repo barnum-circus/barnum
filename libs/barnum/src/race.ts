@@ -3,16 +3,16 @@ import {
   type Pipeable,
   type Result as ResultT,
   type TypedAction,
+  buildRestartBranchAction,
   toAction,
   typedAction,
-  buildRestartBranchAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
 import { identity, tag } from "./builtins/index.js";
 import { Result } from "./result.js";
 import {
-  allocateRestartHandlerId,
   type RestartHandlerId,
+  allocateRestartHandlerId,
 } from "./effect-id.js";
 
 /**

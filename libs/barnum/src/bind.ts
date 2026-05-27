@@ -10,8 +10,8 @@ import {
 } from "./ast.js";
 import { chain } from "./chain.js";
 import { all } from "./all.js";
-import { identity, drop, getIndex } from "./builtins/index.js";
-import { allocateResumeHandlerId, type ResumeHandlerId } from "./effect-id.js";
+import { drop, getIndex, identity } from "./builtins/index.js";
+import { type ResumeHandlerId, allocateResumeHandlerId } from "./effect-id.js";
 import { pipe } from "./pipe.js";
 
 // ---------------------------------------------------------------------------

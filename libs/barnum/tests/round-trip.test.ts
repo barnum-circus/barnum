@@ -5,15 +5,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   all,
-  config,
-  loop,
   branch,
-  pipe,
-  forEach,
-  resetEffectIdCounter,
+  config,
   constant,
+  forEach,
+  loop,
+  pipe,
+  resetEffectIdCounter,
 } from "../src/index.js";
-import { setup, build, verify, deploy, healthCheck } from "./handlers.js";
+import { build, deploy, healthCheck, setup, verify } from "./handlers.js";
 
 const HERE = import.meta.dirname;
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
@@ -13,7 +13,7 @@ import { constant, identity, tag } from "../src/builtins/index.js";
 import { Iterator as I } from "../src/iterator.js";
 import { Option as O } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests — standalone constructors

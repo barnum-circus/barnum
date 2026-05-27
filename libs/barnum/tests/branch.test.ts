@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
   type TypedAction,
-  pipe,
   branch,
   forEach,
+  pipe,
 } from "../src/ast.js";
 import {
   constant,
@@ -17,14 +17,14 @@ import {
 } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import {
-  deploy,
-  verify,
-  classifyErrors,
-  fix,
-  type TypeError,
   type ClassifyResult,
+  type TypeError,
+  classifyErrors,
+  deploy,
+  fix,
+  verify,
 } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tests

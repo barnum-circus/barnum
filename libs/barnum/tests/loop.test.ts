@@ -1,27 +1,27 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
-  pipe,
+  config,
+  earlyReturn,
   forEach,
   loop,
+  pipe,
   recur as recurCombinator,
-  earlyReturn,
   resetEffectIdCounter,
-  config,
 } from "../src/ast.js";
 import { constant, drop, splitFirst } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import {
-  healthCheck,
-  typeCheck,
   classifyErrors,
   fix,
-  setup,
+  healthCheck,
   listFiles,
   migrate,
+  setup,
+  typeCheck,
 } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {

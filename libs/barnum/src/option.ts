@@ -1,12 +1,12 @@
 import {
-  type Option as OptionT,
   type OptionDef,
+  type Option as OptionT,
   type Pipeable,
   type Result as ResultT,
   type TypedAction,
+  branch,
   toAction,
   typedAction,
-  branch,
 } from "./ast.js";
 import { chain } from "./chain.js";
 import {

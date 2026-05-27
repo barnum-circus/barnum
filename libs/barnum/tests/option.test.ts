@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
@@ -6,14 +6,14 @@ import {
   type OptionDef,
   type Result,
   type ResultDef,
-  pipe,
   forEach,
+  pipe,
 } from "../src/ast.js";
 import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Option as O } from "../src/option.js";
 import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {

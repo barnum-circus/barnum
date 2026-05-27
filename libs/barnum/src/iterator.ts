@@ -1,18 +1,18 @@
 import {
   type BodyResult,
-  type Iterator as IteratorT,
   type IteratorDef,
+  type Iterator as IteratorT,
   type Option as OptionT,
   type Pipeable,
   type Result as ResultT,
   type TypedAction,
   type VarRef,
-  toAction,
-  typedAction,
   branch,
   branchFamily,
   forEach,
   loop,
+  toAction,
+  typedAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
 import {

@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
   type Option,
+  type OptionDef,
   type Result,
   type ResultDef,
-  type OptionDef,
   type TypedAction,
   pipe,
   resetEffectIdCounter,
@@ -16,8 +16,8 @@ import { allocateRestartHandlerId } from "../src/effect-id.js";
 import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Result as R } from "../src/result.js";
 import { runPipeline } from "../src/run.js";
-import { setup, deploy } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { deploy, setup } from "./handlers.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 function expectedTagAst(kind: string) {
   return {

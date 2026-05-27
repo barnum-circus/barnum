@@ -8,7 +8,7 @@ import {
 import { chain } from "../chain.js";
 import { all } from "../all.js";
 import { constant } from "./scalar.js";
-import { wrapInField, merge } from "./struct.js";
+import { merge, wrapInField } from "./struct.js";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------

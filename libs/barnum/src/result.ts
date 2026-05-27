@@ -1,8 +1,8 @@
 import {
   type Option as OptionT,
   type Pipeable,
-  type Result as ResultT,
   type ResultDef,
+  type Result as ResultT,
   type TypedAction,
   branch,
 } from "./ast.js";

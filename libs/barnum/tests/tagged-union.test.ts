@@ -1,22 +1,22 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
-  type TaggedUnion,
   type ExtractOutput,
-  pipe,
+  type TaggedUnion,
   branch,
   branchFamily,
+  pipe,
 } from "../src/ast.js";
 import {
   constant,
+  extractPrefix,
   identity,
   tag,
-  extractPrefix,
   taggedUnionSchema,
 } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 /**
  * Build the expected AST for `tag(kind)`.

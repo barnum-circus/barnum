@@ -5,7 +5,7 @@
 
 import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {

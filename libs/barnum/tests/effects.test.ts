@@ -1,20 +1,20 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   type ExtractInput,
   type ExtractOutput,
   type Result,
   type TypedAction,
   pipe,
-  tryCatch,
   race,
-  sleep,
-  withTimeout,
   resetEffectIdCounter,
+  sleep,
+  tryCatch,
+  withTimeout,
 } from "../src/ast.js";
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { runPipeline } from "../src/run.js";
-import { setup, build, verify } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { build, setup, verify } from "./handlers.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // tryCatch type tests

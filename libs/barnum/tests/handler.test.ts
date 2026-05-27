@@ -1,25 +1,25 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createHandler, createHandlerWithConfig } from "../src/handler.js";
 import {
   type ExtractInput,
   type ExtractOutput,
   type LoopResult,
-  pipe,
   config,
+  pipe,
 } from "../src/ast.js";
 import {
-  setup,
   build,
-  verify,
   deploy,
+  fix,
   healthCheck,
   listFiles,
   migrate,
+  setup,
   typeCheck,
-  fix,
+  verify,
 } from "./handlers.js";
-import { assertExact, type IsExact } from "./type-utils.js";
+import { type IsExact, assertExact } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Handler type tests — test fixture handlers
