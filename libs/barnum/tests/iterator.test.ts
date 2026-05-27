@@ -70,21 +70,25 @@ describe("Iterator constructor type info", () => {
 describe("Iterator postfix type info", () => {
   it(".iterate() on Option", () => {
     const action = constant(42).some().iterate();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
   });
 
   it(".iterate() on Result", () => {
     const action = constant(42).ok().iterate();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
   });
 
   it(".iterate() on array", () => {
     const action = constant([1, 2, 3]).iterate();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
   });
 
   it(".map(f) on Iterator", () => {
     const action = constant([1, 2]).iterate().map(constant("x"));
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Iterator<string>>>();
   });
 
@@ -92,6 +96,7 @@ describe("Iterator postfix type info", () => {
     const action = constant([1])
       .iterate()
       .flatMap(pipe(constant([10, 20]), I.fromArray<number>()));
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
   });
 
@@ -114,12 +119,62 @@ describe("Iterator postfix type info", () => {
 
   it(".filter(pred) on Iterator", () => {
     const action = constant([1, 2, 3]).iterate().filter(constant(true));
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
   });
 
   it(".collect() on Iterator", () => {
     const action = constant([1, 2]).iterate().collect();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Array<number>>>();
+  });
+
+  it(".fold() types: input, output, and VarRef types in callback", () => {
+    const action = constant([1, 2, 3])
+      .iterate()
+      .fold(constant(""), (acc, element) => {
+        assertExact<IsExact<ExtractInput<typeof acc>, any>>();
+        assertExact<IsExact<ExtractOutput<typeof acc>, string>>();
+        assertExact<IsExact<ExtractInput<typeof element>, any>>();
+        assertExact<IsExact<ExtractOutput<typeof element>, number>>();
+        return constant("result");
+      });
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+  });
+
+  it(".isEmpty() on Iterator", () => {
+    const action = constant([1, 2]).iterate().isEmpty();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+  });
+
+  it(".take(n) on Iterator", () => {
+    const action = constant([1, 2, 3]).iterate().take(2);
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
+  });
+
+  it(".skip(n) on Iterator", () => {
+    const action = constant([1, 2, 3]).iterate().skip(1);
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Iterator<number>>>();
+  });
+
+  it(".splitFirst() on Iterator", () => {
+    const action = constant([1, 2, 3]).iterate().splitFirst();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<[number, Iterator<number>]>>
+    >();
+  });
+
+  it(".splitLast() on Iterator", () => {
+    const action = constant([1, 2, 3]).iterate().splitLast();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, Option<[Iterator<number>, number]>>
+    >();
   });
 
   it("full chain: array.iterate().map(f).filter(p).collect()", () => {
@@ -128,7 +183,32 @@ describe("Iterator postfix type info", () => {
       .map(constant("x"))
       .filter(constant(true))
       .collect();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Array<string>>>();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Type tests — standalone fold
+// ---------------------------------------------------------------------------
+
+describe("Iterator.fold type info", () => {
+  it("fold infers input from Iterator, output from accumulator", () => {
+    const action = I.fold<number, string>(constant("init"), (acc, element) => {
+      assertExact<IsExact<ExtractOutput<typeof acc>, string>>();
+      assertExact<IsExact<ExtractOutput<typeof element>, number>>();
+      return constant("next");
+    });
+    assertExact<IsExact<ExtractInput<typeof action>, Iterator<number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+  });
+
+  it("fold VarRef inputs are any (can be used anywhere in pipeline)", () => {
+    I.fold<number, string>(constant("init"), (acc, element) => {
+      assertExact<IsExact<ExtractInput<typeof acc>, any>>();
+      assertExact<IsExact<ExtractInput<typeof element>, any>>();
+      return constant("next");
+    });
   });
 });
 
