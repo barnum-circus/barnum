@@ -54,3 +54,5 @@ This might break other valid patterns where the body expression has a narrow inp
 -----
 
 - wtf is this? does this still apply if we modify withResource to pass a tuple?
+- **Moot for withResource**: refactored to VarRef callback style in a002b1b1, no longer passes tuples.
+- The general principle may still apply to other `bindInput` / `bind` body patterns, but nothing currently triggers the issue.

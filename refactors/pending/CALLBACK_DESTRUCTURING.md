@@ -95,3 +95,5 @@ High. This is a significant ergonomics win that touches the most common user-fac
 -----
 
 - agree, this seems doable now.
+- **DONE: withResource** — refactored in a002b1b1 to use `(resource: VarRef<TResource>, input: VarRef<TIn>) => BodyResult<TOut>` callback style.
+- **Remaining: fold** — still uses `Pipeable<[TAcc, TElement], TAcc>` tuple. Could use `(acc: VarRef<TAcc>, element: VarRef<TElement>) => BodyResult<TAcc>` style.
