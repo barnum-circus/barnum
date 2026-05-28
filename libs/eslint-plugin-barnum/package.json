@@ -1,0 +1,31 @@
+{
+  "name": "@barnum/eslint-plugin",
+  "version": "0.1.0",
+  "description": "ESLint plugin enforcing barnum handler conventions",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "eslint": ">=9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "eslint": "^9.27.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.0.0"
+  },
+  "files": [
+    "dist/**/*"
+  ]
+}
