@@ -12,6 +12,7 @@
   "files": [],
   "references": [
     { "path": "libs/barnum" },
+    { "path": "libs/eslint-plugin-barnum" },
     { "path": "demos/analyze-file" },
     { "path": "demos/babysit-prs" },
     { "path": "demos/convert-folder-to-ts" },

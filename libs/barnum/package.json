@@ -24,7 +24,7 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint src/ tests/"
+    "lint": "oxlint src/ tests/ && eslint src/ tests/"
   },
   "author": "Robert Balicki",
   "license": "MIT",
@@ -44,12 +44,15 @@
   ],
   "sideEffects": false,
   "devDependencies": {
+    "@barnum/eslint-plugin": "workspace:*",
     "@oxlint/binding-darwin-arm64": "^1.57.0",
     "@types/json-schema": "^7.0.15",
     "@types/node": "^25.5.0",
+    "eslint": "^9.27.0",
     "oxlint": "^1.57.0",
     "prettier": "^3.8.1",
     "tsx": "^4.21.0",
+    "typescript-eslint": "^8.32.1",
     "typescript": "^6.0.3",
     "vitest": "^3.0.0"
   },
