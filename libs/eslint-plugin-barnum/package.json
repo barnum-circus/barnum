@@ -1,7 +1,7 @@
 {
   "name": "@barnum/eslint-plugin",
   "version": "0.1.0",
-  "description": "ESLint plugin enforcing barnum handler conventions",
+  "description": "ESLint rules for Barnum workflows",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
