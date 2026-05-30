@@ -615,7 +615,7 @@ jobs:
       - uses: pnpm/action-setup@v4
 
       - name: Install dependencies and build TypeScript
-        run: pnpm install --frozen-lockfile && pnpm run build
+        run: pnpm install --frozen-lockfile && pnpm exec turbo run build
         working-directory: libs/barnum
 
       - name: Set version and npm tag
@@ -632,7 +632,13 @@ jobs:
           echo "npm_tag=$NPM_TAG" >> $GITHUB_OUTPUT
           cd libs/barnum
           npm version $VERSION --no-git-tag-version --allow-same-version
+          cd ../eslint-plugin-barnum
+          npm version $VERSION --no-git-tag-version --allow-same-version
 
       - name: Publish barnum to npm
         run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }} --ignore-scripts
         working-directory: libs/barnum
+
+      - name: Publish eslint-plugin to npm
+        run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }} --ignore-scripts
+        working-directory: libs/eslint-plugin-barnum
