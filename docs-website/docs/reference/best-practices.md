@@ -147,6 +147,30 @@ export const analyze = createHandler({
 analyze.branch({ Critical: escalate, Low: log })
 ```
 
+### Use `z.any()` for handlers that ignore their input
+
+A handler that doesn't use its input is a thunk — like a `VarRef` or `constant`, it produces a value regardless of what arrives. Use `z.any()` (or omit `inputValidator`) so it composes freely in any pipeline position without requiring `.drop()` at call sites.
+
+```ts
+// Correct: handler ignores input, uses z.any() — composes like a VarRef
+export const judgeRefactor = createHandler(
+  {
+    inputValidator: z.any(),
+    outputValidator: JudgmentResultValidator,
+    handle: async (): Promise<JudgmentResult> => {
+      // doesn't use input — it's a thunk
+      return await reviewChanges();
+    },
+  },
+  "judgeRefactor",
+);
+
+// Can appear anywhere without .drop() ceremony:
+someAction.then(judgeRefactor);  // works — input ignored
+```
+
+`z.null()` would force every caller to explicitly discard before calling, which is inconsistent with how VarRefs and constants behave. "Ignores its input" means "accepts anything" — narrowness applies to inputs the handler *uses*.
+
 ### Retries, timeouts, and error recovery belong in the pipeline
 
 A handler makes exactly one attempt and returns a `Result` on failure. Retries, timeouts, back-off, and fallback paths are all pipeline-level concerns — they compose around handlers via `loop`, `tryCatch`, `unwrapOr`, and `withTimeout`.
