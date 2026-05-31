@@ -608,7 +608,20 @@ pipe(foo.drop(), bar.call(varRef));
 - An intermediate result is meaningful enough to name
 - The pipeline involves branching, loops, or error handling
 
-**Non-caching note:** `.call()` results are not memoized. Each reference to a local variable re-evaluates its pipeline. If you need a value computed once and referenced multiple times, use `bindInput` to capture it as a VarRef. For single-use intermediates (the common case), local `const` bindings are pure win with no overhead.
+**Non-caching note:** `.call()` results are not memoized. Each reference to a local variable re-evaluates its entire pipeline from scratch. If you reference the same `const` in two downstream actions, the handler runs twice:
+
+```ts
+// BUG: expensiveComputation runs TWICE — once for each reference to result
+const result = expensiveComputation.call(input);
+return allObject({ summary: summarize.call(result), report: format.call(result) });
+
+// Fixed: bindInput caches the value as a VarRef — computation runs once
+return expensiveComputation.call(input).bindInput<{ summary: string; report: string }>((result) =>
+  allObject({ summary: summarize.call(result), report: format.call(result) }),
+);
+```
+
+For single-use intermediates (the common case), local `const` bindings are pure win with no overhead. Only reach for `bindInput` when the same value is consumed by multiple downstream actions.
 
 ### Don't use `constant()` to produce a value the pipeline already carries
 
