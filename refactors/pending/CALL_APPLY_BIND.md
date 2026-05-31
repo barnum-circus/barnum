@@ -184,18 +184,97 @@ return pipe(
 
 ---
 
-## When `.call()` helps vs. doesn't
+## Nested `.call()` chains
 
-**Helps:** When an action's input must be assembled from VarRefs. The action name reads first (verb), then the arguments (nouns). `triageRefactor(dir).call(allObject({...}))` reads as "triage refactor with file, refactor, worktreePath."
+Inside `bindInput` bodies where multiple actions need assembling from VarRefs, you can nest `.call()` calls. This is the `.call()` analog of deeply nested `.then()` — potentially an anti-pattern if overused, but shows the expressiveness:
 
-**Doesn't help:** Linear pipelines where data flows naturally via `.then()`. If the previous step's output is the next step's input, `.then()` is already perfect.
+```ts
+// Nested calls — each action invoked with its assembled args
+bindInput<ImplState, string>((state) => {
+  const { pendingRefactors, lastBranch } = state.split();
+  return pendingRefactors
+    .iterate()
+    .fold(
+      lastBranch,
+      bindInput<[string, PotentialRefactor], string>((pair) => {
+        const [baseBranch, refactor] = pair.split();
+        return triageRefactor(dir)
+          .call(allObject({ file, refactor, worktreePath: resetWorktreeToBase.call(baseBranch) }))
+          .branch({
+            Keep: createImplBranch
+              .call(allObject({ file, refactorName: refactor.getField("refactorName"), baseBranch }))
+              .then(implementAndFix(dir, file, refactor, worktreePath, baseBranch)),
+            Skip: writeRefactorStatus({ dir, status: "skipped" })
+              .call(allObject({ file, refactor }))
+              .then(baseBranch),
+          });
+      }),
+    );
+});
+```
 
-**Equivalence:**
-- `action.call(ref)` ≡ `ref.then(action)` ≡ `pipe(ref, action)`
-- `action.call(all(a, b))` ≡ `all(a, b).then(action)` ≡ `pipe(all(a, b), action)`
-- `action.call(allObject({...}))` ≡ `pipe(allObject({...}), action)`
+This reads as imperative "call X with Y, then call Z with W" — each line is a function invocation. Compare with the pipe-based version which reads as "assemble data, pass to function, assemble more data, pass to next function."
 
-The user picks whichever reads best in context. `.call()` reads best when the action is the focus. `.then()` reads best when the data flow is the focus.
+The tradeoff: deeply nested `.call()` can become hard to parse vertically, just like deeply nested method chains. In practice, extract helper functions (as `process.ts` already does) rather than nesting 5 levels deep.
+
+---
+
+## Mental model: `pipe`, `.then()`, and `.call()`
+
+**`pipe(a, b, c)` = sequential let bindings:**
+```ts
+pipe(a, b, c)
+// Mental model:
+// let v1 = a(input)
+// let v2 = b(v1)
+// let v3 = c(v2)
+// return v3
+```
+
+Each step receives the previous step's output. The "current value" flows left-to-right through the pipeline. This is the default for linear data transformation — no assembly needed, each step consumes what the last produced.
+
+**`.then()` = single-step continuation:**
+```ts
+ref.then(action)
+// Mental model:
+// let v = ref()
+// return action(v)
+```
+
+Same as pipe but for a single link. Reads as "take this value, feed it to action." Best when the subject (the data source) is the focus.
+
+**`.call()` = function invocation:**
+```ts
+action.call(input)
+// Mental model:
+// return action(input())
+```
+
+Same semantics as `.then()` but with subject/object swapped. Reads as "invoke action with input." Best when the verb (the action) is the focus — especially when the input is assembled from multiple VarRefs.
+
+### When to use which
+
+| Pattern | Use when... |
+|---------|------------|
+| `pipe(a, b, c)` | Linear: each step consumes the previous step's output |
+| `ref.then(action)` | One-step: you have a value and want to transform it |
+| `action.call(input)` | Invocation: you have an action and want to supply its argument |
+
+In `bindInput` bodies, `.call()` is almost always clearer than `pipe(allObject({...}), action)` because the action is the important thing — the assembly is just plumbing.
+
+### Does `.call()` replace `pipe`?
+
+No. `pipe` composes a linear sequence where data flows step-to-step. A "reversed pipe" would be `action3.call(action2.call(action1.call(input)))` — nesting from inside out, losing the left-to-right readability that `pipe` provides. That's strictly worse.
+
+`.call()` replaces the pattern `pipe(assembled_input, action)` (two-step pipes where the first step is assembly). It doesn't replace `pipe(a, b, c, d)` (multi-step linear flows).
+
+### Does `.call()` replace `.then()`?
+
+Partially. `ref.then(action)` and `action.call(ref)` are equivalent. The choice is stylistic:
+- `file.then(readContents)` — "take file, read its contents" (data-focused)
+- `readContents.call(file)` — "read contents of file" (verb-focused)
+
+In practice, `.call()` dominates inside `bindInput` bodies because you're thinking imperatively: "I have VarRefs, I want to invoke functions on them." `.then()` dominates in method chains: `iterator.splitFirst().branch({...})`.
 
 ---
 
@@ -220,12 +299,50 @@ The user picks whichever reads best in context. `.call()` reads best when the ac
 
 ---
 
-## Summary of changes
+## Implementation changes
 
 | File | Change |
 |------|--------|
 | `libs/barnum/src/ast.ts` | Add `call` to `TypedAction` type definition |
 | `libs/barnum/src/ast.ts` | Add `call` to `typedAction()` method attachment (≈3 lines) |
-| `libs/barnum/src/index.ts` | No change needed — `call` is a method, not an export |
 
 Total implementation: ~5 lines of runtime code, ~1 line of type definition.
+
+---
+
+## Files to rewrite after implementation
+
+Mechanical rewrite: replace `pipe(allObject({...}), action)` / `allObject({...}).then(action)` / `pipe(all(...), action)` with `action.call(...)` where it reads better. Also update docs to teach `.call()` as the default pattern in `bindInput` bodies.
+
+### Demos
+
+- `demos/sequential-deploy/run.ts`
+- `demos/implement-feature/run.ts`
+- `demos/implement-feature/handlers/with-retry.ts`
+- `demos/implement-feature/handlers/with-max-attempts.ts`
+- `demos/identify-and-address-refactors/run.ts`
+- `demos/identify-and-address-refactors/handlers/refactor.ts`
+- `demos/identify-and-address-refactors/handlers/type-check-fix.ts`
+- `demos/convert-folder-to-ts/run.ts`
+- `demos/convert-folder-to-ts/handlers/type-check-fix.ts`
+- `demos/babysit-prs/run.ts`
+- `demos/retry-on-error/run.ts`
+- `demos/event-bus/run.ts`
+- `demos/event-bus-durable/run.ts`
+- `demos/workflow-output/run.ts`
+
+### Tests
+
+- `libs/barnum/tests/bind.test.ts`
+- `libs/barnum/tests/struct.test.ts`
+- `libs/barnum/tests/with-resource.test.ts`
+- `libs/barnum/tests/iterator.test.ts`
+- `libs/barnum/tests/loop.test.ts`
+
+### Documentation
+
+- `docs-website/docs/reference/builtins.md` — add `.call()` to TypedAction method reference
+- `docs-website/docs/reference/best-practices.md` — rewrite `bindInput` section to use `.call()` as the default pattern; add mental model section (pipe = let bindings, call = function invocation)
+- `docs-website/docs/patterns/bounded-concurrency.md` — rewrite with `.call()`
+- `docs-website/docs/repertoire/sequential-file-processing.md` — rewrite with `.call()`
+- `docs-website/docs/architecture/algebraic-effect-handlers.md` — update if examples use assembly pattern
