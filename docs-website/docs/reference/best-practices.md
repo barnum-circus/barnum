@@ -689,6 +689,30 @@ bindInput<Params>((params) =>
 );
 ```
 
+### Prefer postfix `.bindInput()` over `bindInput(...).call()`
+
+`bindInput` is available both as a standalone function and as a postfix method on `TypedAction`. When you already have the value (as a VarRef or action), use the postfix form — it reads naturally and avoids the awkward `.call()` at the end.
+
+```ts
+// Avoid: standalone bindInput with .call() — reads inside-out
+bindInput<WorktreeResource, never>((resource) =>
+  pipe(
+    implement.call(resource.pick("worktreePath")).drop(),
+    commit.call(resource.pick("worktreePath")),
+  ),
+).call(createWorktree)
+
+// Prefer: postfix .bindInput() — reads left-to-right
+createWorktree.bindInput<never>((resource) =>
+  pipe(
+    implement.call(resource.pick("worktreePath")).drop(),
+    commit.call(resource.pick("worktreePath")),
+  ),
+)
+```
+
+The standalone `bindInput<TIn, TOut>(fn)` is for the top level of a pipeline definition (where there's no preceding action to call it on). Everywhere else, use the postfix form.
+
 ### Use `bindInput` when multiple steps need the same value
 
 If a handler's output is consumed by one step but also needed later (e.g., a worktree path used for type-check, commit, and PR creation), wrap the section in `bindInput` rather than threading the value through every handler's input/output.
