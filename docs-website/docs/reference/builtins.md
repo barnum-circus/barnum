@@ -884,6 +884,7 @@ These methods are available on any `TypedAction` via dot-chaining. **Always pref
 | Method | Standalone equivalent | Notes |
 |---|---|---|
 | `.then(next)` | `chain(a, next)` | |
+| `.call(input)` | `chain(input, a)` | Invoke with assembled input; returns `TypedAction<any, Out>` |
 | `.iterate()` | `Iterator.fromArray()` / `Iterator.fromOption()` / `Iterator.fromResult()` | Requires array, Option, or Result output |
 | `.map(action)` | `Iterator.map(action)` | Requires Iterator output (also works on Option, Result) |
 | `.flatMap(action)` | `Iterator.flatMap(action)` | Requires Iterator output; `action` returns any IntoIterator |

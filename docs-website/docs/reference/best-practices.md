@@ -468,6 +468,43 @@ Without the explicit `never`, you get: `Type '() => any' is not assignable to ty
 | Inside `loop` body (all paths → recur/done) | `never` | All paths exit via actions typed `→ never` |
 | Inside `earlyReturn` where all paths → `ret` | `never` | Same reason |
 
+### Use `.call()` with local variables inside `bindInput` bodies
+
+Inside `bindInput` callbacks, use `.call()` to invoke actions with assembled arguments. Assign intermediate results to `const` variables — they read like imperative let-bindings:
+
+```ts
+bindInput<[WorktreeResource, Refactor], { prUrl: string }>((state) => {
+  const [resource, refactor] = state.split();
+  const worktreePath = resource.getField("worktreePath");
+  const description = refactor.getField("description");
+
+  return pipe(
+    implement.call(allObject({ worktreePath, description })).drop(),
+    typeCheckFix.call(resource.pick("worktreePath")).drop(),
+    commit.call(resource.pick("worktreePath")).drop(),
+    preparePRInput
+      .call(allObject({ branch: resource.getField("branch"), description }))
+      .then(createPR),
+  );
+});
+```
+
+Each `const` binding is a computed value (a `TypedAction<any, T>`). Since `.call()` returns `TypedAction<any, Out>` — the same shape as a VarRef — these local variables compose naturally with `allObject`, `all`, and further `.call()` invocations.
+
+**Avoid:** `pipe(allObject({...}), action)`. This buries the verb (action) after its arguments.
+
+**Prefer:** `action.call(allObject({...}))`. The verb reads first, then the arguments.
+
+**Mental model:**
+
+| Pattern | Reads as... |
+|---------|-------------|
+| `pipe(a, b, c)` | `let v1 = a(); let v2 = b(v1); let v3 = c(v2)` — sequential data flow |
+| `ref.then(action)` | `action(ref())` — transform a value |
+| `action.call(input)` | `action(input())` — invoke a function with arguments |
+
+**Non-caching note:** `.call()` results are not memoized. Each reference to a local variable re-evaluates its pipeline. If you need a value computed once and referenced multiple times, use `bindInput` to capture it as a VarRef. For single-use intermediates (the common case), local `const` bindings are pure win with no overhead.
+
 ### Don't use `constant()` to produce a value the pipeline already carries
 
 `constant(x)` discards its input and produces `x`. If the input is already `x`, `constant(x)` is a no-op — it throws away a value only to reconstruct the identical value. This most commonly appears at the top of a `loop` body:
