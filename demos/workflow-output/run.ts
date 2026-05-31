@@ -8,7 +8,7 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { runPipeline, pipe, constant } from "@barnum/barnum/pipeline";
+import { runPipeline, constant } from "@barnum/barnum/pipeline";
 import { double, addLabel } from "./handlers/steps";
 
 async function main() {
@@ -18,14 +18,15 @@ async function main() {
   assert(number === 42, `expected 42, got ${JSON.stringify(number)}`);
 
   // 2. Handler output is captured
-  const doubled = await runPipeline(constant(21).then(double));
+  const doubled = await runPipeline(double.call(constant(21)));
   console.error(`[assert] double(21) returned: ${JSON.stringify(doubled)}`);
   assert(doubled === 42, `expected 42, got ${JSON.stringify(doubled)}`);
 
   // 3. Multi-step pipeline returns the final handler's output
-  const labeled = await runPipeline(pipe(constant(5), double, addLabel));
+  const fiveDoubled = double.call(constant(5));
+  const labeled = await runPipeline(addLabel.call(fiveDoubled));
   console.error(
-    `[assert] pipe(double, addLabel)(5) returned: ${JSON.stringify(labeled)}`,
+    `[assert] addLabel(double(5)) returned: ${JSON.stringify(labeled)}`,
   );
   assert(
     labeled.label === "result-10" && labeled.value === 10,

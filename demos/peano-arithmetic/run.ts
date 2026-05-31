@@ -25,12 +25,12 @@ runPipeline(
     // isEven body
     classifyZero.branch({
       Zero: constant(true),
-      NonZero: subtractOne.then(isOdd),
+      NonZero: isOdd.call(subtractOne),
     }),
     // isOdd body
     classifyZero.branch({
       Zero: constant(false),
-      NonZero: subtractOne.then(isEven),
+      NonZero: isEven.call(subtractOne),
     }),
   ])((isEven, _isOdd) => isEven),
   7,

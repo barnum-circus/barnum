@@ -12,6 +12,7 @@ import type { Pipeable, TypedAction, Result } from "@barnum/barnum/pipeline";
 import {
   runPipeline,
   all,
+  typed,
   loop,
   drop,
   bindInput,
@@ -39,11 +40,11 @@ function withRetry<TIn, TOut>(
   return bindInput<TIn, TOut>((originalInput) =>
     earlyReturn<TOut>((ret) =>
       loop<void, void>((recur, _done) =>
-        tryCatch(
-          (throwError) =>
-            originalInput.then(action).unwrapOr(throwError).then(ret),
-          drop.then(recur),
-        ),
+        tryCatch((throwError) => {
+          const result = typed(action).call(originalInput);
+          const unwrapped = result.unwrapOr(throwError);
+          return ret.call(unwrapped);
+        }, recur.call(drop)),
       ),
     ),
   );

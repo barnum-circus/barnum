@@ -13,9 +13,7 @@
 import {
   type Iterator,
   runPipeline,
-  pipe,
   loop,
-  drop,
   constant,
   Iterator as Iter,
   identity,
@@ -25,29 +23,21 @@ import { getServices, deployService, verifyService } from "./handlers/deploy";
 
 console.error("=== Sequential deploy demo ===\n");
 
+const services = Iter.fromArray<string>().call(getServices);
+
 runPipeline(
-  pipe(
-    getServices,
-    Iter.fromArray<string>(),
+  loop<Iterator<string>, null>((recur, done) =>
+    identity<Iterator<string>>()
+      .splitFirst()
+      .branch({
+        None: done.call(constant<null>(null)),
 
-    loop<Iterator<string>, null>((recur, done) =>
-      identity<Iterator<string>>()
-        .splitFirst()
-        .branch({
-          None: constant<null>(null).then(done),
-
-          Some: bindInput<[string, Iterator<string>], never>((pair) => {
-            const [service, rest] = pair.split();
-            return pipe(
-              service,
-              deployService,
-              verifyService,
-              drop,
-              rest,
-              recur,
-            );
-          }),
+        Some: bindInput<[string, Iterator<string>], never>((pair) => {
+          const [service, rest] = pair.split();
+          const deployed = deployService.call(service);
+          const verified = verifyService.call(deployed);
+          return recur.call(rest).call(verified);
         }),
-    ),
-  ),
+      }),
+  ).call(services),
 );

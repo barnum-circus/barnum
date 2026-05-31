@@ -9,7 +9,6 @@
 
 import {
   runPipeline,
-  pipe,
   loop,
   tryCatch,
   withTimeout,
@@ -23,20 +22,15 @@ console.error("=== Retry-on-error demo ===\n");
 runPipeline(
   loop<void, string>((recur, done) =>
     tryCatch(
-      (throwError) =>
-        pipe(
-          // stepA may fail catastrophically — exit the loop immediately
-          stepA.unwrapOr(done).drop(),
-
-          // stepB may fail and may take unreasonably long
-          stepBWithTimeout(throwError),
-
-          // stepC may fail — retry via catch; success breaks the loop
-          stepC.unwrapOr(throwError).then(done),
-        ),
+      (throwError) => {
+        const afterA = stepA.unwrapOr(done).drop();
+        const afterB = stepBWithTimeout(throwError).call(afterA);
+        const result = stepC.unwrapOr(throwError).call(afterB);
+        return done.call(result);
+      },
 
       // An error occurred — log it and retry the loop
-      logError.drop().then(recur),
+      recur.call(logError.drop()),
     ),
   ),
 );

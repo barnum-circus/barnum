@@ -5,7 +5,7 @@
 // fix: invoke Claude to fix a single type error
 
 import { createHandler, taggedUnionSchema } from "@barnum/barnum/runtime";
-import { bindInput, pipe, Iterator, loop } from "@barnum/barnum/pipeline";
+import { bindInput, Iterator, loop } from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -162,10 +162,11 @@ export const fix = createHandler(
 
 export const typeCheckFix = bindInput<{ worktreePath: string }, null>(
   (typeCheckFixParams) =>
-    loop<void>((recur, done) =>
-      typeCheckFixParams.then(pipe(typeCheck, classifyErrors)).branch({
-        HasErrors: Iterator.fromArray<TypeError>().map(fix).drop().then(recur),
+    loop<void>((recur, done) => {
+      const errors = classifyErrors.call(typeCheck.call(typeCheckFixParams));
+      return errors.branch({
+        HasErrors: recur.call(Iterator.fromArray<TypeError>().map(fix).drop()),
         Clean: done,
-      }),
-    ),
+      });
+    }),
 );

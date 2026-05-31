@@ -11,13 +11,7 @@ import {
   taggedUnionSchema,
   optionSchema,
 } from "@barnum/barnum/runtime";
-import {
-  allObject,
-  bindInput,
-  pipe,
-  loop,
-  pick,
-} from "@barnum/barnum/pipeline";
+import { allObject, bindInput, loop, pick } from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -391,34 +385,48 @@ export const implementAndReview = bindInput<
   const worktreePath = resource.getField("worktreePath");
   const description = refactor.getField("description");
 
-  return pipe(
-    implement.call(allObject({ worktreePath, description })).drop(),
-    typeCheckFix.call(resource.pick("worktreePath")).drop(),
+  const implemented = implement
+    .call(allObject({ worktreePath, description }))
+    .drop();
+  const typeChecked = typeCheckFix
+    .call(resource.pick("worktreePath"))
+    .drop()
+    .call(implemented);
 
-    // Judge quality; revise and re-check if needed.
-    loop((recur, done) =>
-      judgeRefactor.then(classifyJudgment).branch({
-        NeedsWork: applyFeedback
+  // Judge quality; revise and re-check if needed.
+  const reviewed = loop((recur, done) => {
+    const judged = classifyJudgment.call(judgeRefactor);
+    return judged.branch({
+      NeedsWork: bindInput<string, never>((instructions) => {
+        const applied = applyFeedback.call(instructions).drop();
+        const reChecked = typeCheckFix
+          .call(resource.pick("worktreePath"))
           .drop()
-          .then(typeCheckFix.call(resource.pick("worktreePath")))
-          .drop()
-          .then(recur),
-        Approved: done,
+          .call(applied);
+        return recur.call(reChecked);
       }),
-    ).drop(),
+      Approved: done,
+    });
+  })
+    .drop()
+    .call(typeChecked);
 
-    // Commit and open a PR only after all fixes and revisions are done.
-    commit.call(resource.pick("worktreePath")).drop(),
-    preparePRInput
-      .call(allObject({ branch: resource.getField("branch"), description }))
-      .then(createPR),
-  );
+  // Commit and open a PR only after all fixes and revisions are done.
+  const committed = commit
+    .call(resource.pick("worktreePath"))
+    .drop()
+    .call(reviewed);
+  return createPR
+    .call(
+      preparePRInput.call(
+        allObject({ branch: resource.getField("branch"), description }),
+      ),
+    )
+    .call(committed);
 });
 
-export const createBranchWorktree = pipe(
-  pick<Refactor, ["description"]>("description"),
-  deriveBranch,
-  createWorktree,
-);
+const pickDescription = pick<Refactor, ["description"]>("description");
+const branch = deriveBranch.call(pickDescription);
+export const createBranchWorktree = createWorktree.call(branch);
 
-export const openPR = preparePRInput.then(createPR);
+export const openPR = createPR.call(preparePRInput);

@@ -21,7 +21,6 @@
 
 import {
   runPipeline,
-  pipe,
   allObject,
   bindInput,
   drop,
@@ -48,32 +47,33 @@ const DESCRIPTION =
   "Debounce at 300ms. Show suggestions in a dropdown below the input.";
 
 runPipeline(
-  bindInput<string, null>((description) =>
-    pipe(
-      setup,
-      description.then(withRetry(3, implement)).drop(),
+  bindInput<string, null>((description) => {
+    const setupResult = setup;
+    const implemented = withRetry(3, implement)
+      .call(description)
+      .drop()
+      .call(setupResult);
 
-      withMaxAttempts<null>(3, (recur, done) => {
-        const checks = allObject({
-          bestPractices: withRetry(3, reviewBestPractices),
-          adherence: description.then(withRetry(3, reviewAdherence)),
-          suppressedTests: withRetry(3, checkSuppressedTests),
-          typecheck: withRetry(3, runTypecheck),
-        });
+    const reviewed = withMaxAttempts<null>(3, (recur, done) => {
+      const checks = allObject({
+        bestPractices: withRetry(3, reviewBestPractices),
+        adherence: withRetry(3, reviewAdherence).call(description),
+        suppressedTests: withRetry(3, checkSuppressedTests),
+        typecheck: withRetry(3, runTypecheck),
+      });
 
-        return checks.then(classifyFeedback).branch({
-          HasIssues: bindInput<string, never>((feedback) =>
-            withRetry(3, incorporateFeedback)
-              .call(allObject({ description, feedback }))
-              .drop()
-              .then(recur),
-          ),
-          AllClean: drop.then(done),
-        });
-      }),
+      return classifyFeedback.call(checks).branch({
+        HasIssues: bindInput<string, never>((feedback) => {
+          const fixed = withRetry(3, incorporateFeedback)
+            .call(allObject({ description, feedback }))
+            .drop();
+          return recur.call(fixed);
+        }),
+        AllClean: done.call(drop),
+      });
+    }).call(implemented);
 
-      splitCommits.drop(),
-    ),
-  ),
+    return splitCommits.drop().call(reviewed);
+  }),
   DESCRIPTION,
 );

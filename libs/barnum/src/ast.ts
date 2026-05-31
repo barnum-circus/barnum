@@ -1115,6 +1115,13 @@ export function typedAction<In = unknown, Out = unknown>(
   return action as TypedAction<In, Out>;
 }
 
+/** Upgrade a Pipeable to TypedAction, inferring types from phantom markers. */
+export function typed<In, Out>(
+  action: Pipeable<In, Out>,
+): TypedAction<In, Out> {
+  return typedAction<In, Out>(action);
+}
+
 // ---------------------------------------------------------------------------
 // Type extraction utilities
 // ---------------------------------------------------------------------------

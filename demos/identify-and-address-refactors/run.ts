@@ -38,9 +38,10 @@ import { deleteWorktree } from "./handlers/git";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
+const files = listTargetFiles.call(constant({ folder: srcDir }));
+
 runPipeline(
-  constant({ folder: srcDir })
-    .then(listTargetFiles)
+  files
     .iterate()
     .flatMap(analyze)
     .flatMap(assessWorthiness)

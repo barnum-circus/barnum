@@ -13,6 +13,7 @@
 import type { Pipeable, TypedAction, Result } from "@barnum/barnum/pipeline";
 import {
   bindInput,
+  typed,
   tryCatch,
   loop,
   earlyReturn,
@@ -27,23 +28,26 @@ export function withRetry<TIn, TOut>(
   action: Pipeable<TIn, Result<TOut, string>>,
 ): TypedAction<TIn, TOut> {
   return bindInput<TIn, TOut>((originalInput) =>
-    earlyReturn<TOut>((ret) =>
-      constant(maxAttempts - 1).then(
-        loop<number, void>((recur, _done) =>
-          bindInput<number, never>((retriesRemaining) =>
-            tryCatch(
-              (throwError: TypedAction<string, never>) =>
-                originalInput.then(action).unwrapOr(throwError).then(ret),
-              drop.then(
-                retriesRemaining.then(checkRetries).branch({
-                  Retry: recur,
-                  Exhausted: drop.then(panic("max retries exceeded")),
-                }),
-              ),
-            ),
+    earlyReturn<TOut>((ret) => {
+      const retryLoop = loop<number, void>((recur, _done) =>
+        bindInput<number, never>((retriesRemaining) =>
+          tryCatch(
+            (throwError: TypedAction<string, never>) => {
+              const result = typed(action).call(originalInput);
+              const unwrapped = result.unwrapOr(throwError);
+              return ret.call(unwrapped);
+            },
+            checkRetries
+              .call(retriesRemaining)
+              .branch({
+                Retry: recur,
+                Exhausted: panic("max retries exceeded").call(drop),
+              })
+              .call(drop),
           ),
         ),
-      ),
-    ),
+      );
+      return retryLoop.call(constant(maxAttempts - 1));
+    }),
   );
 }

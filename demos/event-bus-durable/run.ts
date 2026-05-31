@@ -14,7 +14,6 @@ import {
   bindInput,
   constant,
   loop,
-  pipe,
   runPipeline,
   sleep,
   type TypedAction,
@@ -32,43 +31,40 @@ import {
 
 // Producer: emit events at 100ms intervals until max reached.
 function makeProducerLoop(producerId: number): TypedAction<null, null> {
-  return loop<null, null>((recur, done) =>
-    pipe(sleep(100), constant({ producerId }), produceEvent).branch({
+  return loop<null, null>((recur, done) => {
+    const slept = sleep(100);
+    const input = constant({ producerId }).call(slept);
+    return produceEvent.call(input).branch({
       Some: recur,
       None: done,
-    }),
-  );
+    });
+  });
 }
 
 // Consumer: dequeue, process, mark complete. Repeat until done.
 function makeConsumerLoop(): TypedAction<null, null> {
   return loop<null, null>((recur, done) =>
     dequeueEvent.branch({
-      Some: bindInput<ClaimedEvent, never>((claimed) =>
-        pipe(
-          claimed.getField("item"),
-          consumeEvent,
-          claimed.pick("id"),
-          completeEvent,
-          recur,
-        ),
-      ),
-      None: isDone.then(asOption()).branch({
-        Some: done,
-        None: sleep(50).then(recur),
+      Some: bindInput<ClaimedEvent, never>((claimed) => {
+        const consumed = consumeEvent.call(claimed.getField("item"));
+        const completed = completeEvent.call(claimed.pick("id")).call(consumed);
+        return recur.call(completed);
       }),
+      None: asOption()
+        .call(isDone)
+        .branch({
+          Some: done,
+          None: recur.call(sleep(50)),
+        }),
     }),
   );
 }
 
-runPipeline(
-  clearQueue.then(
-    all(
-      makeProducerLoop(0),
-      makeProducerLoop(1),
-      makeProducerLoop(2),
-      makeConsumerLoop(),
-      makeConsumerLoop(),
-    ),
-  ),
+const concurrent = all(
+  makeProducerLoop(0),
+  makeProducerLoop(1),
+  makeProducerLoop(2),
+  makeConsumerLoop(),
+  makeConsumerLoop(),
 );
+runPipeline(concurrent.call(clearQueue));

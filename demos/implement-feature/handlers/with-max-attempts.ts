@@ -12,6 +12,7 @@ import {
   loop,
   earlyReturn,
   bindInput,
+  typed,
   drop,
   panic,
   constant,
@@ -25,19 +26,18 @@ export function withMaxAttempts<TBreak>(
     done: TypedAction<TBreak, never>,
   ) => Pipeable<null, never>,
 ): TypedAction<null, TBreak> {
-  return earlyReturn<TBreak, null, never>((ret) =>
-    constant(maxAttempts - 1).then(
-      loop<number, never>((recur, _done) =>
-        bindInput<number, never>((attemptsRemaining) => {
-          const guardedRecur: TypedAction<null, never> = attemptsRemaining
-            .then(checkRetries)
-            .branch({
-              Retry: recur,
-              Exhausted: drop.then(panic("max review attempts exceeded")),
-            });
-          return drop.then(bodyFn(guardedRecur, ret));
-        }),
-      ),
-    ),
-  );
+  return earlyReturn<TBreak, null, never>((ret) => {
+    const retryLoop = loop<number, never>((recur, _done) =>
+      bindInput<number, never>((attemptsRemaining) => {
+        const guardedRecur: TypedAction<null, never> = checkRetries
+          .call(attemptsRemaining)
+          .branch({
+            Retry: recur,
+            Exhausted: panic("max review attempts exceeded").call(drop),
+          });
+        return typed(bodyFn(guardedRecur, ret)).call(drop);
+      }),
+    );
+    return retryLoop.call(constant(maxAttempts - 1));
+  });
 }

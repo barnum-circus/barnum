@@ -35,25 +35,27 @@ console.error("=== Babysit PRs demo ===\n");
 console.error("Monitoring PRs: #101, #102, #103\n");
 
 runPipeline(
-  loop<number[], void>((recur, done) =>
-    Iterator.fromArray<number>()
+  loop<number[], void>((recur, done) => {
+    const filtered = Iterator.fromArray<number>()
       .filter(
-        bindInput<number, boolean>((prNumber) =>
-          prNumber.then(checkPR).branch({
-            ChecksFailed: fixIssues.drop().then(constant(true)),
-            ChecksPassed: landPR.drop().then(constant(false)),
-            Landed: drop.then(constant(false)),
-          }),
-        ),
+        bindInput<number, boolean>((prNumber) => {
+          const status = checkPR.call(prNumber);
+          return status.branch({
+            ChecksFailed: constant(true).call(fixIssues.drop()),
+            ChecksPassed: constant(false).call(landPR.drop()),
+            Landed: constant(false).call(drop),
+          });
+        }),
       )
-      .collect()
-      .then(classifyRemaining)
-      .branch({
-        HasPRs: bindInput<number[], never>((prs) =>
-          sleep(10_000).then(prs).then(recur),
-        ),
-        AllDone: done,
+      .collect();
+    return classifyRemaining.call(filtered).branch({
+      HasPRs: bindInput<number[], never>((prs) => {
+        const slept = sleep(10_000);
+        const prsList = prs.call(slept);
+        return recur.call(prsList);
       }),
-  ),
+      AllDone: done,
+    });
+  }),
   [101, 102, 103],
 );
