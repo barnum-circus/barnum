@@ -185,6 +185,14 @@ export const callApi = createHandler(
 );
 
 // Pipeline adds timeout and retries:
+withRetry(withTimeout(constant(5_000), callApi), 3)
+```
+
+`withRetry(action, n)` retries a `Result`-returning action up to `n` times. On the first `Ok`, it short-circuits and returns the value. If all attempts produce `Err`, it returns the final `Err`. The action receives the same input on every attempt.
+
+For more complex retry logic (back-off, logging between attempts, conditional retry based on error type), use `loop` directly:
+
+```ts
 loop((recur, done) =>
   withTimeout(constant(5_000), callApi).branch({
     Ok: done,
