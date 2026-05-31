@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   type VarRef,
+  all,
   bind,
   bindInput,
   pipe,
@@ -267,5 +268,96 @@ describe("bindInput execution", () => {
       ),
     );
     expect(result).toEqual({ artifact: "test.build" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// .split() execution tests
+// ---------------------------------------------------------------------------
+
+describe("split execution", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("tuple split: both components accessible", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant(["hello", 42] as [string, number]),
+        bindInput<[string, number], string>((state) => {
+          const [str, _num] = state.split();
+          return str;
+        }),
+      ),
+    );
+    expect(result).toBe("hello");
+  });
+
+  it("tuple split: second component accessible", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant(["hello", 42] as [string, number]),
+        bindInput<[string, number], number>((state) => {
+          const [_str, num] = state.split();
+          return num;
+        }),
+      ),
+    );
+    expect(result).toBe(42);
+  });
+
+  it("object split: field accessible", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant({ name: "alice", age: 30 }),
+        bindInput<{ name: string; age: number }, string>((state) => {
+          const { name } = state.split();
+          return name;
+        }),
+      ),
+    );
+    expect(result).toBe("alice");
+  });
+
+  it("multiple splits of same VarRef yield independent results", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant({ a: { b: "nested" }, c: 99 }),
+        bindInput<{ a: { b: string }; c: number }, string>((vr) => {
+          const { a } = vr.split();
+          const { c: _c } = vr.split();
+          return a.getField("b");
+        }),
+      ),
+    );
+    expect(result).toBe("nested");
+  });
+
+  it("split same VarRef for different nested fields", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant({ a: { b: "deep" }, x: 42 }),
+        bindInput<{ a: { b: string }; x: number }>((vr) => {
+          const { a } = vr.split();
+          const { x } = vr.split();
+          return all(a.getField("b"), x);
+        }),
+      ),
+    );
+    expect(result).toEqual(["deep", 42]);
+  });
+
+  it("split VarRef then split nested field", async () => {
+    const result = await runPipeline(
+      pipe(
+        constant({ outer: { inner: "found" } }),
+        bindInput<{ outer: { inner: string } }, string>((vr) => {
+          const { outer } = vr.split();
+          const { inner } = outer.split();
+          return inner;
+        }),
+      ),
+    );
+    expect(result).toBe("found");
   });
 });
