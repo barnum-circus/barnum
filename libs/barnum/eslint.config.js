@@ -15,8 +15,8 @@ export default [
       barnum: barnumPlugin,
     },
     rules: {
-      "barnum/bind-input-arity": "error",
       "barnum/exported-handler": "error",
+      "barnum/require-callback-params": "error",
       "barnum/require-type-params": "error",
     },
   },

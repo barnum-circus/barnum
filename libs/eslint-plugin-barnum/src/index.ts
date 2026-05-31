@@ -1,11 +1,11 @@
-import bindInputArity from "./rules/bind-input-arity.js";
 import exportedHandler from "./rules/exported-handler.js";
+import requireCallbackParams from "./rules/require-callback-params.js";
 import requireTypeParams from "./rules/require-type-params.js";
 
 const plugin = {
   rules: {
-    "bind-input-arity": bindInputArity,
     "exported-handler": exportedHandler,
+    "require-callback-params": requireCallbackParams,
     "require-type-params": requireTypeParams,
   },
 };
