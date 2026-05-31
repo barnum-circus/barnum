@@ -513,9 +513,23 @@ return advanceOrFinish.call(allObject({ batchResults, state }));
 
 **Sequencing:** `b.call(a)` means "evaluate `a`, then pass its output to `b`". When `b` already has its own input (via an inner `.call()`), the outer `.call(a)` is pure sequencing — `a` runs first for its side effect, then `b` runs independently.
 
-**Avoid:** `pipe(a, b, c)` or `a.then(b).then(c)`. These hide the data flow and make it hard to insert intermediate steps.
+**`pipe` for simple linear sequences:** When data flows straight through a series of steps with no branching, no multi-use, and nothing worth naming, `pipe` is the natural expression:
 
-**Prefer:** `const x = b.call(a); return c.call(x);`. The verb reads first, then the arguments. Steps are individually named and reorderable.
+```ts
+// Good: data flows linearly, no interesting intermediates
+listFiles
+  .iterate()
+  .map(pipe(implementRefactor, typeCheckFiles, fixTypeErrors, commitChanges));
+```
+
+Use `pipe` when the data actually flows — each step's output is the next step's input and there's no reason to name the intermediates. Once you need to assemble inputs from multiple sources, branch, or reference a value twice, switch to `const` + `.call()`.
+
+**Prefer `const` + `.call()` when:**
+
+- A step assembles its input from multiple sources (`allObject`, VarRefs)
+- An intermediate result is meaningful enough to name
+- You need sequencing between steps that don't share data (`.call()` for ordering)
+- The pipeline involves branching, loops, or error handling
 
 **Non-caching note:** `.call()` results are not memoized. Each reference to a local variable re-evaluates its pipeline. If you need a value computed once and referenced multiple times, use `bindInput` to capture it as a VarRef. For single-use intermediates (the common case), local `const` bindings are pure win with no overhead.
 
