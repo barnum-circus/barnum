@@ -1168,6 +1168,7 @@ import {
   type ResumeHandlerId,
 } from "./effect-id.js";
 export { tryCatch } from "./try-catch.js";
+export { withRetry } from "./retry.js";
 export { race, sleep, withTimeout } from "./race.js";
 
 export function forEach<In, Out>(
