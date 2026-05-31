@@ -203,6 +203,8 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   __out?: () => Out;
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
+  /** Invoke this action with a given input. `action.call(input)` ≡ `input.then(action)`. */
+  call(input: Pipeable<any, In>): TypedAction<any, Out>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
   branch<
     TCases extends {
@@ -636,6 +638,13 @@ function thenMethod<TIn, TOut, TNext>(
   return chain(this, next);
 }
 
+function callMethod<TIn, TOut>(
+  this: TypedAction<TIn, TOut>,
+  input: Pipeable<any, TIn>,
+): TypedAction<any, TOut> {
+  return chain(input, this);
+}
+
 function branchMethod(
   this: TypedAction,
   cases: Record<string, Action>,
@@ -1057,6 +1066,7 @@ export function typedAction<In = unknown, Out = unknown>(
   if (!("then" in action)) {
     Object.defineProperties(action, {
       then: { value: thenMethod, configurable: true },
+      call: { value: callMethod, configurable: true },
 
       branch: { value: branchMethod, configurable: true },
       flatten: { value: flattenMethod, configurable: true },
