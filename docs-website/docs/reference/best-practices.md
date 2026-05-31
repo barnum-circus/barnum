@@ -171,6 +171,51 @@ someAction.then(judgeRefactor);  // works — input ignored
 
 `z.null()` would force every caller to explicitly discard before calling, which is inconsistent with how VarRefs and constants behave. "Ignores its input" means "accepts anything" — narrowness applies to inputs the handler *uses*.
 
+### Don't handle errors inside handlers
+
+A handler that can fail should return a `Result` — not catch the error internally and swallow it. Error handling is a pipeline concern: the pipeline decides whether to retry, fall back, escalate, or abort. A handler that silently swallows errors (returning a default, logging and continuing, or catching and ignoring) hides failures from the framework and makes the workflow lie about its state.
+
+```ts
+// Avoid: handler swallows the error and returns a fallback
+export const parseConfig = createHandler(
+  {
+    inputValidator: z.object({ path: z.string() }),
+    outputValidator: configSchema,
+    handle: async ({ value }) => {
+      try {
+        return JSON.parse(readFileSync(value.path, "utf-8"));
+      } catch {
+        console.error("Failed to parse, using defaults");
+        return DEFAULT_CONFIG; // silent failure — pipeline never knows
+      }
+    },
+  },
+  "parseConfig",
+);
+
+// Prefer: handler surfaces the error, pipeline decides what to do
+export const parseConfig = createHandler(
+  {
+    inputValidator: z.object({ path: z.string() }),
+    outputValidator: Result.schema(configSchema, z.string()),
+    handle: async ({ value }) => {
+      try {
+        return { kind: "Result.Ok", value: JSON.parse(readFileSync(value.path, "utf-8")) };
+      } catch (e) {
+        return { kind: "Result.Err", value: e.message };
+      }
+    },
+  },
+  "parseConfig",
+);
+
+// Pipeline handles the error explicitly:
+parseConfig.unwrapOr(useDefaults);
+// or: parseConfig.branch({ Ok: proceed, Err: escalate });
+```
+
+If an error is truly unrecoverable, let the handler throw — the framework will surface it. If it's recoverable, return `Result` and let the pipeline choose the recovery strategy. The one thing a handler should never do is hide that something went wrong.
+
 ### Retries, timeouts, and error recovery belong in the pipeline
 
 A handler makes exactly one attempt and returns a `Result` on failure. Retries, timeouts, back-off, and fallback paths are all pipeline-level concerns — they compose around handlers via `loop`, `tryCatch`, `unwrapOr`, and `withTimeout`.
