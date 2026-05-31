@@ -53,28 +53,24 @@ runPipeline(
       setup,
       description.then(withRetry(3, implement)).drop(),
 
-      withMaxAttempts<null>(3, (recur, done) =>
-        pipe(
-          allObject({
-            bestPractices: withRetry(3, reviewBestPractices),
-            adherence: description.then(withRetry(3, reviewAdherence)),
-            suppressedTests: withRetry(3, checkSuppressedTests),
-            typecheck: withRetry(3, runTypecheck),
-          }),
-          classifyFeedback.branch({
-            HasIssues: bindInput<string, never>((feedback) =>
-              allObject({
-                description,
-                feedback,
-              })
-                .then(withRetry(3, incorporateFeedback))
-                .drop()
-                .then(recur),
-            ),
-            AllClean: drop.then(done),
-          }),
-        ),
-      ),
+      withMaxAttempts<null>(3, (recur, done) => {
+        const checks = allObject({
+          bestPractices: withRetry(3, reviewBestPractices),
+          adherence: description.then(withRetry(3, reviewAdherence)),
+          suppressedTests: withRetry(3, checkSuppressedTests),
+          typecheck: withRetry(3, runTypecheck),
+        });
+
+        return checks.then(classifyFeedback).branch({
+          HasIssues: bindInput<string, never>((feedback) =>
+            withRetry(3, incorporateFeedback)
+              .call(allObject({ description, feedback }))
+              .drop()
+              .then(recur),
+          ),
+          AllClean: drop.then(done),
+        });
+      }),
 
       splitCommits.drop(),
     ),

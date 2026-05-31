@@ -388,22 +388,19 @@ export const implementAndReview = bindInput<
   { prUrl: string }
 >((state) => {
   const [resource, refactor] = state.split();
+  const worktreePath = resource.getField("worktreePath");
+  const description = refactor.getField("description");
+
   return pipe(
-    allObject({
-      worktreePath: resource.getField("worktreePath"),
-      description: refactor.getField("description"),
-    })
-      .then(implement)
-      .drop(),
-    resource.pick("worktreePath").then(typeCheckFix).drop(),
+    implement.call(allObject({ worktreePath, description })).drop(),
+    typeCheckFix.call(resource.pick("worktreePath")).drop(),
 
     // Judge quality; revise and re-check if needed.
     loop((recur, done) =>
       judgeRefactor.then(classifyJudgment).branch({
         NeedsWork: applyFeedback
           .drop()
-          .then(resource.pick("worktreePath"))
-          .then(typeCheckFix)
+          .then(typeCheckFix.call(resource.pick("worktreePath")))
           .drop()
           .then(recur),
         Approved: done,
@@ -411,15 +408,10 @@ export const implementAndReview = bindInput<
     ).drop(),
 
     // Commit and open a PR only after all fixes and revisions are done.
-    resource.pick("worktreePath").then(commit).drop(),
-    pipe(
-      allObject({
-        branch: resource.getField("branch"),
-        description: refactor.getField("description"),
-      }),
-      preparePRInput,
-      createPR,
-    ),
+    commit.call(resource.pick("worktreePath")).drop(),
+    preparePRInput
+      .call(allObject({ branch: resource.getField("branch"), description }))
+      .then(createPR),
   );
 });
 
