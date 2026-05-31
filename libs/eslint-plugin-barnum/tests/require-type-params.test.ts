@@ -15,12 +15,12 @@ describe("require-type-params", () => {
   it("enforces type parameters on loop", () => {
     ruleTester.run("require-type-params", rule, {
       valid: [
-        // 1 type param (TBreak) — minimum
+        // 1 type param (TIn) — minimum
         `loop<string>((recur, done) => done)`,
-        // 2 type params (TBreak, TRecur)
+        // 2 type params (TIn, TOut)
         `loop<string, number>((recur, done) => done)`,
         // never is valid for output position
-        `loop<never>((recur, done) => recur)`,
+        `loop<string, never>((recur, done) => recur)`,
         // void is valid
         `loop<void, null>((recur, done) => done)`,
       ],
@@ -30,27 +30,27 @@ describe("require-type-params", () => {
           code: `loop((recur, done) => done)`,
           errors: [{ messageId: "missingTypeParams" }],
         },
-        // any in TBreak (output position)
+        // unknown in TIn (input position)
         {
-          code: `loop<any>((recur, done) => done)`,
+          code: `loop<unknown>((recur, done) => done)`,
+          errors: [{ messageId: "unknownInInput" }],
+        },
+        // any in TOut (output position)
+        {
+          code: `loop<string, any>((recur, done) => done)`,
           errors: [{ messageId: "anyInOutput" }],
         },
-        // any in TBreak with TRecur provided
+        // unknown in TIn with TOut provided
         {
-          code: `loop<any, number>((recur, done) => done)`,
-          errors: [{ messageId: "anyInOutput" }],
-        },
-        // unknown in TRecur (input position)
-        {
-          code: `loop<string, unknown>((recur, done) => done)`,
+          code: `loop<unknown, number>((recur, done) => done)`,
           errors: [{ messageId: "unknownInInput" }],
         },
         // both violations
         {
-          code: `loop<any, unknown>((recur, done) => done)`,
+          code: `loop<unknown, any>((recur, done) => done)`,
           errors: [
-            { messageId: "anyInOutput" },
             { messageId: "unknownInInput" },
+            { messageId: "anyInOutput" },
           ],
         },
       ],

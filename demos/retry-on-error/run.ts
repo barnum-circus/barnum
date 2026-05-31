@@ -21,7 +21,7 @@ import { stepA, stepB, stepC, logError } from "./handlers/steps";
 console.error("=== Retry-on-error demo ===\n");
 
 runPipeline(
-  loop<string, void>((recur, done) =>
+  loop<void, string>((recur, done) =>
     tryCatch(
       (throwError) =>
         pipe(

@@ -35,7 +35,7 @@ console.error("=== Babysit PRs demo ===\n");
 console.error("Monitoring PRs: #101, #102, #103\n");
 
 runPipeline(
-  loop<void, number[]>((recur, done) =>
+  loop<number[], void>((recur, done) =>
     Iterator.fromArray<number>()
       .filter(
         bindInput<number, boolean>((prNumber) =>

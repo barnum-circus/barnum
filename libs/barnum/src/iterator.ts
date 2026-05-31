@@ -184,7 +184,7 @@ export const Iterator = {
             pipe(
               drop,
               all(init, elements).then(
-                loop<TAcc, [TAcc, Array<TElement>]>((recur, done) => {
+                loop<[TAcc, Array<TElement>], TAcc>((recur, done) => {
                   const doneTAcc = typedAction<TAcc, never>(toAction(done));
 
                   return typedAction<[TAcc, Array<TElement>], never>(

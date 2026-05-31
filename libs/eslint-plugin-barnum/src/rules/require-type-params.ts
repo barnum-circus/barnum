@@ -14,7 +14,7 @@ interface CombinatorConfig {
 
 /** Standalone call configs: loop(...), bindInput(...), earlyReturn(...) */
 const STANDALONE_CONFIG = new Map<string, CombinatorConfig>([
-  ["loop", { minParams: 1, params: ["output", "input"] }], // TBreak, TRecur
+  ["loop", { minParams: 1, params: ["input", "output"] }], // TIn, TOut
   ["earlyReturn", { minParams: 1, params: ["output", "input", "output"] }], // TEarlyReturn, TIn, TOut
   ["bindInput", { minParams: 2, params: ["input", "output"] }], // TIn, TOut
 ]);

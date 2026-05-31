@@ -1359,12 +1359,12 @@ export function buildRestartBranchAction(
  *
  * Compiles to `RestartHandle`/`RestartPerform`/Branch — same effect substrate as tryCatch and earlyReturn.
  */
-export function loop<TBreak = void, TRecur = void>(
+export function loop<TIn = void, TOut = void>(
   bodyFn: (
-    recur: TypedAction<VoidToNull<TRecur>, never>,
-    done: TypedAction<VoidToNull<TBreak>, never>,
-  ) => Pipeable<VoidToNull<TRecur>, never>,
-): TypedAction<PipeIn<TRecur>, VoidToNull<TBreak>> {
+    recur: TypedAction<VoidToNull<TIn>, never>,
+    done: TypedAction<VoidToNull<TOut>, never>,
+  ) => Pipeable<VoidToNull<TIn>, never>,
+): TypedAction<PipeIn<TIn>, VoidToNull<TOut>> {
   const restartHandlerId = allocateRestartHandlerId();
 
   const perform: Action = {
@@ -1372,11 +1372,11 @@ export function loop<TBreak = void, TRecur = void>(
     restart_handler_id: restartHandlerId,
   };
 
-  const recurAction = typedAction<VoidToNull<TRecur>, never>(
+  const recurAction = typedAction<VoidToNull<TIn>, never>(
     toAction(chain(toAction(tag("Continue", "LoopResult")), toAction(perform))),
   );
 
-  const doneAction = typedAction<VoidToNull<TBreak>, never>(
+  const doneAction = typedAction<VoidToNull<TOut>, never>(
     toAction(chain(toAction(tag("Break", "LoopResult")), toAction(perform))),
   );
 

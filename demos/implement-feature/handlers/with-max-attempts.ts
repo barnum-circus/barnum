@@ -27,7 +27,7 @@ export function withMaxAttempts<TBreak>(
 ): TypedAction<null, TBreak> {
   return earlyReturn<TBreak, null, never>((ret) =>
     constant(maxAttempts - 1).then(
-      loop<never, number>((recur, _done) =>
+      loop<number, never>((recur, _done) =>
         bindInput<number, never>((attemptsRemaining) => {
           const guardedRecur: TypedAction<null, never> = attemptsRemaining
             .then(checkRetries)

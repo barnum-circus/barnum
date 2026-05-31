@@ -71,7 +71,7 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
   it("Loop", () => {
     const cfg = config(
       constant({ deployed: true }).then(
-        loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
+        loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
           healthCheck.branch({ Continue: recur, Break: done }),
         ),
       ),

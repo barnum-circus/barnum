@@ -69,8 +69,8 @@ describe("loop type tests", () => {
     resetEffectIdCounter();
   });
 
-  it("loop: input matches Continue type, output is Break type", () => {
-    const action = loop<{ stable: true }, { deployed: boolean }>(
+  it("loop: input matches TIn, output is TOut", () => {
+    const action = loop<{ deployed: boolean }, { stable: true }>(
       (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     assertIO<typeof action, { deployed: boolean }, { stable: true }>();
@@ -98,14 +98,14 @@ describe("loop type tests", () => {
     assertIO<typeof action, any, null>();
   });
 
-  it("loop<TBreak, TIn>: both explicit for stateful loops", () => {
-    const action = loop<{ stable: true }, { deployed: boolean }>(
+  it("loop<TIn, TOut>: both explicit for stateful loops", () => {
+    const action = loop<{ deployed: boolean }, { stable: true }>(
       (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     assertIO<typeof action, { deployed: boolean }, { stable: true }>();
   });
 
-  it("with TBreak=void, done has input=null (accepts void variants)", () => {
+  it("with TOut=void, done has input=null (accepts void variants)", () => {
     loop<void>((recur, done) => {
       assertIO<typeof done, null, never>();
       classifyErrors.branch({ HasErrors: forEach(fix), Clean: done });
@@ -113,7 +113,7 @@ describe("loop type tests", () => {
     });
   });
 
-  it("with TBreak=void, done has input=null (rejects non-null)", () => {
+  it("with TOut=void, done has input=null (rejects non-null)", () => {
     loop<void>((recur, done) => {
       // @ts-expect-error — done: TypedAction<null, never> can't accept { stable: true } from Break
       healthCheck.branch({ Continue: drop, Break: done });
@@ -122,7 +122,7 @@ describe("loop type tests", () => {
   });
 
   it("done and recur both output never", () => {
-    loop<{ stable: true }, { deployed: boolean }>((recur, done) => {
+    loop<{ deployed: boolean }, { stable: true }>((recur, done) => {
       assertIO<typeof recur, { deployed: boolean }, never>();
       assertIO<typeof done, { stable: true }, never>();
       return healthCheck.branch({ Continue: recur, Break: done });
@@ -140,7 +140,7 @@ describe("loop type tests", () => {
   });
 
   it("loop with explicit TIn has exact input", () => {
-    const action = loop<{ stable: true }, { deployed: boolean }>(
+    const action = loop<{ deployed: boolean }, { stable: true }>(
       (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     assertIO<typeof action, { deployed: boolean }, { stable: true }>();
@@ -166,7 +166,7 @@ describe("loop AST structure", () => {
   });
 
   it("loop produces Chain(tag(Continue), RestartHandle(...)) AST", () => {
-    const workflow = loop<{ stable: true }, { deployed: boolean }>(
+    const workflow = loop<{ deployed: boolean }, { stable: true }>(
       (recur, done) => healthCheck.branch({ Continue: recur, Break: done }),
     );
     expect(workflow.kind).toBe("Chain");
@@ -214,7 +214,7 @@ describe("loop execution", () => {
 
   it("loop that immediately breaks returns break value", async () => {
     const result = await runPipeline(
-      loop<number>((_, done) => pipe(constant(42), done)),
+      loop<void, number>((_, done) => pipe(constant(42), done)),
     );
     expect(result).toBe(42);
   });
@@ -224,7 +224,7 @@ describe("loop execution", () => {
     const result = await runPipeline(
       pipe(
         constant([1, 2, 3]),
-        loop<string, Array<number>>((recur, done) =>
+        loop<Array<number>, string>((recur, done) =>
           splitFirst<number>().branch({
             Some: pipe(drop, constant([] as Array<number>), recur),
             None: pipe(constant("done"), done),

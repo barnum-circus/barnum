@@ -30,7 +30,7 @@ runPipeline(
     getServices,
     Iter.fromArray<string>(),
 
-    loop<null, Iterator<string>>((recur, done) =>
+    loop<Iterator<string>, null>((recur, done) =>
       identity<Iterator<string>>()
         .splitFirst()
         .branch({

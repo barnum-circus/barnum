@@ -29,7 +29,7 @@ export function withRetry<TIn, TOut>(
   return bindInput<TIn, TOut>((originalInput) =>
     earlyReturn<TOut>((ret) =>
       constant(maxAttempts - 1).then(
-        loop<void, number>((recur, _done) =>
+        loop<number, void>((recur, _done) =>
           bindInput<number, never>((retriesRemaining) =>
             tryCatch(
               (throwError: TypedAction<string, never>) =>
