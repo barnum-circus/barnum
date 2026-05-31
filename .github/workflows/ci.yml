@@ -41,7 +41,7 @@ jobs:
           fi
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '**/package.json' '**/tsconfig.json' 'pnpm-lock.yaml')
+            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '**/package.json' '**/tsconfig.json' 'pnpm-lock.yaml' '.github/')
             if [[ -n "$CHANGES" ]]; then
               echo "Running: PR has TS/JS changes"
               echo "$CHANGES"
@@ -63,7 +63,7 @@ jobs:
             echo "Running: before commit unreachable (force push)"
             exit 0
           fi
-          CHANGES=$(git diff --name-only $BEFORE HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '**/package.json' '**/tsconfig.json' 'pnpm-lock.yaml')
+          CHANGES=$(git diff --name-only $BEFORE HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '**/package.json' '**/tsconfig.json' 'pnpm-lock.yaml' '.github/')
           if [[ -n "$CHANGES" ]]; then
             echo "Running: TS/JS changes detected"
             echo "$CHANGES"
@@ -221,12 +221,12 @@ jobs:
           fi
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- docs-website/ .github/)
+            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- docs-website/ .github/ '**/package.json')
             if [[ -n "$CHANGES" ]]; then
-              echo "Running: PR has changes in docs-website/ or .github/"
+              echo "Running: PR has changes in docs-website/, .github/, or package.json"
               echo "$CHANGES"
             else
-              echo "Skipping: PR has no changes to docs-website/ or .github/"
+              echo "Skipping: PR has no changes to docs-website/, .github/, or package.json"
               echo "skip=true" >> $GITHUB_OUTPUT
             fi
             exit 0
@@ -243,12 +243,12 @@ jobs:
             echo "Running: before commit unreachable (force push)"
             exit 0
           fi
-          CHANGES=$(git diff --name-only $BEFORE HEAD -- docs-website/ .github/)
+          CHANGES=$(git diff --name-only $BEFORE HEAD -- docs-website/ .github/ '**/package.json')
           if [[ -n "$CHANGES" ]]; then
-            echo "Running: changes detected in docs-website/ or .github/"
+            echo "Running: changes detected in docs-website/, .github/, or package.json"
             echo "$CHANGES"
           else
-            echo "Skipping: no changes to docs-website/ or .github/"
+            echo "Skipping: no changes to docs-website/, .github/, or package.json"
             echo "skip=true" >> $GITHUB_OUTPUT
           fi
 
