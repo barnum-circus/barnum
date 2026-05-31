@@ -422,24 +422,44 @@ earlyReturn((ret) => step1.unwrapOr(ret).then(step2));
 earlyReturn<ErrorReport>((ret) => step1.unwrapOr(ret).then(step2));
 ```
 
-And `bindInput`:
+And `defineRecursiveFunctions` — every function's input and output types must be annotated in the definition tuple, or all call sites produce `any`.
+
+### `bindInput`: always specify `TIn`, omit `TOut` unless inside a loop body
+
+`bindInput<TIn, TOut>` requires `TIn` (TypeScript can't infer it from callback usage). `TOut` is inferred from the body's return type — you can omit it in most cases:
 
 ```ts
-// bindInput: TIn determines the VarRef<TIn> type passed to the callback
-// TS can't infer it from "claimed.getField('item') is called in the body"
-
-// Broken: TIn is any — claimed.getField() and claimed.pick() return any
-bindInput((claimed) =>
-  pipe(claimed.getField("item"), consumeEvent, claimed.pick("id"), completeEvent),
-);
-
-// Fixed: annotate TIn so VarRef methods are fully typed
-bindInput<ClaimedEvent, null>((claimed) =>
-  pipe(claimed.getField("item"), consumeEvent, claimed.pick("id"), completeEvent),
+// TOut inferred as { verified: boolean } from the body return type
+bindInput<{ artifact: string }>((input) =>
+  input.then(verify),
 );
 ```
 
-And `defineRecursiveFunctions` — every function's input and output types must be annotated in the definition tuple, or all call sites produce `any`.
+**Exception: loop/recursion bodies.** When `bindInput` is used inside `loop` where every branch ends in `recur` or `done` (both typed as `TypedAction<..., never>`), the inferred `TOut` is `any` (from the default), and `any` is not assignable to `never`. You must specify `TOut = never` explicitly:
+
+```ts
+// Inside a loop body: TOut must be `never` because all paths end in recur/done
+loop<Result, State>((recur, done) =>
+  bindInput<State, never>((state) => {
+    const { batch } = state.split();
+    return batch.iterate().map(process).collect().branch({
+      Continue: recur,
+      Break: done,
+    });
+  }),
+);
+```
+
+Without the explicit `never`, you get: `Type '() => any' is not assignable to type '() => never'`.
+
+**Summary of when to annotate `TOut`:**
+
+| Context | `TOut` needed? | Why |
+|---------|---------------|-----|
+| Normal pipeline position | No | Inferred from body return |
+| Inside `loop` body (all paths → recur/done) | Yes, `never` | `any` ≠ `never` |
+| Inside `earlyReturn` where all paths → `ret` | Yes, `never` | Same reason |
+| Body returns a complex union and inference fails | Yes | Help the compiler |
 
 ### Don't use `constant()` to produce a value the pipeline already carries
 
@@ -504,13 +524,13 @@ Named fields survive reordering and additions without breaking downstream `.getI
 
 ### `bindInput` captures the input as a `VarRef` — the body starts fresh
 
-`bindInput<TIn, TOut>(fn)` captures the current pipeline value as a `VarRef<TIn>` and passes it to the callback. **The body's pipeline input is `any` — it does NOT receive the captured value as its natural input.** You must explicitly inject values using the VarRef's methods (`.getField()`, `.pick()`, or using the ref directly as the first step in a `pipe`).
+`bindInput<TIn>(fn)` captures the current pipeline value as a `VarRef<TIn>` and passes it to the callback. **The body's pipeline input is `any` — it does NOT receive the captured value as its natural input.** You must explicitly inject values using the VarRef's methods (`.getField()`, `.pick()`, or using the ref directly as the first step in a `pipe`).
 
 A `VarRef<T>` is just a `TypedAction<any, T>` — a pipeline step that always produces the captured value regardless of what's flowing through the pipeline. `constant(x)` creates one too. There's nothing magical about VarRefs — they're actions you can use anywhere in the body to "reach back" to the captured input.
 
 ```ts
 // The body doesn't implicitly receive `params` as input — you must use the VarRef:
-bindInput<Params, null>((params) =>
+bindInput<Params>((params) =>
   pipe(
     params.pick("file"),        // ← explicitly inject from the captured value
     analyze,
