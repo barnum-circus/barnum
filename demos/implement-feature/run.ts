@@ -48,7 +48,7 @@ const DESCRIPTION =
   "Debounce at 300ms. Show suggestions in a dropdown below the input.";
 
 runPipeline(
-  bindInput<string>((description) =>
+  bindInput<string, null>((description) =>
     pipe(
       setup,
       description.then(withRetry(3, implement)).drop(),

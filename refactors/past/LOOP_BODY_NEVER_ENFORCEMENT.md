@@ -157,9 +157,7 @@ TypeScript has a pattern to detect `any`:
 type IsAny<T> = 0 extends (1 & T) ? true : false;
 ```
 
-The naive approach (wrapping the target type) fails — `RejectAny<never>` evaluates to `never` statically, so there's nothing for `any` to be checked against. **However**, the `allObject` inference improvement (`struct.ts`) demonstrates a different technique: put the `any`-detection in the *parameter constraint*, not in what the value is compared to.
-
-#### How `allObject` does it
+The `allObject` inference improvement (`struct.ts`) uses this to validate inferred types at the constraint site:
 
 ```ts
 type ValidateActions<T extends Record<string, Pipeable<any, any>>> = {
@@ -175,104 +173,31 @@ export function allObject<const TActions extends Record<string, Pipeable<any, an
 ): ...
 ```
 
-The key: TypeScript infers `TActions` from the argument, THEN validates the constraint against what was inferred. If validation fails, the parameter type becomes incompatible with what was passed → compile error.
+The key: TypeScript infers `TActions` from the argument (always concrete at the call site), THEN validates the constraint.
 
-#### Applying to `loop`
+#### Why this doesn't transfer to `bindInput`
 
-The same pattern can reject `any` in the body return type. The body function's return type is inferred by TypeScript first, then we validate it:
+The critical difference: `allObject`'s generic (`TActions`) is **always inferred from a concrete value**. It's never a forwarded generic type variable from an enclosing function scope.
 
-```ts
-type IsAny<T> = 0 extends (1 & T) ? true : false;
-
-// Extract output type from a Pipeable
-type InferOut<T> = T extends Pipeable<any, infer O> ? O : never;
-
-// Validate that the body's output is exactly `never`, rejecting `any`
-type ValidateLoopBody<TBody, TRecur> =
-  TBody extends Pipeable<VoidToNull<TRecur>, infer TOut>
-    ? IsAny<TOut> extends true
-      ? Pipeable<VoidToNull<TRecur>, never> & { __error: "loop body must end in recur or done (output must be never, got any)" }
-      : TBody
-    : Pipeable<VoidToNull<TRecur>, never>;
-
-export function loop<TBreak = void, TRecur = void>(
-  bodyFn: (
-    recur: TypedAction<VoidToNull<TRecur>, never>,
-    done: TypedAction<VoidToNull<TBreak>, never>,
-  ) => ValidateLoopBody<Pipeable<VoidToNull<TRecur>, never>, TRecur>,
-): TypedAction<PipeIn<TRecur>, VoidToNull<TBreak>>
-```
-
-**Problem with this direct approach:** The body return type isn't independently inferred as a generic parameter — it's checked against the declared return type. We'd need to make the body return type itself a generic parameter to inspect it.
-
-#### Viable variant: generic body return
+`bindInput`'s `TOut`, on the other hand, is routinely forwarded from enclosing generics:
 
 ```ts
-export function loop<TBreak = void, TRecur = void, TBody extends Pipeable<VoidToNull<TRecur>, any> = Pipeable<VoidToNull<TRecur>, never>>(
-  bodyFn: (
-    recur: TypedAction<VoidToNull<TRecur>, never>,
-    done: TypedAction<VoidToNull<TBreak>, never>,
-  ) => IsAny<InferOut<TBody>> extends true
-    ? { __error: "loop body output must be never — did you forget to specify TOut on bindInput?" }
-    : TBody,
-): TypedAction<PipeIn<TRecur>, VoidToNull<TBreak>>
+// withRetry<TIn, TOut> forwards TOut to bindInput
+function withRetry<TIn, TOut>(action: ...): TypedAction<TIn, TOut> {
+  return bindInput<TIn, TOut>((input) => ...);
+}
+
+// tap<T> forwards T as TOut
+function tap<T>(action: ...): TypedAction<T, T> {
+  return bindInput<T, T>((input) => ...);
+}
 ```
 
-Here TypeScript infers `TBody` from the actual return value. If `TBody` has output `any`, `IsAny` triggers and the return type becomes an error object that's incompatible with what was returned → compile error.
+When `TOut` is a generic type variable, `0 extends 1 & TOut` **defers** — TypeScript can't resolve the conditional. The body return type becomes an unresolved conditional, and the actual return value (a `TypedAction`) can't be proven assignable to it.
 
-**Open question:** Does TypeScript actually infer `TBody` from the callback return when `TBreak` and `TRecur` are explicitly provided? TypeScript's all-or-nothing inference for explicit type params is the same footgun — if the user writes `loop<string>`, TypeScript uses the default for `TBody` rather than inferring. This would require the user to never explicitly specify `TBreak`/`TRecur` (relying entirely on inference), or we'd need a different overload strategy.
+This is fundamentally different from the case where `TOut = any` (the default). TypeScript cannot distinguish "TOut is `any` because it defaulted" from "TOut is an unresolved generic type variable" — both defer the conditional at the definition site.
 
-#### Alternative: validate at `bindInput`'s constraint site
-
-Rather than validating in `loop`, validate at the `bindInput` call itself. The postfix `.bindInput<TOut>` already requires one explicit type param. We can reject `any` there:
-
-```ts
-// On TypedAction's postfix method:
-bindInput<TOut>(
-  body: (input: VarRef<TCurrentOut>) => IsAny<TOut> extends true
-    ? { __error: "bindInput requires explicit TOut type parameter" }
-    : Pipeable<any, TOut>,
-): TypedAction<TCurrentIn, TOut>
-```
-
-This is more targeted — it catches the specific case where `TOut` defaults to `any` because the user forgot to specify it. When `TOut = never` (the correct usage inside loop), `IsAny<never>` is `false`, so the constraint is just `Pipeable<any, never>` as before.
-
-**This is viable** because `TOut` is an explicit type parameter on `.bindInput<TOut>()` — TypeScript uses the provided value (or default) and then checks the constraint. If `TOut` defaults to `any`, `IsAny<any>` fires and produces an incompatible error type.
-
-**Verdict:** Viable. The `allObject` pattern proves this works. Two application points:
-
-1. **On `bindInput`'s body parameter** — reject `any` as TOut at the call site where it matters most
-2. **On `loop`'s body return** — requires making body return a generic param (more complex, open question about partial inference)
-
-Approach (1) is strictly better: it catches the problem at the source (`bindInput` defaulting TOut) rather than downstream (`loop` receiving the `any`-poisoned result).
-
----
-
-## Recommendation
-
-Two viable approaches, complementary:
-
-### Primary: Option F — type-level `any` rejection on `bindInput`
-
-Apply `IsAny<TOut>` in `bindInput`'s body parameter constraint. This catches the problem at the source — when `TOut` defaults to `any`, the constraint becomes an error type, producing a compile error. No lint required.
-
-```ts
-bindInput<TOut>(
-  body: (input: VarRef<TIn>) => IsAny<TOut> extends true
-    ? { __error: "bindInput requires explicit TOut" }
-    : Pipeable<any, TOut>,
-): TypedAction<TIn, TOut>
-```
-
-This mirrors the proven `allObject` / `ValidateActions` pattern. It solves the root cause (TypeScript defaulting `TOut` to `any`) rather than treating symptoms downstream.
-
-**Next step:** prototype this on the postfix `.bindInput<TOut>()` method and verify it produces a clear error when `TOut` is omitted (defaults to `any`) while not interfering when `TOut = never` or a concrete type.
-
-### Secondary: Option C — lint rule (already implemented)
-
-The `barnum/require-type-params` rule enforces explicit type parameters on `loop`, `earlyReturn`, and `bindInput`. This provides defense-in-depth — catching not just `any` leakage but also missing type params that degrade inference in other ways.
-
-The lint rule and the type-level approach are complementary: the type approach catches `any` specifically; the lint rule enforces the broader discipline of explicit type params.
+**Verdict:** Not viable. The `allObject` pattern only works when the generic is inferred from a concrete argument. `bindInput`'s `TOut` can be a forwarded generic, which defers all conditional type checks.
 
 ---
 

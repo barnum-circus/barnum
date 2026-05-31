@@ -23,7 +23,7 @@ import path from "node:path";
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 
 runPipeline(
-  bindInput<ProjectConfig>((config) =>
+  bindInput<ProjectConfig, null>((config) =>
     pipe(
       config.then(setup),
       config

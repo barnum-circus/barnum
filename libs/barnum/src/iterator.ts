@@ -27,7 +27,8 @@ import {
 } from "./builtins/index.js";
 import { all } from "./all.js";
 import { Option } from "./option.js";
-import { bindInput } from "./bind.js";
+import { bind, bindInput } from "./bind.js";
+import { pipe } from "./pipe.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -174,40 +175,44 @@ export const Iterator = {
     init: Pipeable<void, TAcc>,
     body: Pipeable<[TAcc, TElement], TAcc>,
   ): TypedAction<IteratorT<TElement>, TAcc> {
-    return Iterator.collect<TElement>().then(
-      // eslint-disable-next-line barnum/require-type-params -- generic VoidToNull<TAcc> can't satisfy TAcc
-      bindInput<Array<TElement>>((elements) =>
-        all(init, elements).then(
-          loop<TAcc, [TAcc, Array<TElement>]>((recur, done) => {
-            // Re-wrap done to bridge VoidToNull<TAcc> → TAcc (TypeScript
-            // can't simplify the conditional type for generic TAcc).
-            const doneTAcc = typedAction<TAcc, never>(toAction(done));
+    // Use bind + typedAction to bridge VoidToNull<TAcc> → TAcc (TypeScript
+    // can't simplify the conditional type for generic TAcc).
+    return typedAction<IteratorT<TElement>, TAcc>(
+      toAction(
+        Iterator.collect<TElement>().then(
+          bind([identity<Array<TElement>>()], ([elements]) =>
+            pipe(
+              drop,
+              all(init, elements).then(
+                loop<TAcc, [TAcc, Array<TElement>]>((recur, done) => {
+                  const doneTAcc = typedAction<TAcc, never>(toAction(done));
 
-            // Wrap return with typedAction — branch output inference fails
-            // for generic types inside loop bodies.
-            return typedAction<[TAcc, Array<TElement>], never>(
-              toAction(
-                bindInput<[TAcc, Array<TElement>], never>((state) => {
-                  const [acc, remaining] = state.split();
+                  return typedAction<[TAcc, Array<TElement>], never>(
+                    toAction(
+                      bindInput<[TAcc, Array<TElement>], never>((state) => {
+                        const [acc, remaining] = state.split();
 
-                  return remaining.splitFirst().branch({
-                    None: acc.then(doneTAcc),
-                    Some: bindInput<[TElement, Array<TElement>], never>(
-                      (headTail) => {
-                        const [head, tail] = headTail.split();
+                        return remaining.splitFirst().branch({
+                          None: acc.then(doneTAcc),
+                          Some: bindInput<[TElement, Array<TElement>], never>(
+                            (headTail) => {
+                              const [head, tail] = headTail.split();
 
-                        return all(acc, head)
-                          .then(body)
-                          .bindInput<never>((newAcc) =>
-                            all(newAcc, tail).then(recur),
-                          );
-                      },
+                              return all(acc, head)
+                                .then(body)
+                                .bindInput<never>((newAcc) =>
+                                  all(newAcc, tail).then(recur),
+                                );
+                            },
+                          ),
+                        });
+                      }),
                     ),
-                  });
+                  );
                 }),
               ),
-            );
-          }),
+            ),
+          ),
         ),
       ),
     );

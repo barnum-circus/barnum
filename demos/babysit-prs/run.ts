@@ -38,7 +38,7 @@ runPipeline(
   loop<void, number[]>((recur, done) =>
     Iterator.fromArray<number>()
       .filter(
-        bindInput<number>((prNumber) =>
+        bindInput<number, boolean>((prNumber) =>
           prNumber.then(checkPR).branch({
             ChecksFailed: fixIssues.drop().then(constant(true)),
             ChecksPassed: landPR.drop().then(constant(false)),

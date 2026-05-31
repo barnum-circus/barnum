@@ -146,10 +146,10 @@ export function bind<TBindings extends Array<Action>, TOut>(
  *
  * Sugar for: `bind([identity()], ([input]) => pipe(drop, body(input)))`
  *
- * TOut defaults to `any` so callers can specify just TIn:
- *   bindInput<FileEntry>((entry) => ...)
+ * Both type parameters are required. The lint rule `barnum/require-type-params`
+ * enforces this — no defaults, no forgetting TOut inside loop bodies.
  */
-export function bindInput<TIn, TOut = any>(
+export function bindInput<TIn, TOut>(
   body: (input: VarRef<TIn>) => BodyResult<TOut>,
 ): TypedAction<TIn, TOut> {
   return bind([identity()], ([input]) => pipe(drop, body(input)));
