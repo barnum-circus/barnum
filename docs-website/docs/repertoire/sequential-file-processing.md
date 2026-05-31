@@ -9,7 +9,7 @@ runPipeline(
   pipe(
     readFileList,
     initLoopState,
-    loop<LoopResult, LoopState>((recur, done) =>
+    loop<LoopState, LoopResult>((recur, done) =>
       pipe(
         processItem,
         advanceOrFinish,

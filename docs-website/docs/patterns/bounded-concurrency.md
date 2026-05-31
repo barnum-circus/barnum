@@ -59,7 +59,7 @@ When each item handles its own side effects (writes to disk, sends a message, et
 pipe(
   getItems,
   initBatches,
-  loop<null, BatchState>((recur, done) =>
+  loop<BatchState, null>((recur, done) =>
     bindInput<BatchState, never>((state) =>
       pipe(
         state.getField("batch").iterate().map(processItem).collect(),
@@ -84,7 +84,7 @@ When you need the combined results of all batches:
 pipe(
   getItems,
   initBatches,
-  loop<Result[], BatchState>((recur, done) =>
+  loop<BatchState, Result[]>((recur, done) =>
     bindInput<BatchState, never>((state) =>
       pipe(
         state.getField("batch").iterate().map(processItem).collect(),

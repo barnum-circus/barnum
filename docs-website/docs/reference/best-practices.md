@@ -395,10 +395,10 @@ These combinators cannot infer their type parameters from usage. If you omit the
 **Why TypeScript can't infer these.** TypeScript infers generic type parameters from *arguments* (outside-in). But these combinators' type parameters only manifest as the *types of callback parameters* — the `recur`/`done` actions in `loop`, the `ret` action in `earlyReturn`, the `VarRef` in `bindInput`. TypeScript doesn't do bidirectional inference from "how the callback body uses its parameters" back to "what the enclosing function's type parameters must be." The type parameter determines what gets *passed into* the callback, not what gets *returned from* it — so TS has nothing to infer from.
 
 ```ts
-// loop: TBreak determines done's type, TContinue determines recur's type
+// loop<TIn, TOut>: TIn determines recur's type, TOut determines done's type
 // TS can't look at "done is used in the Empty branch" and work backwards
 
-// Broken: TBreak defaults to any — entire pipeline is untyped from here on
+// Broken: type params omitted — entire pipeline is untyped from here on
 const process = loop((recur, done) =>
   fetchNext.branch({
     HasItem: pipe(handle, recur),
@@ -407,14 +407,14 @@ const process = loop((recur, done) =>
 );
 // process: TypedAction<any, any> — no type safety
 
-// Fixed: annotate TBreak explicitly
-const process = loop<ProcessResult>((recur, done) =>
+// Fixed: annotate TIn and TOut explicitly
+const process = loop<void, ProcessResult>((recur, done) =>
   fetchNext.branch({
     HasItem: pipe(handle, recur),
     Empty: done,
   }),
 );
-// process: TypedAction<any, ProcessResult> — output is typed
+// process: TypedAction<null, ProcessResult> — fully typed
 ```
 
 The same applies to `earlyReturn`:
@@ -432,22 +432,22 @@ earlyReturn<ErrorReport>((ret) => step1.unwrapOr(ret).then(step2));
 
 And `defineRecursiveFunctions` — every function's input and output types must be annotated in the definition tuple, or all call sites produce `any`.
 
-### `bindInput`: always specify `TIn`, omit `TOut` unless inside a loop body
+### `bindInput`: always specify both `TIn` and `TOut`
 
-`bindInput<TIn, TOut>` requires `TIn` (TypeScript can't infer it from callback usage). `TOut` is inferred from the body's return type — you can omit it in most cases:
+`bindInput<TIn, TOut>` requires both type parameters (there are no defaults). TypeScript can't infer either from callback usage — the lint rule `barnum/require-type-params` enforces this.
 
 ```ts
-// TOut inferred as { verified: boolean } from the body return type
-bindInput<{ artifact: string }>((input) =>
+// Both TIn and TOut must be specified
+bindInput<{ artifact: string }, { verified: boolean }>((input) =>
   input.then(verify),
 );
 ```
 
-**Exception: loop/recursion bodies.** When `bindInput` is used inside `loop` where every branch ends in `recur` or `done` (both typed as `TypedAction<..., never>`), the inferred `TOut` is `any` (from the default), and `any` is not assignable to `never`. You must specify `TOut = never` explicitly:
+**Inside loop/recursion bodies:** When `bindInput` is used inside `loop` where every branch ends in `recur` or `done` (both typed as `TypedAction<..., never>`), `TOut` must be `never`:
 
 ```ts
 // Inside a loop body: TOut must be `never` because all paths end in recur/done
-loop<Result, State>((recur, done) =>
+loop<State, Result>((recur, done) =>
   bindInput<State, never>((state) => {
     const { batch } = state.split();
     return batch.iterate().map(process).collect().branch({
@@ -460,14 +460,13 @@ loop<Result, State>((recur, done) =>
 
 Without the explicit `never`, you get: `Type '() => any' is not assignable to type '() => never'`.
 
-**Summary of when to annotate `TOut`:**
+**Summary of when `TOut` is `never`:**
 
-| Context | `TOut` needed? | Why |
-|---------|---------------|-----|
-| Normal pipeline position | No | Inferred from body return |
-| Inside `loop` body (all paths → recur/done) | Yes, `never` | `any` ≠ `never` |
-| Inside `earlyReturn` where all paths → `ret` | Yes, `never` | Same reason |
-| Body returns a complex union and inference fails | Yes | Help the compiler |
+| Context | `TOut` | Why |
+|---------|--------|-----|
+| Normal pipeline position | Concrete type | The body produces a value |
+| Inside `loop` body (all paths → recur/done) | `never` | All paths exit via actions typed `→ never` |
+| Inside `earlyReturn` where all paths → `ret` | `never` | Same reason |
 
 ### Don't use `constant()` to produce a value the pipeline already carries
 
@@ -485,7 +484,7 @@ loop<null, null>((recur, done) =>
 );
 ```
 
-`loop<TInput, TBreak>` passes `TInput` as the body's input on every iteration. If the loop's input type is `null` and the first handler accepts `null`, just use the handler directly — the pipeline already provides the correct value.
+`loop<TIn, TOut>` passes `TIn` as the body's input on every iteration. If the loop's input type is `null` and the first handler accepts `null`, just use the handler directly — the pipeline already provides the correct value.
 
 `constant()` is appropriate when you need to introduce a value that doesn't exist in the current pipeline context — e.g., `constant({ producerId })` to inject a captured closure variable.
 

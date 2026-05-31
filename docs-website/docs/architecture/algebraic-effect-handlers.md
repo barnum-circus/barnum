@@ -49,7 +49,7 @@ This is a departure from traditional algebraic effects, where the continuation i
 `loop` is the canonical example. Here's how the TypeScript DSL compiles it:
 
 ```ts
-loop<string>((recur, done) =>
+loop<void, string>((recur, done) =>
   step.then(classify).branch({
     Continue: recur,    // restart the loop
     Break: done,        // exit the loop

@@ -245,12 +245,12 @@ classify.branch({
 Iterative loop. The body receives `recur` (restart with new input) and `done` (break with value). The body must never complete normally — it always calls `recur` or `done`.
 
 ```ts
-function loop<TBreak, TIn>(
+function loop<TIn, TOut>(
   bodyFn: (
     recur: TypedAction<TIn, never>,
-    done: TypedAction<TBreak, never>,
+    done: TypedAction<TOut, never>,
   ) => Pipeable<TIn, never>,
-): TypedAction<TIn, TBreak>
+): TypedAction<TIn, TOut>
 ```
 
 **Postfix:** No.
