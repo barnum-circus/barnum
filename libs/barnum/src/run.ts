@@ -8,12 +8,7 @@ import { createRequire } from "node:module";
 import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  type Action,
-  type Config,
-  type ExtractOutput,
-  toAction,
-} from "./ast.js";
+import type { Action, Config, ExtractOutput } from "./ast.js";
 import { chain } from "./chain.js";
 import { constant } from "./builtins/index.js";
 
@@ -135,9 +130,7 @@ export function runPipeline<TPipeline extends Action>(
   options?: RunPipelineOptions,
 ): Promise<ExtractOutput<TPipeline>> {
   const workflow =
-    input === undefined
-      ? pipeline
-      : toAction(chain(toAction(constant(input)), toAction(pipeline)));
+    input === undefined ? pipeline : chain(constant(input), pipeline);
   return spawnBarnum({ workflow }, options?.logLevel);
 }
 

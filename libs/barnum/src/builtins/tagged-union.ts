@@ -2,7 +2,6 @@ import {
   type Option,
   type TaggedUnion,
   type TypedAction,
-  toAction,
   typedAction,
 } from "../ast.js";
 import { chain } from "../chain.js";
@@ -32,16 +31,11 @@ export function tag<
 ): TypedAction<TDef[TKind], TaggedUnion<TEnumName, TDef>> {
   const namespacedKind = `${enumName}.${kind}`;
   return chain(
-    toAction(
-      all(
-        chain(
-          toAction(constant(namespacedKind)),
-          toAction(wrapInField("kind")),
-        ),
-        wrapInField("value"),
-      ),
+    all(
+      chain(constant(namespacedKind), wrapInField("kind")),
+      wrapInField("value"),
     ),
-    toAction(merge()),
+    merge(),
   ) as TypedAction<TDef[TKind], TaggedUnion<TEnumName, TDef>>;
 }
 

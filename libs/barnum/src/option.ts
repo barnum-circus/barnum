@@ -5,7 +5,6 @@ import {
   type Result as ResultT,
   type TypedAction,
   branch,
-  toAction,
   typedAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
@@ -171,10 +170,10 @@ export function first<TElement>(): TypedAction<
   Array<TElement>,
   OptionT<TElement>
 > {
-  return chain(
-    toAction(splitFirst()),
-    toAction(Option.map(toAction(getIndex(0).unwrap()))),
-  ) as TypedAction<Array<TElement>, OptionT<TElement>>;
+  return chain(splitFirst(), Option.map(getIndex(0).unwrap())) as TypedAction<
+    Array<TElement>,
+    OptionT<TElement>
+  >;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,8 +191,8 @@ export function last<TElement>(): TypedAction<
   Array<TElement>,
   OptionT<TElement>
 > {
-  return chain(
-    toAction(splitLast()),
-    toAction(Option.map(toAction(getIndex(1).unwrap()))),
-  ) as TypedAction<Array<TElement>, OptionT<TElement>>;
+  return chain(splitLast(), Option.map(getIndex(1).unwrap())) as TypedAction<
+    Array<TElement>,
+    OptionT<TElement>
+  >;
 }

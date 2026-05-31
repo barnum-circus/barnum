@@ -1018,7 +1018,7 @@ function createSplitProxy(source: TypedAction): unknown {
               yield typedAction({
                 kind: "Chain",
                 first: source,
-                rest: toAction(getIndex(i).unwrap()),
+                rest: getIndex(i).unwrap(),
               });
               i++;
             }
@@ -1029,13 +1029,13 @@ function createSplitProxy(source: TypedAction): unknown {
             return typedAction({
               kind: "Chain",
               first: source,
-              rest: toAction(getIndex(parseInt(key, 10)).unwrap()),
+              rest: getIndex(parseInt(key, 10)).unwrap(),
             });
           }
           return typedAction({
             kind: "Chain",
             first: source,
-            rest: toAction(getField(key)),
+            rest: getField(key),
           });
         }
       },
@@ -1174,7 +1174,7 @@ export { race, sleep, withTimeout } from "./race.js";
 export function forEach<In, Out>(
   action: Pipeable<In, Out>,
 ): TypedAction<Array<In>, Array<Out>> {
-  return typedAction({ kind: "ForEach", action: toAction(action) });
+  return typedAction({ kind: "ForEach", action });
 }
 
 /**
@@ -1188,9 +1188,7 @@ function unwrapBranchCases(
 ): Record<string, Action> {
   const unwrapped: Record<string, Action> = {};
   for (const key of Object.keys(cases)) {
-    unwrapped[key] = toAction(
-      chain(toAction(getField("value")), toAction(cases[key])),
-    );
+    unwrapped[key] = chain(getField("value"), cases[key]);
   }
   return unwrapped;
 }
@@ -1235,8 +1233,8 @@ export function branch<TCases extends Record<string, Action>>(
 export function branchFamily(cases: Record<string, Action>): TypedAction {
   return typedAction({
     kind: "Chain",
-    first: toAction(extractPrefix()),
-    rest: toAction(branch(cases)),
+    first: extractPrefix(),
+    rest: branch(cases),
   });
 }
 
@@ -1273,13 +1271,13 @@ export function recur<TIn = void, TOut = any>(
     restart_handler_id: restartHandlerId,
   });
 
-  const body = toAction(bodyFn(restartAction));
+  const body: Action = bodyFn(restartAction);
 
   return typedAction({
     kind: "RestartHandle",
     restart_handler_id: restartHandlerId,
     body,
-    handler: toAction(getIndex(0).unwrap()),
+    handler: getIndex(0).unwrap(),
   });
 }
 
@@ -1307,18 +1305,16 @@ export function earlyReturn<TEarlyReturn = void, TIn = any, TOut = any>(
   const restartHandlerId = allocateRestartHandlerId();
 
   const earlyReturnAction = typedAction<TEarlyReturn, never>(
-    toAction(
-      chain(toAction(tag("Break", "LoopResult")), {
-        kind: "RestartPerform",
-        restart_handler_id: restartHandlerId,
-      }),
-    ),
+    chain(tag("Break", "LoopResult"), {
+      kind: "RestartPerform",
+      restart_handler_id: restartHandlerId,
+    }),
   );
 
-  const body = toAction(bodyFn(earlyReturnAction));
+  const body: Action = bodyFn(earlyReturnAction);
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, body, toAction(identity())),
+    buildRestartBranchAction(restartHandlerId, body, identity()),
   );
 }
 
@@ -1340,14 +1336,12 @@ export function buildRestartBranchAction(
   continueArm: Action,
   breakArm: Action,
 ): Action {
-  return toAction(
-    chain(toAction(tag("Continue", "LoopResult")), {
-      kind: "RestartHandle",
-      restart_handler_id: restartHandlerId,
-      body: toAction(branch({ Continue: continueArm, Break: breakArm })),
-      handler: toAction(getIndex(0).unwrap()),
-    }),
-  );
+  return chain(tag("Continue", "LoopResult"), {
+    kind: "RestartHandle",
+    restart_handler_id: restartHandlerId,
+    body: branch({ Continue: continueArm, Break: breakArm }),
+    handler: getIndex(0).unwrap(),
+  });
 }
 
 /**
@@ -1373,17 +1367,17 @@ export function loop<TIn = void, TOut = void>(
   };
 
   const recurAction = typedAction<VoidToNull<TIn>, never>(
-    toAction(chain(toAction(tag("Continue", "LoopResult")), toAction(perform))),
+    chain(tag("Continue", "LoopResult"), perform),
   );
 
   const doneAction = typedAction<VoidToNull<TOut>, never>(
-    toAction(chain(toAction(tag("Break", "LoopResult")), toAction(perform))),
+    chain(tag("Break", "LoopResult"), perform),
   );
 
-  const body = toAction(bodyFn(recurAction, doneAction));
+  const body: Action = bodyFn(recurAction, doneAction);
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, body, toAction(identity())),
+    buildRestartBranchAction(restartHandlerId, body, identity()),
   );
 }
 

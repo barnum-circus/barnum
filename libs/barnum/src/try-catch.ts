@@ -1,8 +1,8 @@
 import {
+  type Action,
   type Pipeable,
   type TypedAction,
   buildRestartBranchAction,
-  toAction,
   typedAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
@@ -41,17 +41,15 @@ export function tryCatch<TIn, TOut, TError>(
   const restartHandlerId = allocateRestartHandlerId();
 
   const throwError = typedAction<TError, never>(
-    toAction(
-      chain(toAction(tag("Break", "LoopResult")), {
-        kind: "RestartPerform",
-        restart_handler_id: restartHandlerId,
-      }),
-    ),
+    chain(tag("Break", "LoopResult"), {
+      kind: "RestartPerform",
+      restart_handler_id: restartHandlerId,
+    }),
   );
 
-  const bodyAction = toAction(body(throwError));
+  const bodyAction: Action = body(throwError);
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, bodyAction, toAction(recovery)),
+    buildRestartBranchAction(restartHandlerId, bodyAction, recovery),
   );
 }

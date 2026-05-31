@@ -1,9 +1,4 @@
-import {
-  type Pipeable,
-  type TypedAction,
-  toAction,
-  typedAction,
-} from "./ast.js";
+import { type Pipeable, type TypedAction, typedAction } from "./ast.js";
 
 export function chain<T1, T2, T3>(
   first: Pipeable<T1, T2>,
@@ -11,7 +6,7 @@ export function chain<T1, T2, T3>(
 ): TypedAction<T1, T3> {
   return typedAction<T1, T3>({
     kind: "Chain",
-    first: toAction(first),
-    rest: toAction(rest),
+    first,
+    rest,
   });
 }

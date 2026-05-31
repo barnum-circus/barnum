@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { JSONSchema7 } from "json-schema";
 import type { z } from "zod";
-import { type TypedAction, toAction, typedAction } from "./ast.js";
+import { type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 import { all } from "./all.js";
 import { constant, identity } from "./builtins/index.js";
@@ -248,7 +248,7 @@ export function createHandlerWithConfig(
   // __definition for the worker to find (the worker imports the module
   // and accesses the named export, which is this function).
   const factory = (config: unknown): TypedAction =>
-    chain(toAction(all(identity(), constant(config))), toAction(invokeAction));
+    chain(all(identity(), constant(config)), invokeAction);
 
   Object.defineProperty(factory, HANDLER_BRAND, {
     value: true,

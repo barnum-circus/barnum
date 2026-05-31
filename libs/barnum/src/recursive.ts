@@ -73,49 +73,34 @@ export function defineRecursiveFunctions<TDefs extends Array<FunctionDef>>(
   // Call tokens: Chain(Tag("CallN"), ResumePerform(resumeHandlerId))
   const fnCount = bodiesFn.length;
   const callTokens = Array.from({ length: fnCount }, (_, i) =>
-    typedAction(
-      toAction(
-        chain(
-          toAction(tag(`Call${i}`, "RecursiveDispatch")),
-          toAction(resumePerform),
-        ),
-      ),
-    ),
+    typedAction(chain(tag(`Call${i}`, "RecursiveDispatch"), resumePerform)),
   );
 
   // Get function body ASTs
-  const bodyActions = (
-    bodiesFn(...(callTokens as FunctionRefs<TDefs>)) as Array<Pipeable>
-  ).map(toAction);
+  const bodyActions: Array<Action> = bodiesFn(
+    ...(callTokens as FunctionRefs<TDefs>),
+  ) as Array<Pipeable>;
 
   // Branch cases: CallN → GetField("value") → bodyN
   const cases: Record<string, Action> = {};
   for (let i = 0; i < bodyActions.length; i++) {
-    cases[`Call${i}`] = toAction(
-      chain(toAction(getField("value")), toAction(bodyActions[i])),
-    );
+    cases[`Call${i}`] = chain(getField("value"), bodyActions[i]);
   }
 
   // Return curried entry-point combinator
   return <TOut>(entryFn: (...fns: FunctionRefs<TDefs>) => BodyResult<TOut>) => {
-    const userBody = toAction(entryFn(...(callTokens as FunctionRefs<TDefs>)));
+    const userBody: Action = entryFn(...(callTokens as FunctionRefs<TDefs>));
 
     return typedAction<any, TOut>(
-      toAction(
-        chain(toAction(all(identity(), constant(UNUSED_STATE))), {
-          kind: "ResumeHandle",
-          resume_handler_id: resumeHandlerId,
-          body: toAction(
-            chain(toAction(getIndex(0).unwrap()), toAction(userBody)),
-          ),
-          handler: toAction(
-            all(
-              chain(toAction(getIndex(0).unwrap()), toAction(branch(cases))),
-              constant(UNUSED_STATE),
-            ),
-          ),
-        }),
-      ),
+      chain(all(identity(), constant(UNUSED_STATE)), {
+        kind: "ResumeHandle",
+        resume_handler_id: resumeHandlerId,
+        body: chain(toAction(getIndex(0).unwrap()), userBody),
+        handler: all(
+          chain(toAction(getIndex(0).unwrap()), branch(cases)),
+          constant(UNUSED_STATE),
+        ),
+      }),
     );
   };
 }

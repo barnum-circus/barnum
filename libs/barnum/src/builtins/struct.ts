@@ -63,8 +63,8 @@ export function pick<
   TObj extends Record<string, unknown>,
   TKeys extends Array<keyof TObj & string>,
 >(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>> {
-  const actions = keys.map((key) =>
-    toAction(chain(toAction(getField(key)), toAction(wrapInField(key)))),
+  const actions: Array<Action> = keys.map((key) =>
+    chain(getField(key), wrapInField(key)),
   );
   const allAction: Action = { kind: "All", actions };
   return chain(toAction(allAction), toAction(merge())) as TypedAction<
@@ -123,8 +123,8 @@ export function allObject<
   AllInputs<TActions>,
   { [K in keyof TActions & string]: ExtractOutput<TActions[K]> }
 > {
-  const wrapped = Object.entries(actions).map(([key, action]) =>
-    toAction(chain(action, wrapInField(key))),
+  const wrapped: Array<Action> = Object.entries(actions).map(([key, action]) =>
+    chain(action, wrapInField(key)),
   );
   const allAction: Action = { kind: "All", actions: wrapped };
   return chain(toAction(allAction), toAction(merge())) as TypedAction<

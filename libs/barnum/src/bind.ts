@@ -66,11 +66,9 @@ export type InferVarRefs<TBindings extends Array<Action>> = {
  * Expanded AST: All(Chain(GetIndex(1).unwrap(), GetIndex(n).unwrap()), GetIndex(1).unwrap())
  */
 function readVar(n: number): Action {
-  return toAction(
-    all(
-      chain(toAction(getIndex(1).unwrap()), toAction(getIndex(n).unwrap())),
-      toAction(getIndex(1).unwrap()),
-    ),
+  return all(
+    chain(toAction(getIndex(1).unwrap()), getIndex(n).unwrap()),
+    toAction(getIndex(1).unwrap()),
   );
 }
 
@@ -107,17 +105,12 @@ export function bind<TBindings extends Array<Action>, TOut>(
   const varRefs = resumeHandlerIds.map((id) => createVarRef(id));
 
   // 3. Invoke the body callback with the VarRefs.
-  const bodyAction = toAction(body(varRefs as InferVarRefs<TBindings>));
+  const bodyAction: Action = body(varRefs as InferVarRefs<TBindings>);
 
   // 4. Build nested Handles from inside out.
   //    Innermost: extract pipeline_input (last All element) → user body
   const pipelineInputIndex = bindings.length;
-  let inner: Action = toAction(
-    chain(
-      toAction(getIndex(pipelineInputIndex).unwrap()),
-      toAction(bodyAction),
-    ),
-  );
+  let inner: Action = chain(getIndex(pipelineInputIndex).unwrap(), bodyAction);
   for (let i = resumeHandlerIds.length - 1; i >= 0; i--) {
     inner = {
       kind: "ResumeHandle",
@@ -130,9 +123,9 @@ export function bind<TBindings extends Array<Action>, TOut>(
   // 5. All(...bindings, identity()) → nested Handles
   const allAction: Action = {
     kind: "All",
-    actions: [...bindings.map((b) => toAction(b)), toAction(identity())],
+    actions: [...bindings, identity()],
   };
-  return typedAction(toAction(chain(toAction(allAction), toAction(inner))));
+  return typedAction(chain(allAction, inner));
 }
 
 // ---------------------------------------------------------------------------

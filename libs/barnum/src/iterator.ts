@@ -102,7 +102,7 @@ export const Iterator = {
   ): TypedAction<IteratorT<TIn>, IteratorT<TOut>> {
     return chain(
       toAction(getField("value")),
-      chain(toAction(forEach(action)), Iterator.fromArray<TOut>()),
+      chain(forEach(action), Iterator.fromArray<TOut>()),
     ) as TypedAction<IteratorT<TIn>, IteratorT<TOut>>;
   },
 
@@ -114,7 +114,7 @@ export const Iterator = {
       toAction(getField("value")),
       chain(
         toAction(forEach(chain(action, intoIteratorNormalize))),
-        chain(toAction(flatten()), Iterator.fromArray<TOut>()),
+        chain(flatten<TOut>(), Iterator.fromArray<TOut>()),
       ),
     ) as TypedAction<IteratorT<TIn>, IteratorT<TOut>>;
   },
@@ -178,39 +178,35 @@ export const Iterator = {
     // Use bind + typedAction to bridge VoidToNull<TAcc> → TAcc (TypeScript
     // can't simplify the conditional type for generic TAcc).
     return typedAction<IteratorT<TElement>, TAcc>(
-      toAction(
-        Iterator.collect<TElement>().then(
-          bind([identity<Array<TElement>>()], ([elements]) =>
-            pipe(
-              drop,
-              all(init, elements).then(
-                loop<[TAcc, Array<TElement>], TAcc>((recur, done) => {
-                  const doneTAcc = typedAction<TAcc, never>(toAction(done));
+      Iterator.collect<TElement>().then(
+        bind([identity<Array<TElement>>()], ([elements]) =>
+          pipe(
+            drop,
+            all(init, elements).then(
+              loop<[TAcc, Array<TElement>], TAcc>((recur, done) => {
+                const doneTAcc = typedAction<TAcc, never>(done);
 
-                  return typedAction<[TAcc, Array<TElement>], never>(
-                    toAction(
-                      bindInput<[TAcc, Array<TElement>], never>((state) => {
-                        const [acc, remaining] = state.split();
+                return typedAction<[TAcc, Array<TElement>], never>(
+                  bindInput<[TAcc, Array<TElement>], never>((state) => {
+                    const [acc, remaining] = state.split();
 
-                        return remaining.splitFirst().branch({
-                          None: acc.then(doneTAcc),
-                          Some: bindInput<[TElement, Array<TElement>], never>(
-                            (headTail) => {
-                              const [head, tail] = headTail.split();
+                    return remaining.splitFirst().branch({
+                      None: acc.then(doneTAcc),
+                      Some: bindInput<[TElement, Array<TElement>], never>(
+                        (headTail) => {
+                          const [head, tail] = headTail.split();
 
-                              return all(acc, head)
-                                .then(body)
-                                .bindInput<never>((newAcc) =>
-                                  all(newAcc, tail).then(recur),
-                                );
-                            },
-                          ),
-                        });
-                      }),
-                    ),
-                  );
-                }),
-              ),
+                          return all(acc, head)
+                            .then(body)
+                            .bindInput<never>((newAcc) =>
+                              all(newAcc, tail).then(recur),
+                            );
+                        },
+                      ),
+                    });
+                  }),
+                );
+              }),
             ),
           ),
         ),
@@ -225,10 +221,7 @@ export const Iterator = {
   ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
     return chain(
       Iterator.collect<TElement>(),
-      chain(
-        toAction(slice<TElement>(start, end)),
-        Iterator.fromArray<TElement>(),
-      ),
+      chain(slice<TElement>(start, end), Iterator.fromArray<TElement>()),
     );
   },
 
