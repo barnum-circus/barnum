@@ -123,7 +123,7 @@ export const Iterator = {
     predicate: Pipeable<TElement, boolean>,
   ): TypedAction<IteratorT<TElement>, IteratorT<TElement>> {
     return Iterator.flatMap<TElement, TElement>(
-      bindInput<TElement>((element) =>
+      bindInput<TElement, OptionT<TElement>>((element) =>
         element
           .then(predicate)
           .asOption()
@@ -175,6 +175,7 @@ export const Iterator = {
     body: Pipeable<[TAcc, TElement], TAcc>,
   ): TypedAction<IteratorT<TElement>, TAcc> {
     return Iterator.collect<TElement>().then(
+      // eslint-disable-next-line barnum/require-type-params -- generic VoidToNull<TAcc> can't satisfy TAcc
       bindInput<Array<TElement>>((elements) =>
         all(init, elements).then(
           loop<TAcc, [TAcc, Array<TElement>]>((recur, done) => {
@@ -186,20 +187,22 @@ export const Iterator = {
             // for generic types inside loop bodies.
             return typedAction<[TAcc, Array<TElement>], never>(
               toAction(
-                bindInput<[TAcc, Array<TElement>]>((state) => {
+                bindInput<[TAcc, Array<TElement>], never>((state) => {
                   const [acc, remaining] = state.split();
 
                   return remaining.splitFirst().branch({
                     None: acc.then(doneTAcc),
-                    Some: bindInput<[TElement, Array<TElement>]>((headTail) => {
-                      const [head, tail] = headTail.split();
+                    Some: bindInput<[TElement, Array<TElement>], never>(
+                      (headTail) => {
+                        const [head, tail] = headTail.split();
 
-                      return all(acc, head)
-                        .then(body)
-                        .bindInput<TAcc>((newAcc) =>
-                          all(newAcc, tail).then(recur),
-                        );
-                    }),
+                        return all(acc, head)
+                          .then(body)
+                          .bindInput<never>((newAcc) =>
+                            all(newAcc, tail).then(recur),
+                          );
+                      },
+                    ),
                   });
                 }),
               ),

@@ -78,7 +78,7 @@ describe("loop type tests", () => {
   });
 
   it("loop with branch/recur/done: output is null with void defaults", () => {
-    const action = loop((recur, done) =>
+    const action = loop<void>((recur, done) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
         Clean: done,
@@ -89,7 +89,7 @@ describe("loop type tests", () => {
   });
 
   it("loop with done: zero type params (terminate pattern)", () => {
-    const action = loop((recur, done) =>
+    const action = loop<void>((recur, done) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
         Clean: done,
@@ -105,16 +105,16 @@ describe("loop type tests", () => {
     assertIO<typeof action, { deployed: boolean }, { stable: true }>();
   });
 
-  it("without explicit TBreak, done has input=null (accepts void variants)", () => {
-    loop((recur, done) => {
+  it("with TBreak=void, done has input=null (accepts void variants)", () => {
+    loop<void>((recur, done) => {
       assertIO<typeof done, null, never>();
       classifyErrors.branch({ HasErrors: forEach(fix), Clean: done });
       return recur;
     });
   });
 
-  it("without explicit TBreak, done has input=null (rejects non-null)", () => {
-    loop((recur, done) => {
+  it("with TBreak=void, done has input=null (rejects non-null)", () => {
+    loop<void>((recur, done) => {
       // @ts-expect-error — done: TypedAction<null, never> can't accept { stable: true } from Break
       healthCheck.branch({ Continue: drop, Break: done });
       return recur;
@@ -130,7 +130,7 @@ describe("loop type tests", () => {
   });
 
   it("loop with TIn=void has any input", () => {
-    const action = loop((recur, done) =>
+    const action = loop<void>((recur, done) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
         Clean: done,
@@ -147,7 +147,7 @@ describe("loop type tests", () => {
   });
 
   it(".drop() before recur connects void output to void input", () => {
-    loop((recur, done) =>
+    loop<void>((recur, done) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
         Clean: done,
@@ -191,7 +191,7 @@ describe("loop AST structure", () => {
         listFiles,
         forEach(migrate),
       ).then(
-        loop((recur, done) =>
+        loop<void>((recur, done) =>
           pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix).drop(), recur),
             Clean: done,

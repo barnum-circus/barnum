@@ -337,7 +337,7 @@ describe("split execution", () => {
     const result = await runPipeline(
       pipe(
         constant({ a: { b: "deep" }, x: 42 }),
-        bindInput<{ a: { b: string }; x: number }>((vr) => {
+        bindInput<{ a: { b: string }; x: number }, [string, number]>((vr) => {
           const { a } = vr.split();
           const { x } = vr.split();
           return all(a.getField("b"), x);

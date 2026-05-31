@@ -16,6 +16,7 @@ export default [
     },
     rules: {
       "barnum/exported-handler": "error",
+      "barnum/require-type-params": "error",
     },
   },
   {
