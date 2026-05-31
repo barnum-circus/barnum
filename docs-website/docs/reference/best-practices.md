@@ -563,6 +563,63 @@ bindInput<{ file: string }>((param) => param.then(analyze).then(report));
 analyze.then(report);
 ```
 
+### Use `.split()` to destructure tuples and objects inside `bindInput`
+
+When a `VarRef` holds a tuple or object and you need its individual components as separate pipeline values, call `.split()`. It returns component VarRefs via JavaScript destructuring — tuple positions for arrays, named properties for objects.
+
+```ts
+// Tuple destructuring: fold body receives [TAcc, TElement]
+Iterator.fold(
+  constant(0),
+  bindInput<[number, Item]>((state) => {
+    const [acc, item] = state.split();
+    return item.then(getScore).then(add(acc));
+  }),
+)
+
+// Object destructuring: withResource action receives [TResource, TIn]
+withResource({
+  create: createDb,
+  action: bindInput<[Db, Config]>((state) => {
+    const [db, config] = state.split();
+    return db.then(query(config));
+  }),
+  dispose: closeDb,
+})
+```
+
+Each destructured component is a full `VarRef` — a `TypedAction<any, T>` that produces its value regardless of the current pipeline context. You can use them anywhere in the body: as the start of a `pipe`, as an argument to `all`, or chained with `.then()`.
+
+### Don't use `.split()` when you only need one component
+
+If you only need one field from the tuple/object, use `.getIndex()` or `.getField()` directly on the VarRef. `.split()` is for when you need multiple components.
+
+```ts
+// Avoid: splitting just to use one element
+bindInput<[string, number]>((state) => {
+  const [name, _age] = state.split();
+  return name.then(greet);
+});
+
+// Prefer: access the index directly
+bindInput<[string, number]>((state) => {
+  return state.getIndex(0).unwrap().then(greet);
+});
+```
+
+### `.split()` works on any structured VarRef — not just tuples
+
+Object VarRefs support named destructuring:
+
+```ts
+bindInput<{ host: string; port: number }>((config) => {
+  const { host, port } = config.split();
+  return host.then(connect(port));
+});
+```
+
+But prefer `.getField()` for single-field access — same reasoning as above.
+
 ### Use `allObject` to carry context forward
 
 When you need both a handler's input and output downstream, use `allObject` to run the handler alongside `identity()` and collect the results into a named object.
