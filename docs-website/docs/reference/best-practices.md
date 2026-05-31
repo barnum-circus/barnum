@@ -185,7 +185,7 @@ export const callApi = createHandler(
 );
 
 // Pipeline adds timeout and retries:
-withRetry(withTimeout(constant(5_000), callApi), 3)
+withRetry(withTimeout(constant(5_000), callApi), 3);
 ```
 
 `withRetry(action, n)` retries a `Result`-returning action up to `n` times. On the first `Ok`, it short-circuits and returns the value. If all attempts produce `Err`, it returns the final `Err`. The action receives the same input on every attempt.
@@ -392,7 +392,7 @@ File system writes are appropriate for **durable side effects** — checkpointin
 
 These combinators cannot infer their type parameters from usage. If you omit them, the output type silently degrades to `any` and every downstream step loses type checking.
 
-**Why TypeScript can't infer these.** TypeScript infers generic type parameters from *arguments* (outside-in). But these combinators' type parameters only manifest as the *types of callback parameters* — the `recur`/`done` actions in `loop`, the `ret` action in `earlyReturn`, the `VarRef` in `bindInput`. TypeScript doesn't do bidirectional inference from "how the callback body uses its parameters" back to "what the enclosing function's type parameters must be." The type parameter determines what gets *passed into* the callback, not what gets *returned from* it — so TS has nothing to infer from.
+**Why TypeScript can't infer these.** TypeScript infers generic type parameters from _arguments_ (outside-in). But these combinators' type parameters only manifest as the _types of callback parameters_ — the `recur`/`done` actions in `loop`, the `ret` action in `earlyReturn`, the `VarRef` in `bindInput`. TypeScript doesn't do bidirectional inference from "how the callback body uses its parameters" back to "what the enclosing function's type parameters must be." The type parameter determines what gets _passed into_ the callback, not what gets _returned from_ it — so TS has nothing to infer from.
 
 ```ts
 // loop<TIn, TOut>: TIn determines recur's type, TOut determines done's type
@@ -462,46 +462,60 @@ Without the explicit `never`, you get: `Type '() => any' is not assignable to ty
 
 **Summary of when `TOut` is `never`:**
 
-| Context | `TOut` | Why |
-|---------|--------|-----|
-| Normal pipeline position | Concrete type | The body produces a value |
-| Inside `loop` body (all paths → recur/done) | `never` | All paths exit via actions typed `→ never` |
-| Inside `earlyReturn` where all paths → `ret` | `never` | Same reason |
+| Context                                      | `TOut`        | Why                                        |
+| -------------------------------------------- | ------------- | ------------------------------------------ |
+| Normal pipeline position                     | Concrete type | The body produces a value                  |
+| Inside `loop` body (all paths → recur/done)  | `never`       | All paths exit via actions typed `→ never` |
+| Inside `earlyReturn` where all paths → `ret` | `never`       | Same reason                                |
 
-### Use `.call()` with local variables inside `bindInput` bodies
+### Write Barnum like you write regular JavaScript
 
-Inside `bindInput` callbacks, use `.call()` to invoke actions with assembled arguments. Assign intermediate results to `const` variables — they read like imperative let-bindings:
+Barnum pipelines are just expressions. Apply the same judgment about when to extract a local variable as you would in normal code — if an expression is meaningful on its own, name it; if it's just argument assembly, inline it.
 
 ```ts
+// Good: inline argument assembly, extract meaningful steps
 bindInput<[WorktreeResource, Refactor], { prUrl: string }>((state) => {
   const [resource, refactor] = state.split();
   const worktreePath = resource.getField("worktreePath");
   const description = refactor.getField("description");
 
-  return pipe(
-    implement.call(allObject({ worktreePath, description })).drop(),
-    typeCheckFix.call(resource.pick("worktreePath")).drop(),
-    commit.call(resource.pick("worktreePath")).drop(),
-    preparePRInput
-      .call(allObject({ branch: resource.getField("branch"), description }))
-      .then(createPR),
-  );
+  const implemented = implement
+    .call(allObject({ worktreePath, description }))
+    .drop();
+  const typeChecked = typeCheckFix
+    .call(resource.pick("worktreePath"))
+    .drop()
+    .call(implemented);
+  const committed = commit
+    .call(resource.pick("worktreePath"))
+    .drop()
+    .call(typeChecked);
+  return createPR
+    .call(
+      preparePRInput.call(
+        allObject({ branch: resource.getField("branch"), description }),
+      ),
+    )
+    .call(committed);
 });
 ```
 
-Each `const` binding is a computed value (a `TypedAction<any, T>`). Since `.call()` returns `TypedAction<any, Out>` — the same shape as a VarRef — these local variables compose naturally with `allObject`, `all`, and further `.call()` invocations.
+Notice that `allObject(...)` is inlined — you wouldn't write `const args = { name, age }; return createUser(args);` in JS, so don't write `const combined = allObject({ a, b }); return action.call(combined);` in Barnum. Inline argument assembly, extract meaningful computation.
 
-**Avoid:** `pipe(allObject({...}), action)`. This buries the verb (action) after its arguments.
+```ts
+// Avoid: extracting trivial argument assembly
+const combined = allObject({ batchResults, state });
+return advanceOrFinish.call(combined);
 
-**Prefer:** `action.call(allObject({...}))`. The verb reads first, then the arguments.
+// Prefer: inline it — the verb and its arguments belong together
+return advanceOrFinish.call(allObject({ batchResults, state }));
+```
 
-**Mental model:**
+**Sequencing:** `b.call(a)` means "evaluate `a`, then pass its output to `b`". When `b` already has its own input (via an inner `.call()`), the outer `.call(a)` is pure sequencing — `a` runs first for its side effect, then `b` runs independently.
 
-| Pattern | Reads as... |
-|---------|-------------|
-| `pipe(a, b, c)` | `let v1 = a(); let v2 = b(v1); let v3 = c(v2)` — sequential data flow |
-| `ref.then(action)` | `action(ref())` — transform a value |
-| `action.call(input)` | `action(input())` — invoke a function with arguments |
+**Avoid:** `pipe(a, b, c)` or `a.then(b).then(c)`. These hide the data flow and make it hard to insert intermediate steps.
+
+**Prefer:** `const x = b.call(a); return c.call(x);`. The verb reads first, then the arguments. Steps are individually named and reorderable.
 
 **Non-caching note:** `.call()` results are not memoized. Each reference to a local variable re-evaluates its pipeline. If you need a value computed once and referenced multiple times, use `bindInput` to capture it as a VarRef. For single-use intermediates (the common case), local `const` bindings are pure win with no overhead.
 
@@ -512,7 +526,7 @@ Each `const` binding is a computed value (a `TypedAction<any, T>`). Since `.call
 ```ts
 // Avoid: loop<null, null> already passes null as input to the body
 loop<null, null>((recur, done) =>
-  constant(null).then(dequeueEvent).branch({ ... }),
+  dequeueEvent.call(constant(null)).branch({ ... }),
 );
 
 // Prefer: dequeueEvent accepts null, which is already the loop's input
@@ -543,7 +557,7 @@ The freestanding `drop` is for positions where there's no preceding action to ca
 classify.branch({
   Relevant: processItem,
   Irrelevant: drop,
-})
+});
 ```
 
 ### Prefer `allObject` over `all`
@@ -576,9 +590,9 @@ A `VarRef<T>` is just a `TypedAction<any, T>` — a pipeline step that always pr
 // The body doesn't implicitly receive `params` as input — you must use the VarRef:
 bindInput<Params>((params) =>
   pipe(
-    params.pick("file"),        // ← explicitly inject from the captured value
+    params.pick("file"), // ← explicitly inject from the captured value
     analyze,
-    params.pick("branch"),      // ← reach back to captured value mid-pipeline
+    params.pick("branch"), // ← reach back to captured value mid-pipeline
     commit,
   ),
 );
@@ -639,7 +653,7 @@ Iterator.fold(
     const [acc, item] = state.split();
     return item.then(getScore).then(add(acc));
   }),
-)
+);
 
 // Object destructuring: withResource action receives [TResource, TIn]
 withResource({
@@ -649,7 +663,7 @@ withResource({
     return db.then(query(config));
   }),
   dispose: closeDb,
-})
+});
 ```
 
 Each destructured component is a full `VarRef` — a `TypedAction<any, T>` that produces its value regardless of the current pipeline context. You can use them anywhere in the body: as the start of a `pipe`, as an argument to `all`, or chained with `.then()`.
@@ -793,6 +807,7 @@ Handler schemas are converted to JSON Schema (Draft 7) for the Rust runtime. Onl
 **Composition:** `z.union()`, `z.nullable()`, `.optional()`
 
 **Modifiers:**
+
 - String: `.min()`, `.max()`, `.length()`, `.regex()`, `.email()`, `.url()`, `.startsWith()`, `.endsWith()`
 - Number: `.min()`, `.max()`, `.gt()`, `.lt()`, `.int()`, `.multipleOf()`
 - Array: `.min()`, `.max()`
@@ -800,17 +815,17 @@ Handler schemas are converted to JSON Schema (Draft 7) for the Rust runtime. Onl
 
 **Rejected (throws at pipeline construction time):**
 
-| Type | Reason |
-|------|--------|
-| `z.undefined()`, `z.void()` | No JSON representation |
-| `z.bigint()` | No JSON representation |
-| `z.symbol()` | No JSON representation |
-| `z.date()` | No JSON representation |
-| `z.function()` | No JSON representation |
-| `z.map()`, `z.set()` | No JSON representation |
-| `.transform()` | Output type differs from input; not expressible in schema |
-| `z.intersection()` | Produces broken `allOf` with `additionalProperties: false` on Draft 7 — use `.extend()` or `.merge()` instead |
-| `.refine()`, `.superRefine()` | Silently stripped from JSON Schema — validation would pass on the Rust side for values that should fail |
+| Type                          | Reason                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `z.undefined()`, `z.void()`   | No JSON representation                                                                                        |
+| `z.bigint()`                  | No JSON representation                                                                                        |
+| `z.symbol()`                  | No JSON representation                                                                                        |
+| `z.date()`                    | No JSON representation                                                                                        |
+| `z.function()`                | No JSON representation                                                                                        |
+| `z.map()`, `z.set()`          | No JSON representation                                                                                        |
+| `.transform()`                | Output type differs from input; not expressible in schema                                                     |
+| `z.intersection()`            | Produces broken `allOf` with `additionalProperties: false` on Draft 7 — use `.extend()` or `.merge()` instead |
+| `.refine()`, `.superRefine()` | Silently stripped from JSON Schema — validation would pass on the Rust side for values that should fail       |
 
 `z.unknown()` and `z.any()` both produce `{}` (empty schema — accepts any JSON value). Use `z.unknown()` when the handler genuinely accepts arbitrary input.
 
@@ -840,48 +855,57 @@ The alternative — a handler that returns a boolean or status flag, followed by
 
 ```ts
 // Avoid: check-then-act — the invariant is informal
-export const isEmpty = createHandler({
-  inputValidator: z.object({ queueDir: z.string() }),
-  outputValidator: z.boolean(),
-  handle: async ({ value }) => {
-    const files = readdirSync(value.queueDir);
-    return files.length === 0;
+export const isEmpty = createHandler(
+  {
+    inputValidator: z.object({ queueDir: z.string() }),
+    outputValidator: z.boolean(),
+    handle: async ({ value }) => {
+      const files = readdirSync(value.queueDir);
+      return files.length === 0;
+    },
   },
-}, "isEmpty");
+  "isEmpty",
+);
 
-export const readFirst = createHandler({
-  inputValidator: z.object({ queueDir: z.string() }),
-  outputValidator: itemSchema, // assumes non-empty — partial function disguised as total
-  handle: async ({ value }) => {
-    const files = readdirSync(value.queueDir);
-    return JSON.parse(readFileSync(join(value.queueDir, files[0]), "utf-8"));
+export const readFirst = createHandler(
+  {
+    inputValidator: z.object({ queueDir: z.string() }),
+    outputValidator: itemSchema, // assumes non-empty — partial function disguised as total
+    handle: async ({ value }) => {
+      const files = readdirSync(value.queueDir);
+      return JSON.parse(readFileSync(join(value.queueDir, files[0]), "utf-8"));
+    },
   },
-}, "readFirst");
+  "readFirst",
+);
 
 // Pipeline: isEmpty guards readFirst, but the compiler doesn't know they're related
-isEmpty.branch({ true: readFirst, false: sleep(5000) })
+isEmpty.branch({ true: readFirst, false: sleep(5000) });
 ```
 
 ```ts
 // Prefer: one handler returns Option<T> — partiality is in the type
-export const dequeue = createHandler({
-  inputValidator: z.object({ queueDir: z.string() }),
-  outputValidator: Option.schema(itemSchema),
-  handle: async ({ value }): Promise<Option<Item>> => {
-    const files = readdirSync(value.queueDir).sort();
-    if (files.length === 0) return { kind: "Option.None", value: null };
-    const path = join(value.queueDir, files[0]);
-    const item = JSON.parse(readFileSync(path, "utf-8"));
-    unlinkSync(path);
-    return { kind: "Option.Some", value: item };
+export const dequeue = createHandler(
+  {
+    inputValidator: z.object({ queueDir: z.string() }),
+    outputValidator: Option.schema(itemSchema),
+    handle: async ({ value }): Promise<Option<Item>> => {
+      const files = readdirSync(value.queueDir).sort();
+      if (files.length === 0) return { kind: "Option.None", value: null };
+      const path = join(value.queueDir, files[0]);
+      const item = JSON.parse(readFileSync(path, "utf-8"));
+      unlinkSync(path);
+      return { kind: "Option.Some", value: item };
+    },
   },
-}, "dequeue");
+  "dequeue",
+);
 
 // Pipeline: the compiler forces you to handle None
 dequeue.branch({
   Some: processItem,
   None: sleep(5_000),
-})
+});
 ```
 
 The typed version fuses the check and the use into a single atomic operation. There's no window where the invariant can be invalidated, no informal proof for the reader to re-verify, and no way to forget the empty case.
@@ -901,19 +925,21 @@ handle: async ({ value }) => {
     return { kind: "Option.None", value: null }; // this can't happen — upstream guarantees existence
   }
   return { kind: "Option.Some", value: item };
-}
+};
 
 // Prefer: crash immediately — the bug is upstream, not here
 handle: async ({ value }) => {
   const item = lookupById(value.id);
   if (!item) {
-    throw new Error(`Invariant violation: item ${value.id} must exist (guaranteed by previous step)`);
+    throw new Error(
+      `Invariant violation: item ${value.id} must exist (guaranteed by previous step)`,
+    );
   }
   return item;
-}
+};
 ```
 
-A panic is a signal to the developer that an assumption is broken. A graceful fallback hides the broken assumption and lets it compound. The earlier you crash, the closer the stack trace is to the actual bug. Use `Result`/`Option` for states that *can* legitimately occur; use `throw` for states that *cannot*.
+A panic is a signal to the developer that an assumption is broken. A graceful fallback hides the broken assumption and lets it compound. The earlier you crash, the closer the stack trace is to the actual bug. Use `Result`/`Option` for states that _can_ legitimately occur; use `throw` for states that _cannot_.
 
 ### Return tagged unions, not booleans
 
@@ -921,36 +947,45 @@ A boolean return is a closed, two-valued type with no payload and no extensibili
 
 ```ts
 // Avoid: boolean — opaque at the call site, can't carry data, can't extend
-export const checkCapacity = createHandler({
-  outputValidator: z.boolean(),
-  handle: async ({ value }) => {
-    return readdirSync(value.queueDir).length < value.maxSize;
+export const checkCapacity = createHandler(
+  {
+    outputValidator: z.boolean(),
+    handle: async ({ value }) => {
+      return readdirSync(value.queueDir).length < value.maxSize;
+    },
   },
-}, "checkCapacity");
+  "checkCapacity",
+);
 
 // Pipeline: what does true mean? What does false mean?
-checkCapacity.branch({ true: produce, false: sleep(60_000) })
+checkCapacity.branch({ true: produce, false: sleep(60_000) });
 ```
 
 ```ts
 // Prefer: tagged union — self-documenting, extensible, can carry data
-export const checkCapacity = createHandler({
-  outputValidator: taggedUnionSchema("Capacity", {
-    HasCapacity: z.object({ remaining: z.number() }),
-    Full: z.null(),
-  }),
-  handle: async ({ value }): Promise<Capacity> => {
-    const count = readdirSync(value.queueDir).length;
-    if (count >= value.maxSize) return { kind: "Capacity.Full", value: null };
-    return { kind: "Capacity.HasCapacity", value: { remaining: value.maxSize - count } };
+export const checkCapacity = createHandler(
+  {
+    outputValidator: taggedUnionSchema("Capacity", {
+      HasCapacity: z.object({ remaining: z.number() }),
+      Full: z.null(),
+    }),
+    handle: async ({ value }): Promise<Capacity> => {
+      const count = readdirSync(value.queueDir).length;
+      if (count >= value.maxSize) return { kind: "Capacity.Full", value: null };
+      return {
+        kind: "Capacity.HasCapacity",
+        value: { remaining: value.maxSize - count },
+      };
+    },
   },
-}, "checkCapacity");
+  "checkCapacity",
+);
 
 // Pipeline: variants are named, and Full can later become Degraded/Full/Overloaded without breakage
 checkCapacity.branch({
   HasCapacity: produce,
   Full: sleep(60_000),
-})
+});
 ```
 
 When a third state appears (and it will — "degraded," "rate-limited," "shutting down"), a boolean forces a breaking change everywhere. A tagged union just adds a variant. Start with the union.
