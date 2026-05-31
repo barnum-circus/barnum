@@ -1,4 +1,4 @@
-# Explore: `.call()`, `.apply()`, `.bind()` on TypedAction
+# Explore: `.call()` on TypedAction
 
 ## Motivation
 
@@ -10,86 +10,47 @@ Iterator.fold(
   constant(0),
   bindInput<[number, Item]>((state) => {
     const [acc, item] = state.split();
-    return item.then(getScore).then(add(acc));
+    return item.then(getScore).then(all(identity(), acc)).then(add);
   }),
 )
 ```
 
-This works but reads as infrastructure. The user's intent — "call `getScore` on `item`, then `add` with `acc`" — is buried under tuple unpacking ceremony. The question: can we give TypedAction `.call()` / `.apply()` / `.bind()` methods that let users write something closer to:
+This works but reads as infrastructure. The user's intent — "call `getScore` on `item`, then `add` with `acc`" — is buried under tuple unpacking ceremony. The question: can we give TypedAction a `.call()` method that lets users write something closer to:
 
 ```ts
 // Hypothetical: what if actions had .call()?
-getScore.call(item).then(add.call(acc))
+getScore.call(item).then(add.call(pipeline, acc))
 ```
 
 This doc explores what that API surface would look like, what it composes with, and where it breaks down.
 
 ---
 
-## Design space
-
-### `.call(...args)` — invoke an action with explicit VarRef arguments
+## Design: `.call(...args)` — variadic invocation with VarRef arguments
 
 **Signature:**
 ```ts
 // Single argument: action expects TIn, we supply it as a VarRef
 call<TIn>(this: TypedAction<TIn, TOut>, input: VarRef<TIn>): TypedAction<any, TOut>;
 
-// The action is "called" with the VarRef's value instead of whatever
-// is currently flowing through the pipeline.
-```
-
-**Semantics:** `action.call(ref)` ≡ `ref.then(action)`. The VarRef provides the input; the pipeline's current value is ignored.
-
-**Usage:**
-```ts
-bindInput<[number, Item]>((state) => {
-  const [acc, item] = state.split();
-  return getScore.call(item).then(add.call(acc));
-});
-```
-
-This reads more imperatively: "call getScore with item, then call add with acc."
-
-### `.apply(arg1, arg2, ...)` — invoke with multiple arguments
-
-**Signature:**
-```ts
-// Action expects a tuple input [A, B], we provide components separately
-apply<TArgs extends Array<unknown>>(
+// Multiple arguments: action expects tuple [A, B, ...], we supply components
+call<TArgs extends Array<unknown>>(
   this: TypedAction<TArgs, TOut>,
   ...args: { [K in keyof TArgs]: VarRef<TArgs[K]> }
 ): TypedAction<any, TOut>;
 ```
 
-**Semantics:** `action.apply(a, b)` ≡ `all(a, b).then(action)`. Assembles a tuple from multiple VarRefs and feeds it to the action.
+**Semantics:**
+- `action.call(ref)` ≡ `ref.then(action)` — single VarRef provides the input
+- `action.call(a, b)` ≡ `all(a, b).then(action)` — multiple VarRefs assembled into tuple
+
+One method handles both cases. No need for separate `.apply()`.
 
 **Usage:**
 ```ts
 bindInput<[number, Item]>((state) => {
   const [acc, item] = state.split();
-  return processItem.apply(acc, item);  // processItem: TypedAction<[number, Item], Result>
-});
-```
-
-### `.bind(partialArgs)` — partial application returning a narrower action
-
-**Signature:**
-```ts
-// Action expects [A, B, C], we provide A upfront → new action expects [B, C]
-bind<TBound extends Array<unknown>, TRemaining extends Array<unknown>>(
-  this: TypedAction<[...TBound, ...TRemaining], TOut>,
-  ...args: { [K in keyof TBound]: VarRef<TBound[K]> }
-): TypedAction<TRemaining extends [infer Single] ? Single : TRemaining, TOut>;
-```
-
-**Semantics:** Returns a new action with some arguments pre-filled. The remaining arguments come from the pipeline.
-
-**Usage:**
-```ts
-bindInput<Config>((config) => {
-  const narrowQuery = queryDb.bind(config);  // queryDb: [Config, Query] → Results
-  return getQueries.iterate().map(narrowQuery).collect();
+  return getScore.call(item).then(add.call(pipeline, acc));
 });
 ```
 
@@ -97,34 +58,17 @@ bindInput<Config>((config) => {
 
 ## What `.call()` compiles to
 
-`.call(ref)` is just `ref.then(this)` — it chains the VarRef (which produces the value) into the action. No new AST nodes. This is purely syntactic sugar.
+Single arg: `action.call(ref)` → `ref.then(action)`. No new AST nodes. Purely syntactic sugar.
+
+Multiple args: `action.call(a, b)` → `all(a, b).then(action)`. Also no new AST nodes.
 
 ```ts
-// These are identical:
-getScore.call(item)
-item.then(getScore)
+// These pairs are identical:
+getScore.call(item)          ≡  item.then(getScore)
+processItem.call(acc, item)  ≡  all(acc, item).then(processItem)
 ```
 
 The difference is reading direction. `item.then(getScore)` reads as "item flows into getScore." `getScore.call(item)` reads as "call getScore with item." The second is more natural when you're thinking imperatively about "I have references, I want to invoke functions on them."
-
-## What `.apply()` compiles to
-
-`.apply(a, b)` is just `all(a, b).then(this)`. Again, no new AST nodes.
-
-```ts
-// These are identical:
-processItem.apply(acc, item)
-all(acc, item).then(processItem)
-```
-
-## What `.bind()` compiles to
-
-`.bind(config)` returns a new action: `bindInput<Query>((query) => all(config, query).then(this))`. This does use `bindInput` internally — it captures the remaining pipeline input and assembles the full tuple.
-
-```ts
-// queryDb.bind(config) compiles to:
-bindInput<Query>((query) => all(config, query).then(queryDb))
-```
 
 ---
 
@@ -141,16 +85,16 @@ bindInput<[Db, Config, Query]>((state) => {
 });
 ```
 
-With `.call()` / `.apply()`:
+With `.call()`:
 
 ```ts
 bindInput<[Db, Config, Query]>((state) => {
   const [db, config, query] = state.split();
-  return runQuery.apply(db, query).then(formatResult.apply(identity(), config));
+  return runQuery.call(db, query).then(formatResult.call(identity(), config));
 });
 ```
 
-Marginal improvement. The `all(...).then(action)` pattern is what `.apply()` eliminates.
+Marginal improvement. The `all(...).then(action)` pattern is what the variadic form eliminates.
 
 ### It helps in `fold` bodies
 
@@ -160,12 +104,10 @@ Iterator.fold(
   constant(0),
   bindInput<[number, string]>((state) => {
     const [acc, item] = state.split();
-    return item.then(getLength).then(add.call(acc));
+    return item.then(getLength).then(add.call(acc, pipeline));
   }),
 )
 ```
-
-The `add.call(acc)` reads as "call add with acc (and the pipeline value)". But wait — `add` here would need to be `TypedAction<[number, number], number>`. So it's really `add.apply(acc, getLength.call(item))`. Which is... not simpler.
 
 ### It doesn't help for linear pipelines
 
@@ -179,35 +121,35 @@ If you split and only use one component, `item.then(action)` is already clean. `
 
 ## Problems
 
-### 1. TypeScript can't infer tuple splitting for `.bind()`
+### 1. `.call()` is just `.then()` backwards (for single arg)
 
-`.bind()` requires TypeScript to split a tuple type: given `TypedAction<[A, B, C], Out>` and bound args `[A]`, infer the remaining `[B, C]`. TypeScript doesn't support variadic tuple subtraction in this way. You'd need explicit type parameters:
+`getScore.call(item)` ≡ `item.then(getScore)`. The only difference is which side of the dot the action sits on. Is that worth a new method? It's arguably *less* clear than `.then()` because `.then()` is already established as "chain" and `.call()` borrows meaning from `Function.prototype.call` (which passes `this`, not input).
+
+### 2. Variadic `.call()` is just `all(...).then()`
+
+The only thing `action.call(a, b)` saves over `all(a, b).then(action)` is not needing to write `all(...)`. It saves one function call. Is that worth the API surface?
+
+### 3. Naming collision with Function.prototype
+
+`call` is a method on `Function.prototype`. While TypedAction isn't a function, the name overlap may confuse users who expect JavaScript-native semantics (passing `this`, argument lists, etc.). Alternative names:
+
+- `.invoke(ref)` / `.invoke(a, b)`
+- `.with(ref)` / `.with(a, b)`
+- `.using(ref)` / `.using(a, b)`
+
+### 4. It doesn't eliminate `bindInput` + `.split()`
+
+You still need `bindInput` to capture the pipeline value as a VarRef. You still need `.split()` to destructure it. `.call()` just changes what you do *after* splitting. The ceremony of entering the VarRef context is unchanged.
+
+### 5. `.bind()` (partial application) is not viable
+
+Partial application (supply some tuple args upfront, get a narrower action back) requires TypeScript to split a tuple type: given `TypedAction<[A, B, C], Out>` and bound args `[A]`, infer the remaining `[B, C]`. TypeScript doesn't support variadic tuple subtraction. You'd need explicit type parameters:
 
 ```ts
 queryDb.bind<[Config], [Query]>(config)
 ```
 
-Which defeats the ergonomic goal.
-
-### 2. `.call()` is just `.then()` backwards
-
-`getScore.call(item)` ≡ `item.then(getScore)`. The only difference is which side of the dot the action sits on. Is that worth a new method? It's arguably *less* clear than `.then()` because `.then()` is already established as "chain" and `.call()` borrows meaning from `Function.prototype.call` (which passes `this`, not input).
-
-### 3. `.apply()` is just `all(...).then()`
-
-The only thing `.apply(a, b)` saves over `all(a, b).then(action)` is not needing to write `all(...)`. It saves one function call. Is that worth the API surface and the name collision with `Function.prototype.apply`?
-
-### 4. Naming collisions with Function.prototype
-
-`call`, `apply`, `bind` are all methods on `Function.prototype`. While TypedAction isn't a function, the name overlap will confuse users who expect JavaScript-native semantics (passing `this`, argument lists, etc.). Alternative names:
-
-- `.invoke(ref)` instead of `.call(ref)`
-- `.invokeWith(a, b)` instead of `.apply(a, b)`
-- `.partial(config)` instead of `.bind(config)`
-
-### 5. It doesn't eliminate `bindInput` + `.split()`
-
-You still need `bindInput` to capture the pipeline value as a VarRef. You still need `.split()` to destructure it. `.call()` just changes what you do *after* splitting. The ceremony of entering the VarRef context is unchanged.
+Which defeats the ergonomic goal. Skip `.bind()` entirely.
 
 ---
 
@@ -234,17 +176,17 @@ But this changes the fold contract and adds a named-tuple vs positional-tuple de
 
 ## Verdict
 
-`.call(ref)` is the only one with a clean semantic: "invoke this action with that value." It's trivially implemented as `ref.then(this)`. The question is whether reversing the reading direction (`action.call(ref)` vs `ref.then(action)`) is enough of a win to justify the API surface.
+`.call(...refs)` as a single variadic method is the cleanest API surface. It collapses `.call()` and `.apply()` into one method. For single args, it's `ref.then(action)`. For multiple args, it's `all(...refs).then(action)`. No new AST nodes, purely sugar.
 
-`.apply()` and `.bind()` have TypeScript inference problems and don't eliminate enough ceremony to justify their complexity.
+The question is whether it's enough of a readability win over the existing patterns (`ref.then(action)`, `all(a, b).then(action)`) to justify adding API surface.
 
-**Recommendation:** Explore `.call()` (or `.invoke()`) as a single new method. Skip `.apply()` and `.bind()` unless TypeScript's type system gets variadic tuple subtraction. Keep the current `bindInput` + `.split()` + `all().then()` pattern as the general-purpose approach.
+**Recommendation:** Implement `.call(...refs)` (or `.invoke(...)`) as a single new variadic method. Skip `.bind()` / partial application entirely — TypeScript can't infer it. Keep the current `bindInput` + `.split()` pattern as the general-purpose approach for entering VarRef context.
 
 ---
 
 ## Open Questions
 
 1. Is `action.call(ref)` actually more readable than `ref.then(action)` in practice? Write 5 real `fold` bodies both ways and compare.
-2. Should `.call()` accept multiple args (becoming `.apply()`)? i.e., `action.call(a, b)` ≡ `all(a, b).then(action)`?
-3. Better name? `.invoke()`, `.with()`, `.using()`?
-4. Does the named-argument alternative (objects instead of tuples in fold/withResource) address the readability concern better without new TypedAction surface?
+2. Better name? `.invoke()`, `.with()`, `.using()`?
+3. Does the named-argument alternative (objects instead of tuples in fold/withResource) address the readability concern better without new TypedAction surface?
+4. How does `.call()` interact with the pipeline value? When you write `add.call(acc, ???)`, the second arg needs to be the "current pipeline value" — but that's not a VarRef. Do we need a way to reference it?
