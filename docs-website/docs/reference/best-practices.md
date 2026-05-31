@@ -513,22 +513,27 @@ return advanceOrFinish.call(allObject({ batchResults, state }));
 
 **Sequencing:** `b.call(a)` means "evaluate `a`, then pass its output to `b`". When `b` already has its own input (via an inner `.call()`), the outer `.call(a)` is pure sequencing — `a` runs first for its side effect, then `b` runs independently.
 
-**`pipe` for simple linear sequences:** When data flows straight through a series of steps with no branching, no multi-use, and nothing worth naming, `pipe` is the natural expression:
+**`pipe` for sequences:** `pipe` is natural when you have a sequence of steps — whether data flows between them or they're just ordered side effects. Each step occupies its own line and the sequence reads top-to-bottom:
 
 ```ts
-// Good: data flows linearly, no interesting intermediates
+// Data flows linearly through each step
 listFiles
   .iterate()
   .map(pipe(implementRefactor, typeCheckFiles, fixTypeErrors, commitChanges));
+
+// Steps don't share data — pipe expresses ordering
+pipe(foo.drop(), bar.call(varRef));
+
+// Avoid: .then() chains mislead about data flow when there is none
+foo.drop().then(bar.call(varRef));
 ```
 
-Use `pipe` when the data actually flows — each step's output is the next step's input and there's no reason to name the intermediates. Once you need to assemble inputs from multiple sources, branch, or reference a value twice, switch to `const` + `.call()`.
+The second example is key: `foo` runs and its output is dropped, then `bar` runs with `varRef` as its input. There's no data flowing from `foo` to `bar` — they're just ordered. `pipe` makes this clear because each step is visually independent. A `.then()` chain misleadingly implies the output of one feeds into the next.
 
 **Prefer `const` + `.call()` when:**
 
 - A step assembles its input from multiple sources (`allObject`, VarRefs)
 - An intermediate result is meaningful enough to name
-- You need sequencing between steps that don't share data (`.call()` for ordering)
 - The pipeline involves branching, loops, or error handling
 
 **Non-caching note:** `.call()` results are not memoized. Each reference to a local variable re-evaluates its pipeline. If you need a value computed once and referenced multiple times, use `bindInput` to capture it as a VarRef. For single-use intermediates (the common case), local `const` bindings are pure win with no overhead.
