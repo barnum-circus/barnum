@@ -14,6 +14,7 @@ import type { Pipeable, TypedAction, Result } from "@barnum/barnum/pipeline";
 import {
   bindInput,
   typed,
+  pipe,
   tryCatch,
   loop,
   earlyReturn,
@@ -37,13 +38,13 @@ export function withRetry<TIn, TOut>(
               const unwrapped = result.unwrapOr(throwError);
               return ret.call(unwrapped);
             },
-            checkRetries
-              .call(retriesRemaining)
-              .branch({
+            pipe(
+              drop,
+              checkRetries.call(retriesRemaining).branch({
                 Retry: recur,
-                Exhausted: panic("max retries exceeded").call(drop),
-              })
-              .call(drop),
+                Exhausted: pipe(drop, panic("max retries exceeded")),
+              }),
+            ),
           ),
         ),
       );

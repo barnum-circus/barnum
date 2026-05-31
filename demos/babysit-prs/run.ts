@@ -20,6 +20,7 @@ import {
   Iterator,
   constant,
   loop,
+  pipe,
   drop,
   bindInput,
   sleep,
@@ -41,19 +42,17 @@ runPipeline(
         bindInput<number, boolean>((prNumber) => {
           const status = checkPR.call(prNumber);
           return status.branch({
-            ChecksFailed: constant(true).call(fixIssues.drop()),
-            ChecksPassed: constant(false).call(landPR.drop()),
-            Landed: constant(false).call(drop),
+            ChecksFailed: pipe(fixIssues.drop(), constant(true)),
+            ChecksPassed: pipe(landPR.drop(), constant(false)),
+            Landed: pipe(drop, constant(false)),
           });
         }),
       )
       .collect();
     return classifyRemaining.call(filtered).branch({
-      HasPRs: bindInput<number[], never>((prs) => {
-        const slept = sleep(10_000);
-        const prsList = prs.call(slept);
-        return recur.call(prsList);
-      }),
+      HasPRs: bindInput<number[], never>((prs) =>
+        pipe(sleep(10_000).drop(), recur.call(prs)),
+      ),
       AllDone: done,
     });
   }),

@@ -12,6 +12,7 @@ import {
   loop,
   earlyReturn,
   bindInput,
+  pipe,
   typed,
   drop,
   panic,
@@ -33,9 +34,9 @@ export function withMaxAttempts<TBreak>(
           .call(attemptsRemaining)
           .branch({
             Retry: recur,
-            Exhausted: panic("max review attempts exceeded").call(drop),
+            Exhausted: pipe(drop, panic("max review attempts exceeded")),
           });
-        return typed(bodyFn(guardedRecur, ret)).call(drop);
+        return pipe(drop, typed(bodyFn(guardedRecur, ret)));
       }),
     );
     return retryLoop.call(constant(maxAttempts - 1));

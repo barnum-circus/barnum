@@ -11,6 +11,7 @@ import {
   all,
   constant,
   loop,
+  pipe,
   runPipeline,
   sleep,
   type TypedAction,
@@ -28,14 +29,14 @@ import {
 // Returns None when max events produced (stopping the loop).
 // Returns Some when backpressure hit (loop retries after short pause).
 function makeProducerLoop(producerId: number): TypedAction<null, null> {
-  return loop<null, null>((recur, done) => {
-    const slept = sleep(100);
-    const input = constant({ producerId }).call(slept);
-    return produceEvent.call(input).branch({
-      Some: recur,
-      None: done,
-    });
-  });
+  return loop<null, null>((recur, done) =>
+    pipe(sleep(100).drop(), produceEvent.call(constant({ producerId }))).branch(
+      {
+        Some: recur,
+        None: done,
+      },
+    ),
+  );
 }
 
 // Consumer: dequeue and process events until all producers done and queue empty.
@@ -52,10 +53,14 @@ const consumerLoop: TypedAction<null, null> = loop<null, null>((recur, done) =>
 );
 
 // Clear queue, then run 3 producers + 1 consumer concurrently.
-const concurrent = all(
-  makeProducerLoop(0),
-  makeProducerLoop(1),
-  makeProducerLoop(2),
-  consumerLoop,
+runPipeline(
+  pipe(
+    clearQueue.drop(),
+    all(
+      makeProducerLoop(0),
+      makeProducerLoop(1),
+      makeProducerLoop(2),
+      consumerLoop,
+    ),
+  ),
 );
-runPipeline(concurrent.call(clearQueue));

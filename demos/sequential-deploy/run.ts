@@ -14,6 +14,7 @@ import {
   type Iterator,
   runPipeline,
   loop,
+  pipe,
   constant,
   Iterator as Iter,
   identity,
@@ -34,9 +35,8 @@ runPipeline(
 
         Some: bindInput<[string, Iterator<string>], never>((pair) => {
           const [service, rest] = pair.split();
-          const deployed = deployService.call(service);
-          const verified = verifyService.call(deployed);
-          return recur.call(rest).call(verified);
+          const verified = verifyService.call(deployService.call(service));
+          return pipe(verified.drop(), recur.call(rest));
         }),
       }),
   ).call(services),

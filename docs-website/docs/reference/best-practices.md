@@ -511,7 +511,15 @@ return advanceOrFinish.call(combined);
 return advanceOrFinish.call(allObject({ batchResults, state }));
 ```
 
-**Sequencing:** `b.call(a)` means "evaluate `a`, then pass its output to `b`". When `b` already has its own input (via an inner `.call()`), the outer `.call(a)` is pure sequencing — `a` runs first for its side effect, then `b` runs independently.
+**`.call(x)` means data flow, never sequencing.** `action.call(x)` means "pass x's output as input to action." It must never be used to mean "x happens first" when the output is ignored. If you need ordering without data flow, use `pipe`.
+
+```ts
+// BAD: .call() used for sequencing — resetQueues output is ignored
+all(consumer1, consumer2).call(resetQueues(dir))
+
+// GOOD: pipe expresses ordering, .call() expresses data flow
+pipe(resetQueues(dir).drop(), all(consumer1, consumer2))
+```
 
 **`pipe` for sequences:** `pipe` is natural when you have a sequence of steps — whether data flows between them or they're just ordered side effects. Each step occupies its own line and the sequence reads top-to-bottom:
 
@@ -523,12 +531,7 @@ listFiles
 
 // Steps don't share data — pipe expresses ordering
 pipe(foo.drop(), bar.call(varRef));
-
-// Avoid: .then() chains mislead about data flow when there is none
-foo.drop().then(bar.call(varRef));
 ```
-
-The second example is key: `foo` runs and its output is dropped, then `bar` runs with `varRef` as its input. There's no data flowing from `foo` to `bar` — they're just ordered. `pipe` makes this clear because each step is visually independent. A `.then()` chain misleadingly implies the output of one feeds into the next.
 
 **Prefer `const` + `.call()` when:**
 

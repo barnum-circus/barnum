@@ -21,6 +21,7 @@
 
 import {
   runPipeline,
+  pipe,
   allObject,
   bindInput,
   drop,
@@ -48,32 +49,33 @@ const DESCRIPTION =
 
 runPipeline(
   bindInput<string, null>((description) => {
-    const setupResult = setup;
-    const implemented = withRetry(3, implement)
-      .call(description)
-      .drop()
-      .call(setupResult);
+    const checks = allObject({
+      bestPractices: withRetry(3, reviewBestPractices),
+      adherence: withRetry(3, reviewAdherence).call(description),
+      suppressedTests: withRetry(3, checkSuppressedTests),
+      typecheck: withRetry(3, runTypecheck),
+    });
 
-    const reviewed = withMaxAttempts<null>(3, (recur, done) => {
-      const checks = allObject({
-        bestPractices: withRetry(3, reviewBestPractices),
-        adherence: withRetry(3, reviewAdherence).call(description),
-        suppressedTests: withRetry(3, checkSuppressedTests),
-        typecheck: withRetry(3, runTypecheck),
-      });
+    const reviewLoop = withMaxAttempts<null>(3, (recur, done) =>
+      classifyFeedback.call(checks).branch({
+        HasIssues: bindInput<string, never>((feedback) =>
+          pipe(
+            withRetry(3, incorporateFeedback)
+              .call(allObject({ description, feedback }))
+              .drop(),
+            recur,
+          ),
+        ),
+        AllClean: pipe(drop, done),
+      }),
+    );
 
-      return classifyFeedback.call(checks).branch({
-        HasIssues: bindInput<string, never>((feedback) => {
-          const fixed = withRetry(3, incorporateFeedback)
-            .call(allObject({ description, feedback }))
-            .drop();
-          return recur.call(fixed);
-        }),
-        AllClean: done.call(drop),
-      });
-    }).call(implemented);
-
-    return splitCommits.drop().call(reviewed);
+    return pipe(
+      setup.drop(),
+      withRetry(3, implement).call(description).drop(),
+      reviewLoop,
+      splitCommits.drop(),
+    );
   }),
   DESCRIPTION,
 );
