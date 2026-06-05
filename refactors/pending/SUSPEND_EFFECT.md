@@ -190,7 +190,7 @@ a `Suspend` arm is a local change:
 
 ```rust
 EventKind::Suspend(suspend_event) => {
-    let snapshot = workflow_state.to_snapshot();           // §1 translation
+    let snapshot = workflow_state.to_snapshot();           // serial-id translation
     let bytes = serde_json::to_vec(&snapshot)?;            // or bincode
     // "the file is passed to the handler": the host decides the path.
     on_suspend(suspend_event.payload, &bytes)?;            // host callback
@@ -228,6 +228,73 @@ This is why the model fits so well. We are not inventing a resumption path. We
 are reusing the completion path, with the host playing the role the scheduler
 plays for ordinary handlers.
 
+## In-flight handlers at suspend time: kill and re-invoke
+
+`Suspend` is legal at any time, including when sibling branches
+(parallel/forEach) have handlers mid-flight. When the process exits, those
+tokio tasks die — their subprocesses are killed via the process group
+(`barnum_event_loop/src/lib.rs:71-91`), and their results are never collected.
+On resume, their `Invoke` frames are still parked in `frames` and
+`task_to_frame`, but the tasks that would have completed them no longer exist.
+
+**The design: kill in-flight handlers at suspend, re-invoke them on resume.**
+On resume, walk `task_to_frame`, and for each parked `Invoke` frame, re-dispatch
+it — same handler, same input — producing a fresh `TaskId` and a fresh
+subprocess. The workflow continues as if those handlers had simply taken a very
+long time to run.
+
+This imposes one requirement on the workflow author and one on the engine:
+
+- **Author:** handlers that may be in flight across a suspend must be
+  idempotent, because a killed-then-re-invoked handler runs its side effects
+  twice (once before the kill, fully on re-invoke). This is the same idempotency
+  contract `RESUMPTION.md` already names, and it's the contract `README.md`'s
+  long-lived-agent model already implies (a handler that creates a PR checks
+  whether the PR exists first).
+
+- **Engine:** re-invoke needs the input value each parked `Invoke` was
+  dispatched with. Today the `Invoke` frame stores only `handler: HandlerId`
+  (`frame.rs:101-104`) — the input value is consumed by `dispatch` and not
+  retained. Re-invoke is impossible without it. **The `Invoke` frame must also
+  store the value it was dispatched with.** This is a prerequisite change, lands
+  as its own sub-refactor, and is independently sensible: it makes the frame
+  tree fully self-describing (the comment at `frame.rs:99-100` already justifies
+  storing `handler` on the frame "so the frame tree is self-describing for
+  observability" — the input value belongs there for the same reason).
+
+Re-invoke reuses the dispatch path verbatim. On resume, after `from_snapshot`
+rebuilds the arena, the resume routine iterates `task_to_frame`, reads each
+`Invoke` frame's stored `(handler, value)`, and hands it to
+`scheduler.dispatch`. No new engine code path — the same `DispatchEvent` the
+engine emits during normal advance.
+
+### Why kill-and-re-invoke over the alternatives
+
+Two other models were considered and deferred:
+
+- **Restart to a boundary** — tear the in-flight subtree down to its nearest
+  `RestartHandle` and re-advance the body. Rejected because a parked `Invoke`
+  deep inside a `Chain`/`All` often has *no* enclosing restart boundary, so
+  there's nothing to restart to. It would force every suspendable workflow to be
+  wrapped in restart handlers. Per-`Invoke` re-invoke has no such requirement —
+  every parked `Invoke` knows its own handler and input, so it can always
+  re-run in place.
+
+- **Let them complete** — instead of killing in-flight handlers at suspend,
+  drain them first: stop dispatching new work, wait for the outstanding tokio
+  tasks to finish and their completions to land, *then* snapshot. This avoids
+  the double-run entirely (no handler is interrupted), so it needs no
+  idempotency for the in-flight set. It's a real and arguably nicer end state,
+  but it's a deferred follow-on, not the first version: it complicates the
+  suspend path (the loop must enter a drain mode, refuse new dispatches, and
+  only snapshot once `task_to_frame` is empty of the relevant tasks), and it
+  delays suspend by however long the slowest in-flight handler takes — which,
+  for the agent workloads Barnum targets, can be many minutes. **Killing them is
+  the right first version:** suspend is immediate, the engine change is just
+  "store the input on the `Invoke` frame," and the idempotency contract is one
+  the framework already demands. Drain-then-suspend can be added later as an
+  opt-in for workflows that can't tolerate double-runs.
+
 ## Where suspend differs from `RESUMPTION.md`
 
 `RESUMPTION.md` proposes serializing `WorkflowState` *after every completion*
@@ -246,7 +313,7 @@ alternatives:
 - Checkpoint-after-every-step gives crash recovery for free once
   serialization exists.
 
-**Both need the §1 arena-serialization work.** That work is the irreducible
+**Both need the arena-serialization work.** That work is the irreducible
 core and should land first as its own sub-refactor (see below). Once
 `WorkflowState` round-trips through bytes, `Suspend` and
 checkpoint-on-every-step are independent features built on top.
@@ -292,27 +359,7 @@ host callback, which decides where they live."
    it's debuggable and the state is small; revisit only if snapshot size becomes
    a problem.
 
-2. **In-flight handlers at suspend time.** If the workflow performs `Suspend`
-   while other branches have handlers mid-flight (parallel/forEach siblings),
-   those tokio tasks are abandoned when the process exits. On resume, their
-   `Invoke` frames are still parked in `frames` and `task_to_frame`, but no
-   completion will ever arrive for them. Options:
-   - **Reject:** make `Suspend` only legal when no sibling handler is in flight
-     (narrow the signature — impossible states unrepresentable). Hard to enforce
-     statically given parallelism.
-   - **Re-dispatch on resume:** walk `task_to_frame` on load and re-dispatch
-     every parked `Invoke`. Requires handler idempotency — the same requirement
-     `RESUMPTION.md` already names. This is the pragmatic answer and should be
-     the default. The §1 snapshot must therefore preserve enough to re-dispatch
-     (handler id + the input value the frame was invoked with — note `Invoke`
-     frames currently store only `handler: HandlerId`, *not* the input value;
-     re-dispatch needs the value, so either the frame must also store its input
-     or the snapshot must capture pending dispatch inputs separately).
-   - This sub-question is the one real design risk and deserves its own
-     analysis before implementation. Flagging it explicitly rather than papering
-     over it.
-
-3. **`flat_config` duplication.** The snapshot contains `FlatConfig`, which the
+2. **`flat_config` duplication.** The snapshot contains `FlatConfig`, which the
    resuming process could instead reload from the original compiled artifact.
    Embedding it makes the snapshot self-contained (resume needs only the file);
    referencing it keeps snapshots tiny but couples resume to the artifact still
@@ -320,7 +367,7 @@ host callback, which decides where they live."
    bytes, and it guarantees the resumed workflow runs the exact config it was
    suspended under.
 
-4. **Resume value typing.** On the TypeScript side, `suspend(x)` must resolve to
+3. **Resume value typing.** On the TypeScript side, `suspend(x)` must resolve to
    a typed value, but the resume value is supplied by the host out-of-band. This
    is the same `unknown`-on-the-JSON-path tradeoff `PRECOMPILATION.md` already
    accepts for `CompiledWorkflow.fromJSON`. The perform site can carry an output
@@ -330,22 +377,29 @@ host callback, which decides where they live."
 
 Feasible, and well-matched to the architecture. The engine is already a pure
 data state machine with reified frames and existing effect-handler machinery,
-so "stop and serialize everything" reduces to two concrete pieces of work:
+so "stop and serialize everything" reduces to three concrete pieces of work:
 
-1. Make `WorkflowState` round-trip through bytes. The only obstacle is the
-   generational `FrameId`; the fix is a serial-id translation on save/load. This
-   is the irreducible core and lands first as its own sub-refactor — it also
-   unblocks the checkpoint-on-every-step model in `RESUMPTION.md`.
-2. Add a `Suspend` effect that produces a `PendingEffectKind::Suspend`, handled
+1. Store the dispatched input value on the `Invoke` frame, alongside the
+   `HandlerId` it already holds. Prerequisite for re-invoking in-flight handlers
+   on resume; independently sensible (self-describing frame tree). Lands first as
+   its own sub-refactor.
+2. Make `WorkflowState` round-trip through bytes. The only obstacle is the
+   generational `FrameId`; the fix is a serial-id translation on save/load via a
+   parallel `WorkflowSnapshot` shape, leaving the runtime engine ungenericized.
+   The irreducible core — it also unblocks the checkpoint-on-every-step model in
+   `RESUMPTION.md`.
+3. Add a `Suspend` effect that produces a `PendingEffectKind::Suspend`, handled
    by a new arm in `run_workflow` that snapshots and stops, with `run_workflow`
    returning a `Completed`/`Suspended` enum and a mirror `resume_workflow` that
-   injects the resume value into the parked perform site and re-enters the loop.
+   re-invokes every parked `Invoke` from `task_to_frame`, injects the resume
+   value into the parked perform site, and re-enters the loop.
 
-The one genuine risk is in-flight sibling handlers at suspend time (open
-question 2); re-dispatch-on-resume with idempotent handlers is the answer, but
-it needs the `Invoke`-frame-doesn't-store-its-input wrinkle resolved before
-implementation.
+In-flight sibling handlers at suspend time are handled by killing them and
+re-invoking on resume (requiring handler idempotency and the input-on-`Invoke`-
+frame change above). Letting them drain to completion before snapshotting is a
+deferred opt-in for workflows that can't tolerate double-runs.
 
 This document is a feasibility assessment, not yet a task list. Next step is
-deciding whether to split the §1 arena-serialization sub-refactor out and write
-its own doc, then a Phase-2 task breakdown.
+splitting out the two prerequisite sub-refactors (input-on-frame,
+arena-serialization) into their own docs, then a Phase-2 task breakdown for the
+`Suspend` effect itself.
