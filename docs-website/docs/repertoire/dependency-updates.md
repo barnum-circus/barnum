@@ -5,8 +5,7 @@ Bump dependencies across a project (or multiple projects), fix breaking API chan
 ## Workflow
 
 ```ts
-runPipeline(
-  listOutdatedDeps.then(
+listOutdatedDeps.then(
     iterate().map(
       withResource({
         create: createUpdateBranch,
@@ -20,8 +19,7 @@ runPipeline(
         dispose: cleanupBranch,
       }),
     ).collect(),
-  ),
-);
+  ).run();
 ```
 
 ## Stages

@@ -856,24 +856,28 @@ function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
 
 ## Workflow execution
 
-### `runPipeline(pipeline, input?)`
+### `.compile()` / `.run()`
 
-Run a pipeline to completion. Optionally provide an input value.
-
-```ts
-async function runPipeline(
-  pipeline: Action,
-  input?: unknown,
-): Promise<void>
-```
-
-This is the main entry point. It serializes the pipeline AST to JSON, resolves the Rust binary, and spawns `barnum run --config <json>`.
+Run a pipeline to completion. Both are postfix methods on a no-input pipeline (a pipeline whose input is `void` or `null`).
 
 ```ts
-await runPipeline(
-  listFiles.iterate().map(processFile).collect().then(commit),
-);
+compile(): CompiledWorkflow<TPipeline>
+run(options?: RunOptions): Promise<Out>
 ```
+
+`.compile()` walks the AST and serializes it, returning a `CompiledWorkflow` — an inert, re-runnable artifact whose `configJson` field holds the serialized config. `.run()` is sugar for `.compile().run()`: it spawns the Rust binary via `barnum run --config-file <path>` and resolves to the pipeline's output.
+
+```ts
+await listFiles.iterate().map(processFile).collect().then(commit).run();
+```
+
+To run a pipeline that expects an input, supply it first with `.call(constant(input))`:
+
+```ts
+await analyze.call(constant("source/index.ts")).run();
+```
+
+`CompiledWorkflow.fromJSON(configJson)` wraps a config-JSON string read back from disk. Its output type resolves to `unknown` (the type can't be recovered from JSON).
 
 ---
 

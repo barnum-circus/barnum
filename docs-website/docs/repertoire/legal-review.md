@@ -64,10 +64,8 @@ export const synthesize = createHandler({
 ```
 
 ```ts
-runPipeline(
-  all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis)
-    .then(synthesize),
-);
+all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis)
+    .then(synthesize).run();
 ```
 
 ## Key points

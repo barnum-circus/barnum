@@ -55,15 +55,12 @@ You compose handlers into a workflow using postfix methods like `.then()` (seque
 
 ```ts
 // run.ts
-import { runPipeline } from "@barnum/barnum/pipeline";
 import { listFiles, refactor, typeCheck, fix, commit, createPR } from "./handlers/steps.js";
 
-runPipeline(
-  listFiles
+listFiles
     .iterate()
     .map(refactor.then(typeCheck).then(fix).then(commit).then(createPR))
-    .collect(),
-);
+    .collect().run();
 ```
 
 `listFiles` runs once and returns an array of filenames. `.iterate()` enters Iterator, `.map()` fans out — each filename flows through `refactor → typeCheck → fix → commit → createPR`, with each file processed in parallel. `.collect()` gathers results back into an array.

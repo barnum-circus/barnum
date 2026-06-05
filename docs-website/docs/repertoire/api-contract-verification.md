@@ -5,15 +5,13 @@ Compare an API specification (OpenAPI, GraphQL schema, protobuf) against the act
 ## Workflow
 
 ```ts
-runPipeline(
-  all(parseAPISpec, analyzeImplementation)
+all(parseAPISpec, analyzeImplementation)
     .then(compareContracts)
     .then(iterate().map(classifyDrift).collect())
     .then(branch({
       Breaking: iterate().map(generateFix).collect(),
       NonBreaking: drop,
-    })),
-);
+    })).run();
 ```
 
 ## Stages

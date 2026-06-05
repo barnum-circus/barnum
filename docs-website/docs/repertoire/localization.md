@@ -5,15 +5,13 @@ Extract user-facing strings from a codebase, translate them into target language
 ## Workflow
 
 ```ts
-runPipeline(
-  extractStrings
+extractStrings
     .then(iterate().map(
       all(...targetLanguages.map(lang => translateTo(lang)))
         .then(iterate().map(verifyInContext).collect()),
     ).collect())
     .then(flattenResults)
-    .then(writeLocaleFiles),
-);
+    .then(writeLocaleFiles).run();
 ```
 
 ## Stages

@@ -31,9 +31,9 @@ export const analyze = createHandler({ ... }, "analyze");
 
 Handlers run in isolated subprocesses. You cannot call `.handle()` from inside one handler to invoke another. All composition happens in the pipeline definition via combinators (`pipe`, `.then()`, `bindInput`, etc.). If you need the output of one handler as input to another, chain them in the pipeline.
 
-### Do not call `runPipeline` from inside a handler
+### Do not call `.run()` from inside a handler
 
-A handler should never spawn a nested pipeline via `runPipeline`. If you think you need to, you're wrong — restructure the pipeline instead. The framework owns orchestration; handlers do work. A nested `runPipeline` bypasses scheduling, resource management, and error propagation. Whatever you're trying to express as a nested pipeline is expressible as pipeline-level composition (`pipe`, `withResource`, `loop`, `bindInput`).
+A handler should never spawn a nested pipeline via `.run()` (or `.compile().run()`). If you think you need to, you're wrong — restructure the pipeline instead. The framework owns orchestration; handlers do work. A nested `.run()` bypasses scheduling, resource management, and error propagation. Whatever you're trying to express as a nested pipeline is expressible as pipeline-level composition (`pipe`, `withResource`, `loop`, `bindInput`).
 
 ### `createHandler` must be called at module top-level
 
@@ -60,17 +60,17 @@ export const analyze = createHandler({
 }, "analyze");
 ```
 
-### Define handlers in separate files from `runPipeline`
+### Define handlers in separate files from the pipeline `.run()` call
 
-**This will fork bomb your machine.** The framework executes handlers by importing their module in a subprocess. If that module also contains a top-level `runPipeline` call, importing the handler re-triggers the entire pipeline — which invokes handlers — which imports the module — which triggers the pipeline again. Each invocation spawns subprocesses exponentially until the system runs out of file descriptors or memory.
+**This will fork bomb your machine.** The framework executes handlers by importing their module in a subprocess. If that module also contains a top-level `.run()` call, importing the handler re-triggers the entire pipeline — which invokes handlers — which imports the module — which triggers the pipeline again. Each invocation spawns subprocesses exponentially until the system runs out of file descriptors or memory.
 
-Never define handlers in the same file that calls `runPipeline`.
+Never define handlers in the same file that calls `.run()`.
 
 ```ts
-// run.ts — ONLY the pipeline definition and runPipeline call
-import { runPipeline, pipe } from "@barnum/barnum/pipeline";
+// run.ts — ONLY the pipeline definition and the .run() call
+import { pipe } from "@barnum/barnum/pipeline";
 import { analyze } from "./handlers/analyze";
-runPipeline(pipe(constant({ file: "main.ts" }), analyze));
+pipe(constant({ file: "main.ts" }), analyze).run();
 
 // handlers/analyze.ts — ONLY the handler definition
 import { createHandler } from "@barnum/barnum/runtime";

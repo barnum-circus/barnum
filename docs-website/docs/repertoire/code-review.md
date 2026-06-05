@@ -53,12 +53,10 @@ export const checkSecurity = createHandler({
 ```
 
 ```ts
-runPipeline(
-  listChangedFiles
+listChangedFiles
     .then(iterate().map(
       all(checkStandards, checkSecurity),
-    ).collect()),
-);
+    ).collect()).run();
 ```
 
 ## Key points

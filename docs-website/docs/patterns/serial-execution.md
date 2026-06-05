@@ -7,8 +7,7 @@
 From [`demos/simple-workflow/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/simple-workflow/run.ts):
 
 ```ts
-runPipeline(
-  listFiles
+listFiles
     .iterate()
     .map(
       implementRefactor
@@ -17,8 +16,7 @@ runPipeline(
         .then(commitChanges)
         .then(createPullRequest),
     )
-    .collect(),
-);
+    .collect().run();
 ```
 
 Five steps in strict order: refactor → type-check → fix → commit → PR. Each handler receives the previous handler's output. `.iterate().map()` runs this pipeline per file in parallel, but within each file the steps are serial.
@@ -40,13 +38,11 @@ Pure sequential data flow: extract a field → derive a branch name → create a
 From [`demos/convert-folder-to-ts/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/convert-folder-to-ts/run.ts):
 
 ```ts
-runPipeline(
-  setup
+setup
     .then(
       listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
     )
-    .then(typeCheckFix),
-);
+    .then(typeCheckFix).run();
 ```
 
 Three sequential phases: setup → migrate all files (parallel within this step) → type-check and fix. The `.then()` chain guarantees setup finishes before migration starts, and all migrations finish before type-checking.

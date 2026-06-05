@@ -50,9 +50,7 @@ export const verifyClaim = createHandler({
 ```
 
 ```ts
-runPipeline(
-  extractClaims.then(iterate().map(verifyClaim).collect()),
-);
+extractClaims.then(iterate().map(verifyClaim).collect()).run();
 ```
 
 ## Key points

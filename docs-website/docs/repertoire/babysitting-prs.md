@@ -5,8 +5,7 @@ Monitor open pull requests, respond to reviewer comments, fix CI failures, and k
 ## Workflow
 
 ```ts
-runPipeline(
-  listOpenPRs
+listOpenPRs
     .iterate()
     .map(
       loop((recur, done) =>
@@ -18,8 +17,7 @@ runPipeline(
         }),
       ),
     )
-    .collect(),
-);
+    .collect().run();
 ```
 
 ## Stages

@@ -9,10 +9,9 @@ Barnum has three ways to run work concurrently: `all` for a fixed set of tasks, 
 From [`demos/analyze-file/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/analyze-file/run.ts):
 
 ```ts
-runPipeline(
-  all(analyzeClassComponents, analyzeImpossibleStates, analyzeErrorHandling),
-  "source/index.ts",
-);
+all(analyzeClassComponents, analyzeImpossibleStates, analyzeErrorHandling)
+  .call(constant("source/index.ts"))
+  .run();
 ```
 
 All three analyzers receive `"source/index.ts"` as input and run in parallel. The output is a tuple `[ResultA, ResultB, ResultC]`.
@@ -24,8 +23,7 @@ All three analyzers receive `"source/index.ts"` as input and run in parallel. Th
 From [`demos/simple-workflow/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/simple-workflow/run.ts):
 
 ```ts
-runPipeline(
-  listFiles
+listFiles
     .iterate()
     .map(
       implementRefactor
@@ -34,8 +32,7 @@ runPipeline(
         .then(commitChanges)
         .then(createPullRequest),
     )
-    .collect(),
-);
+    .collect().run();
 ```
 
 `listFiles` returns `string[]`. `.iterate()` enters Iterator, `.map()` fans out — each filename flows through the full pipeline independently and concurrently. `.collect()` gathers results.
@@ -47,13 +44,11 @@ Chain `.collect()` into a follow-up step to aggregate results after parallel wor
 From [`demos/convert-folder-to-ts/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/convert-folder-to-ts/run.ts):
 
 ```ts
-runPipeline(
-  setup
+setup
     .then(
       listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
     )
-    .then(typeCheckFix),
-);
+    .then(typeCheckFix).run();
 ```
 
 All files are migrated in parallel. After every migration finishes, `.collect()` gathers results, `.drop()` discards them, and `typeCheckFix` runs once — a single type-check pass over the entire project, not per file.

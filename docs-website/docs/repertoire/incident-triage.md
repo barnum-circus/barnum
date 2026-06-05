@@ -5,8 +5,7 @@ When an alert fires, automatically collect context from multiple systems in para
 ## Workflow
 
 ```ts
-runPipeline(
-  allObject({
+allObject({
     logs: collectLogs,
     metrics: collectMetrics,
     recentDeploys: collectRecentDeploys,
@@ -17,8 +16,7 @@ runPipeline(
       severity: classifySeverity,
       affectedServices: identifyAffectedServices,
     }))
-    .then(draftTriageDocument),
-);
+    .then(draftTriageDocument).run();
 ```
 
 ## Stages

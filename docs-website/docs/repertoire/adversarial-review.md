@@ -64,16 +64,14 @@ export const revise = createHandler({
 ```
 
 ```ts
-runPipeline(
-  implement.then(
+implement.then(
     loop((recur, done) =>
       judge.branch({
         Approved: done,
         NeedsWork: revise.then(implement).then(recur),
       })
     ),
-  ),
-);
+  ).run();
 ```
 
 ## Key points

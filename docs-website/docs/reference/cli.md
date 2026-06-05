@@ -1,17 +1,14 @@
 # CLI Reference
 
-Barnum workflows are TypeScript programs. There is no separate CLI to learn — you write a `.ts` file, import combinators, and call `runPipeline()`.
+Barnum workflows are TypeScript programs. There is no separate CLI to learn — you write a `.ts` file, import combinators, and call `.run()`.
 
 ## Running a workflow
 
 ```ts
 // run.ts
-import { runPipeline } from "barnum";
 import { listFiles, processFile, commit } from "./handlers.js";
 
-await runPipeline(
-  listFiles.iterate().map(processFile).collect().drop().then(commit),
-);
+await listFiles.iterate().map(processFile).collect().drop().then(commit).run();
 ```
 
 ```bash
@@ -32,26 +29,24 @@ Or via a package.json script:
 pnpm demo
 ```
 
-## What `runPipeline()` does
+## What `.run()` does
 
-1. Serializes the pipeline AST to JSON.
+1. Serializes the pipeline AST to JSON (this is what `.compile()` does on its own — `.run()` is sugar for `.compile().run()`).
 2. Resolves the Rust `barnum` binary (see [Binary resolution](#binary-resolution)).
-3. Spawns `barnum run --config <json> --executor <tsx-path> --worker <worker-path>`.
+3. Writes the config JSON to a temp file and spawns `barnum run --config-file <path> --executor <tsx-path> --worker <worker-path>`.
 4. The Rust scheduler orchestrates execution, spawning TypeScript worker subprocesses for each handler invocation.
-5. Exits when the pipeline completes.
+5. Resolves to the pipeline's output when execution completes.
 
 ```ts
-async function runPipeline(
-  pipeline: Action,
-  input?: unknown,
-): Promise<void>
+compile(): CompiledWorkflow<TPipeline>
+run(options?: RunOptions): Promise<Out>
 ```
 
-If `input` is provided, it is prepended as a `constant` node at the start of the pipeline.
+`.compile()` and `.run()` are only available on a no-input pipeline (input type `void` or `null`). To run a pipeline that expects an input, supply it first with `.call(constant(input))`.
 
 ## Binary resolution
 
-`runPipeline()` resolves the `barnum` Rust binary in this order:
+`.run()` resolves the `barnum` Rust binary in this order:
 
 1. **`BARNUM` environment variable** — explicit path to the binary.
 2. **Local dev repo** — `target/debug/barnum` relative to the repo root.
@@ -99,13 +94,13 @@ const result = await invokeLanguageModel({
 
 ## Internal: `barnum run`
 
-The Rust binary's `run` command is not user-facing — `runPipeline()` calls it internally. Documented here for debugging.
+The Rust binary's `run` command is not user-facing — `.run()` calls it internally. Documented here for debugging.
 
 ```
-barnum run --config <JSON> --executor <PATH> --worker <PATH>
+barnum run --config-file <PATH> --executor <PATH> --worker <PATH>
 ```
 
-- `--config` — the serialized pipeline AST as JSON.
+- `--config-file` — path to a file holding the serialized pipeline AST as JSON.
 - `--executor` — path to the TypeScript executor (tsx or bun).
 - `--worker` — path to `worker.ts`, which handles subprocess communication.
 

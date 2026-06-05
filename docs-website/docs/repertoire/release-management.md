@@ -5,8 +5,7 @@ Automate the release process: aggregate changelogs from commits, determine the v
 ## Workflow
 
 ```ts
-runPipeline(
-  listCommitsSinceLastRelease
+listCommitsSinceLastRelease
     .then(allObject({
       versionBump: iterate().map(classifyCommit).collect().then(determineVersionBump),
       changelog: generateChangelog,
@@ -17,8 +16,7 @@ runPipeline(
         .then(tagRelease)
         .then(publish),
       rollbackVersion,
-    )),
-);
+    )).run();
 ```
 
 ## Stages

@@ -5,8 +5,7 @@ Analyze a repository, generate setup guides, and verify the instructions actuall
 ## Workflow
 
 ```ts
-runPipeline(
-  allObject({
+allObject({
     repoStructure: analyzeRepoStructure,
     devDependencies: analyzeDevDependencies,
     buildSystem: analyzeBuildSystem,
@@ -17,8 +16,7 @@ runPipeline(
         Works: drop,
         Broken: fixGuide.then(recur),
       })
-    )),
-);
+    )).run();
 ```
 
 ## Stages

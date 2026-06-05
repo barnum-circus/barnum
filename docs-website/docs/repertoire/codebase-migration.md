@@ -7,13 +7,11 @@ Convert an entire codebase from one pattern to another — JavaScript to TypeScr
 From [`demos/convert-folder-to-ts`](https://github.com/barnum-circus/barnum/tree/master/demos/convert-folder-to-ts):
 
 ```ts
-runPipeline(
-  setup
+setup
     .then(
       listFiles.iterate().map(migrate({ to: "Typescript" })).collect().drop(),
     )
-    .then(typeCheckFix),
-);
+    .then(typeCheckFix).run();
 ```
 
 ## Stages

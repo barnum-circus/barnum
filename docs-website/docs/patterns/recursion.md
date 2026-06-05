@@ -9,26 +9,25 @@ The classic is-even / is-odd mutual recursion. Each function checks if the input
 From [`demos/peano-arithmetic/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/peano-arithmetic/run.ts):
 
 ```ts
-runPipeline(
-  defineRecursiveFunctions<[
-    [number, boolean], // isEven: number → boolean
-    [number, boolean], // isOdd:  number → boolean
-  ]>(
-    (isEven, isOdd) => [
-      // isEven: 0 → true, n → isOdd(n - 1)
-      classifyZero.branch({
-        Zero: constant(true),
-        NonZero: subtractOne.then(isOdd),
-      }),
-      // isOdd: 0 → false, n → isEven(n - 1)
-      classifyZero.branch({
-        Zero: constant(false),
-        NonZero: subtractOne.then(isEven),
-      }),
-    ],
-  )((isEven, _isOdd) => isEven),
-  7,
-);
+defineRecursiveFunctions<[
+  [number, boolean], // isEven: number → boolean
+  [number, boolean], // isOdd:  number → boolean
+]>(
+  (isEven, isOdd) => [
+    // isEven: 0 → true, n → isOdd(n - 1)
+    classifyZero.branch({
+      Zero: constant(true),
+      NonZero: subtractOne.then(isOdd),
+    }),
+    // isOdd: 0 → false, n → isEven(n - 1)
+    classifyZero.branch({
+      Zero: constant(false),
+      NonZero: subtractOne.then(isEven),
+    }),
+  ],
+)((isEven, _isOdd) => isEven)
+  .call(constant(7))
+  .run();
 // isEven(7) → isOdd(6) → isEven(5) → isOdd(4) → isEven(3) → isOdd(2) → isEven(1) → isOdd(0) → false
 ```
 

@@ -5,8 +5,7 @@ Process a list of items one at a time, accumulating results — the workflow equ
 ## Workflow
 
 ```ts
-runPipeline(
-  pipe(
+pipe(
     readFileList,
     initLoopState,
     loop<LoopState, LoopResult>((recur, done) =>
@@ -19,8 +18,7 @@ runPipeline(
       })
     ),
     printFinalResults,
-  ),
-);
+  ).run();
 ```
 
 ## This is a fold

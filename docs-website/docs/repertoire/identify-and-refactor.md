@@ -7,8 +7,7 @@ Scan a codebase for refactoring opportunities, then implement each refactor in a
 From [`demos/identify-and-address-refactors/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/identify-and-address-refactors/run.ts):
 
 ```ts
-runPipeline(
-  constant({ folder: srcDir })
+constant({ folder: srcDir })
     .then(listTargetFiles)
     .iterate()
     .flatMap(analyze)
@@ -20,8 +19,7 @@ runPipeline(
         dispose: deleteWorktree,
       }),
     )
-    .collect(),
-);
+    .collect().run();
 ```
 
 ## Stages

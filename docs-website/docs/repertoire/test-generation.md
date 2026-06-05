@@ -5,8 +5,7 @@ Analyze source files, generate test suites, run them, and iterate on failures un
 ## Workflow
 
 ```ts
-runPipeline(
-  listSourceFiles.then(
+listSourceFiles.then(
     iterate().map(
       analyzeForTestability.then(generateTests).then(
         loop((recur) =>
@@ -17,8 +16,7 @@ runPipeline(
         ),
       )
     ).collect(),
-  ),
-);
+  ).run();
 ```
 
 ## Stages

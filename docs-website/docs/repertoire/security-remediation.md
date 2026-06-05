@@ -5,8 +5,7 @@ Scan a codebase for security vulnerabilities, classify their severity, generate 
 ## Workflow
 
 ```ts
-runPipeline(
-  runSecurityScan
+runSecurityScan
     .then(iterate().map(classifySeverity).collect())
     .then(iterate().map(
       generatePatch.then(
@@ -17,8 +16,7 @@ runPipeline(
           rollbackPatch,
         ),
       )
-    ).collect()),
-);
+    ).collect()).run();
 ```
 
 ## Stages
