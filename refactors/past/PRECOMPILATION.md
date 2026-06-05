@@ -11,42 +11,88 @@ Currently, running a workflow involves:
 
 Step 1-3 happen every time. For workflows that don't change between runs (the common case), this is redundant work.
 
-## Proposal: pre-compiled workflow files
+## Proposal: a compiled, reusable workflow value
 
-### Compile step
+### `compile()` — constructor for `CompiledWorkflow`
 
-```bash
-barnum compile workflow.ts -o workflow.barnum.json
+`compile()` is a postfix method on a pipeline (`TypedAction`, alongside the existing `iterate`, `collect`, `bindInput`). It is a **constructor**: it produces a `CompiledWorkflow` instance.
+
+It is only defined on pipelines whose input is `null` — a workflow that still needs an input isn't runnable, so it isn't compilable. The method is gated with a `this` type:
+
+```ts
+// On TypedAction<In, Out>:
+compile(this: TypedAction<null, Out>): CompiledWorkflow<TypedAction<null, Out>>;
 ```
 
-Runs the TypeScript config builder, captures the JSON AST, and writes it to a file. This file is the "compiled" workflow — it contains the flattened `FlatConfig` ready for the engine.
+A pipeline that still wants input has `In != null`; you must satisfy that input first (`bindInput` / `call` / `chain(constant(x), …)` until `In` is `null`). Only then does `compile()` — and therefore `run()` — typecheck. This is what removes the `run(input)` overload entirely: input is supplied by narrowing `In` to `null` *before* compiling, never as a `run()` argument.
 
-The `.barnum.json` file is:
-- Deterministic (same input → same output, already guaranteed by `flatten`)
-- Checkable into version control
-- Loadable without a TypeScript runtime
-
-### Run step
-
-```bash
-barnum run workflow.barnum.json
+```ts
+const compiled_workflow: CompiledWorkflow<TypedAction<null, Out>> = pipeline.compile();
 ```
 
-Skips TypeScript entirely. Reads the pre-compiled `FlatConfig`, creates `WorkflowState`, runs the event loop.
+What `compile()` does, concretely:
 
-### Incremental: only recompile when source changes
+1. Walks the in-memory `Action` AST the user built.
+2. Produces the `Config` (`{ workflow: Action }`) — the same object `runPipeline` builds today at `run.ts:132`.
+3. Serializes it to the JSON AST (`JSON.stringify(config)`, as in `spawnBarnum`).
 
-```bash
-barnum run workflow.ts --cache .barnum-cache/
+The result is **not** a free-floating JSON blob — it is a `CompiledWorkflow` that owns the serialized form and carries the pipeline's output type as a phantom parameter. It is a `class`, so it can carry the `fromJSON` static constructor:
+
+```ts
+class CompiledWorkflow<TPipeline extends Action> {
+  // The serialized config JSON. The compiled artifact, exposed directly.
+  readonly configJson: string;
+  // Phantom — carries ExtractOutput<TPipeline> so run() stays typed.
+  declare readonly __output?: ExtractOutput<TPipeline>;
+
+  // Wrap an existing config-JSON string (e.g. read back from disk). No AST work.
+  static fromJSON(configJson: string): CompiledWorkflow<Action>;
+
+  // No `input` param: a CompiledWorkflow only exists for null-input pipelines.
+  run(options?: RunOptions): Promise<ExtractOutput<TPipeline>>;
+}
 ```
 
-Hashes the TypeScript source + handler files. If the hash matches the cached `.barnum.json`, skip compilation. Otherwise, recompile and update the cache.
+`pipeline.compile()` builds a `CompiledWorkflow` from the in-memory TypeScript AST.
 
-This is analogous to how `tsc --incremental` works — the cached artifact is a transparent optimization.
+The framework owns no file I/O — not writing, not reading. `compile()` exposes the serialized form as `configJson`, a plain string. If you want to persist it, you write it yourself (`fs.writeFileSync("workflow.barnum.json", compiled.configJson)`). If you want to run a previously-saved one, you read the file yourself and rebuild a `CompiledWorkflow` from the raw JSON — the `CompiledWorkflow` is the single thing you `run()`, no matter how you got the JSON:
 
-## What the compiled format contains
+```ts
+const configJson = fs.readFileSync("workflow.barnum.json", "utf8");
+await CompiledWorkflow.fromJSON(configJson).run();
+```
 
-The `FlatConfig` (from `barnum_ast::flat::flatten`) is already a compact, self-contained representation:
+`CompiledWorkflow.fromJSON(configJson)` wraps an existing config-JSON string into a `CompiledWorkflow` (no AST work — it just holds the string). `pipeline.compile()` is the other way to get one; both yield the same value with the same `run()`. There is no file-based API — you bring the string, the `CompiledWorkflow` runs it.
+
+The JSON path can't recover `ExtractOutput` (there's no `Action` to read it from), so `CompiledWorkflow.fromJSON(json)` returns `CompiledWorkflow<Action>` and `run()` resolves to `unknown` — the expected tradeoff for the no-TypeScript escape hatch.
+
+The serialized form is:
+- Deterministic (same AST → same JSON, already guaranteed by `flatten` on the Rust side)
+- Just a string you can write, inspect, or check into version control yourself
+- Reusable across `run()` calls without re-walking the AST
+
+### `run()` — method on `CompiledWorkflow`
+
+`run()` is an instance method on `CompiledWorkflow`. Internally it reuses the existing `spawnBarnum` path (`run.ts:138`): resolve the binary, hand the engine the config JSON, parse the final value from stdout. (The temp-file the CLI is fed through is an internal handoff detail, not a user-facing artifact — unrelated to the "no file I/O" rule above, which is about the public API.) Because the instance carries `TPipeline`, the returned `Promise<ExtractOutput<TPipeline>>` stays fully typed.
+
+```ts
+const result = await pipeline.compile().run();
+```
+
+Like `compile()`, `run()` is only reachable once the pipeline's input is `null`. Supply any required input first, then run:
+
+```ts
+const result = await foo.call(constant.number(123)).run();
+//                   ^ In becomes null here, so .compile()/.run() typecheck
+```
+
+`pipeline.run(...)` is sugar for `pipeline.compile().run(...)` — it builds the `CompiledWorkflow` and immediately invokes its `run`, and carries the same `this: TypedAction<null, Out>` gate.
+
+The free `runPipeline` function is **deleted** — no back-compat. `pipeline.run()` and `pipeline.compile().run()` replace it. Input was previously a `runPipeline` argument; it no longer exists as one. Narrow the pipeline's input to `null` first (`foo.call(constant.number(123))`), then run.
+
+## What the compiled artifact contains
+
+`configJson` is the serialized `Config` (`{ workflow: Action }`). Rust-side, `barnum_ast::flat::flatten` turns this into `FlatConfig`, which is already a compact, self-contained representation:
 
 ```rust
 pub struct FlatConfig {
@@ -59,88 +105,14 @@ pub struct FlatConfig {
 
 Each `FlatAction` references handlers and child actions by ID (u32 indices), not by nested structure. This is already "compiled" — it's a flat instruction array similar to bytecode.
 
-## Serialization for resumption
+## Scope
 
-### Problem
+This doc is **userland only** — the postfix `compile()`/`run()` surface in `libs/barnum`, no engine changes. `compile()` builds the `Config` and serializes it (work `runPipeline`/`spawnBarnum` already do); `run()` spawns the CLI as today.
 
-If a workflow is interrupted (crash, timeout, manual stop), it currently loses all progress. To resume, it would need to re-run from the beginning.
-
-### State snapshot
-
-The `WorkflowState` contains everything needed to resume:
-- The `FlatConfig` (static, can come from the pre-compiled file)
-- The frame stack (which actions are in progress, their completion state)
-- Pending dispatches (which handlers need to run)
-- Accumulated results (partial parallel/forEach results)
-
-Serializing this state to JSON/bincode after each completion step would allow resumption:
-
-```bash
-barnum run workflow.barnum.json --checkpoint .barnum-state/
-```
-
-After each handler completion, write the state to the checkpoint directory. On startup, if a checkpoint exists, load it and resume from where it left off.
-
-### Idempotency requirement
-
-Resumption only works if handlers are idempotent or the workflow is designed for at-least-once execution. A handler that creates a PR should check if the PR already exists before creating a new one.
-
-This is the user's responsibility — the framework provides the mechanism (checkpoint + resume), the user provides the guarantee (idempotent handlers).
-
-## Contextual effects for reading input
-
-### Problem
-
-Some handlers need input that isn't part of the pipeline data flow. Examples:
-- Environment variables (`GITHUB_TOKEN`)
-- CLI arguments (`--dry-run`)
-- Configuration files (`.env`, `tsconfig.json`)
-- User prompts (interactive input)
-
-Currently, handlers read these directly (e.g., `process.env.GITHUB_TOKEN` in the handler code). This works but is invisible to the workflow — there's no way to validate, mock, or log these reads.
-
-### Proposal: effect system for external reads
-
-```ts
-// In the handler definition
-export default createHandler({
-  effects: {
-    env: ["GITHUB_TOKEN", "DRY_RUN"],
-    files: ["tsconfig.json"],
-  },
-  handle: async ({ value, env, files }) => {
-    // env.GITHUB_TOKEN is typed string | undefined
-    // files["tsconfig.json"] is the file contents
-  },
-});
-```
-
-The runtime resolves effects before invoking the handler:
-1. Reads the requested environment variables
-2. Reads the requested files
-3. Passes them as typed arguments to `handle`
-
-Benefits:
-- Workflow can be analyzed for required effects without running it
-- Testing: mock effects instead of setting real env vars
-- Logging: the runtime knows what external state each handler reads
-- Caching: if effects haven't changed, handler output might be cacheable
-
-### Implementation complexity
-
-High. This requires:
-- New fields on `HandlerKind` for effect declarations
-- The Rust runtime resolving effects before dispatch
-- TypeScript type inference for effect parameters in `handle`
-- Serialization of effect values as part of the handler protocol
-
-This is a significant extension. It should wait until the core workflow algebra is stable and real users are running production workflows.
-
-## Priority
-
-1. **Pre-compiled workflow files** — Low effort, immediate value. The `FlatConfig` is already JSON-serializable. Just need a `compile` CLI subcommand.
-2. **Resumption checkpoints** — Medium effort. Need to make `WorkflowState` serializable (it currently contains non-serializable tokio primitives in the event loop layer, but the core state in `barnum_engine` is pure data).
-3. **Contextual effects** — High effort, speculative value. Defer until real usage reveals the need.
+Other work lives in separate docs:
+- **Incremental compilation / caching** (skip re-walking the AST when source is unchanged) — userland follow-on. See `INCREMENTAL_COMPILE.md`.
+- **Resumption / checkpointing** (serializing `WorkflowState`, resume-from-checkpoint) — requires `barnum_engine` changes. See `RESUMPTION.md`.
+- **Contextual effects** (declared env/file reads resolved by the runtime) — requires `HandlerKind` and Rust runtime changes. See `RESUMPTION.md`.
 
 ## Direction
 
