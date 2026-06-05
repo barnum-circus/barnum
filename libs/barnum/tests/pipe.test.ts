@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { branch, config, pipe, tap } from "../src/ast.js";
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
 import { chain } from "../src/chain.js";
-import { runPipeline } from "../src/run.js";
 import { build, classifyErrors, deploy, setup, verify } from "./handlers.js";
 import { assertIO } from "./type-utils.js";
 
@@ -122,48 +121,48 @@ describe("pipe AST structure", () => {
 
 describe("pipe execution", () => {
   it("pipe of builtins: constant → getField", async () => {
-    const result = await runPipeline(
-      pipe(constant({ name: "alice", age: 30 }), getField("name")),
-    );
+    const result = await pipe(
+      constant({ name: "alice", age: 30 }),
+      getField("name"),
+    ).run();
     expect(result).toBe("alice");
   });
 
   it("pipe of 4 builtins via postfix chaining", async () => {
-    const result = await runPipeline(
-      constant({ x: 42 }).getField("x").wrapInField("value").getField("value"),
-    );
+    const result = await constant({ x: 42 })
+      .getField("x")
+      .wrapInField("value")
+      .getField("value")
+      .run();
     expect(result).toBe(42);
   });
 
   it("pipe with identity is passthrough", async () => {
-    const result = await runPipeline(pipe(constant("hello"), identity()));
+    const result = await pipe(constant("hello"), identity()).run();
     expect(result).toBe("hello");
   });
 
   it("pipe with drop discards value", async () => {
-    const result = await runPipeline(pipe(constant(42), drop));
+    const result = await pipe(constant(42), drop).run();
     expect(result).toBeNull();
   });
 
   it(".then() postfix chains correctly", async () => {
-    const result = await runPipeline(constant({ x: 10 }).then(constant(99)));
+    const result = await constant({ x: 10 }).then(constant(99)).run();
     expect(result).toBe(99);
   });
 
   it(".then() chains multiple steps", async () => {
-    const result = await runPipeline(
-      constant("first").then(constant("second")).then(constant("third")),
-    );
+    const result = await constant("first")
+      .then(constant("second"))
+      .then(constant("third"))
+      .run();
     expect(result).toBe("third");
   });
 
   it("chain(a, b) executes equivalently to pipe(a, b)", async () => {
-    const pipeResult = await runPipeline(
-      pipe(constant({ a: 1 }), getField("a")),
-    );
-    const chainResult = await runPipeline(
-      chain(constant({ a: 1 }), getField("a")),
-    );
+    const pipeResult = await pipe(constant({ a: 1 }), getField("a")).run();
+    const chainResult = await chain(constant({ a: 1 }), getField("a")).run();
     expect(pipeResult).toBe(1);
     expect(chainResult).toBe(1);
     expect(pipeResult).toBe(chainResult);
@@ -172,21 +171,22 @@ describe("pipe execution", () => {
   it("large config (>200KB) works via config file", async () => {
     // This would hit E2BIG if passed as a CLI argument.
     const largePayload = "x".repeat(250_000);
-    const result = await runPipeline(
-      constant({ data: largePayload }).getField("data"),
-    );
+    const result = await constant({ data: largePayload })
+      .getField("data")
+      .run();
     expect(result).toBe(largePayload);
   });
 
   it("tap runs side effect and passes input through", async () => {
-    const result = await runPipeline(constant({ x: 42 }).tap(drop));
+    const result = await constant({ x: 42 }).tap(drop).run();
     expect(result).toEqual({ x: 42 });
   });
 
   it("tap standalone passes input through", async () => {
-    const result = await runPipeline(
-      pipe(constant("hello"), tap(constant("discarded"))),
-    );
+    const result = await pipe(
+      constant("hello"),
+      tap(constant("discarded")),
+    ).run();
     expect(result).toBe("hello");
   });
 });

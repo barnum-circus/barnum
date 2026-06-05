@@ -4,7 +4,6 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { runPipeline } from "@barnum/barnum/pipeline";
 import {
   listFiles,
   implementRefactor,
@@ -19,4 +18,4 @@ const fixed = fixTypeErrors.call(typeChecked);
 const committed = commitChanges.call(fixed);
 const pr = createPullRequest.call(committed);
 
-runPipeline(listFiles.iterate().map(pr).collect());
+listFiles.iterate().map(pr).collect().run();

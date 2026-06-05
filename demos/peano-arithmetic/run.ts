@@ -8,30 +8,25 @@
  *           → isEven(3) → isOdd(2) → isEven(1) → isOdd(0) → false
  */
 
-import {
-  constant,
-  runPipeline,
-  defineRecursiveFunctions,
-} from "@barnum/barnum/pipeline";
+import { constant, defineRecursiveFunctions } from "@barnum/barnum/pipeline";
 import { classifyZero, subtractOne } from "./handlers/steps";
 
-runPipeline(
-  defineRecursiveFunctions<
-    [
-      [number, boolean], // isEven: number → boolean
-      [number, boolean], // isOdd:  number → boolean
-    ]
-  >((isEven, isOdd) => [
-    // isEven body
-    classifyZero.branch({
-      Zero: constant(true),
-      NonZero: isOdd.call(subtractOne),
-    }),
-    // isOdd body
-    classifyZero.branch({
-      Zero: constant(false),
-      NonZero: isEven.call(subtractOne),
-    }),
-  ])((isEven, _isOdd) => isEven),
-  7,
-);
+defineRecursiveFunctions<
+  [
+    [number, boolean], // isEven: number → boolean
+    [number, boolean], // isOdd:  number → boolean
+  ]
+>((isEven, isOdd) => [
+  // isEven body
+  classifyZero.branch({
+    Zero: constant(true),
+    NonZero: isOdd.call(subtractOne),
+  }),
+  // isOdd body
+  classifyZero.branch({
+    Zero: constant(false),
+    NonZero: isEven.call(subtractOne),
+  }),
+])((isEven, _isOdd) => isEven)
+  .call(constant(7))
+  .run();

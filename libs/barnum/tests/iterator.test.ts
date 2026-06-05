@@ -11,7 +11,6 @@ import {
 import { constant, identity, tag } from "../src/builtins/index.js";
 import { Iterator as I } from "../src/iterator.js";
 import { Option as O } from "../src/option.js";
-import { runPipeline } from "../src/run.js";
 import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
@@ -190,271 +189,256 @@ describe("Iterator.fold type info", () => {
 describe("Iterator execution", () => {
   // -- fromArray / collect round-trip --
   it("fromArray wraps array", async () => {
-    const result = await runPipeline(pipe(constant([1, 2, 3]), I.fromArray()));
+    const result = await pipe(constant([1, 2, 3]), I.fromArray()).run();
     expect(result).toEqual({ kind: "Iterator.Iterator", value: [1, 2, 3] });
   });
 
   it("collect unwraps Iterator", async () => {
-    const result = await runPipeline(
-      pipe(constant([1, 2, 3]), I.fromArray(), I.collect()),
-    );
+    const result = await pipe(
+      constant([1, 2, 3]),
+      I.fromArray(),
+      I.collect(),
+    ).run();
     expect(result).toEqual([1, 2, 3]);
   });
 
   it("round-trip: fromArray → collect", async () => {
-    const result = await runPipeline(
-      pipe(constant([10, 20, 30]), I.fromArray<number>(), I.collect<number>()),
-    );
+    const result = await pipe(
+      constant([10, 20, 30]),
+      I.fromArray<number>(),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([10, 20, 30]);
   });
 
   // -- fromOption --
   it("fromOption on Some → single-element Iterator", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).some(), I.fromOption<number>(), I.collect<number>()),
-    );
+    const result = await pipe(
+      constant(42).some(),
+      I.fromOption<number>(),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([42]);
   });
 
   it("fromOption on None → empty Iterator", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant(null), O.none<number>()),
-        I.fromOption<number>(),
-        I.collect<number>(),
-      ),
-    );
+    const result = await pipe(
+      pipe(constant(null), O.none<number>()),
+      I.fromOption<number>(),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([]);
   });
 
   // -- fromResult --
   it("fromResult on Ok → single-element Iterator", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(42).ok(),
-        I.fromResult<number, string>(),
-        I.collect<number>(),
-      ),
-    );
+    const result = await pipe(
+      constant(42).ok(),
+      I.fromResult<number, string>(),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([42]);
   });
 
   it("fromResult on Err → empty Iterator", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant("oops").err(),
-        I.fromResult<number, string>(),
-        I.collect<number>(),
-      ),
-    );
+    const result = await pipe(
+      constant("oops").err(),
+      I.fromResult<number, string>(),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([]);
   });
 
   // -- map --
   it("Iterator.map transforms each element", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2, 3]),
-        I.fromArray<number>(),
-        I.map<number, number>(constant(99)),
-        I.collect<number>(),
-      ),
-    );
+    const result = await pipe(
+      constant([1, 2, 3]),
+      I.fromArray<number>(),
+      I.map<number, number>(constant(99)),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([99, 99, 99]);
   });
 
   // -- flatMap with Iterator return --
   it("flatMap where f returns Iterator", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2]),
-        I.fromArray<number>(),
-        I.flatMap<number, number>(
-          pipe(constant([10, 20]), I.fromArray<number>()),
-        ),
-        I.collect<number>(),
+    const result = await pipe(
+      constant([1, 2]),
+      I.fromArray<number>(),
+      I.flatMap<number, number>(
+        pipe(constant([10, 20]), I.fromArray<number>()),
       ),
-    );
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([10, 20, 10, 20]);
   });
 
   // -- flatMap with Option return --
   it("flatMap where f returns Option: Some kept, None dropped", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2, 3]),
-        I.fromArray<number>(),
-        // Even numbers → Some, odd → None
-        I.flatMap<number, number>(
-          pipe(
-            identity<number>(),
-            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
-          ),
+    const result = await pipe(
+      constant([1, 2, 3]),
+      I.fromArray<number>(),
+      // Even numbers → Some, odd → None
+      I.flatMap<number, number>(
+        pipe(
+          identity<number>(),
+          tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
         ),
-        I.collect<number>(),
       ),
-    );
+      I.collect<number>(),
+    ).run();
     // All wrapped as Some since our mock always returns Some
     expect(result).toEqual([1, 2, 3]);
   });
 
   // -- flatMap with Result return --
   it("flatMap where f returns Result: Ok kept, Err dropped", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2]),
-        I.fromArray<number>(),
-        I.flatMap<number, number>(
-          pipe(
-            identity<number>(),
-            tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
-          ),
+    const result = await pipe(
+      constant([1, 2]),
+      I.fromArray<number>(),
+      I.flatMap<number, number>(
+        pipe(
+          identity<number>(),
+          tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
         ),
-        I.collect<number>(),
       ),
-    );
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([1, 2]);
   });
 
   // -- flatMap with array return --
   it("flatMap where f returns array: concatenated", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2]),
-        I.fromArray<number>(),
-        I.flatMap<number, string>(constant(["a", "b"])),
-        I.collect<string>(),
-      ),
-    );
+    const result = await pipe(
+      constant([1, 2]),
+      I.fromArray<number>(),
+      I.flatMap<number, string>(constant(["a", "b"])),
+      I.collect<string>(),
+    ).run();
     expect(result).toEqual(["a", "b", "a", "b"]);
   });
 
   // -- filter --
   it("filter keeps elements where predicate is true", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2, 3]),
-        I.fromArray<number>(),
-        I.filter<number>(constant(true)),
-        I.collect<number>(),
-      ),
-    );
+    const result = await pipe(
+      constant([1, 2, 3]),
+      I.fromArray<number>(),
+      I.filter<number>(constant(true)),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([1, 2, 3]);
   });
 
   it("filter drops elements where predicate is false", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2, 3]),
-        I.fromArray<number>(),
-        I.filter<number>(constant(false)),
-        I.collect<number>(),
-      ),
-    );
+    const result = await pipe(
+      constant([1, 2, 3]),
+      I.fromArray<number>(),
+      I.filter<number>(constant(false)),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([]);
   });
 
   // -- postfix .iterate() --
   it(".iterate() on Some → single-element Iterator", async () => {
-    const result = await runPipeline(constant(42).some().iterate().collect());
+    const result = await constant(42).some().iterate().collect().run();
     expect(result).toEqual([42]);
   });
 
   it(".iterate() on None → empty Iterator", async () => {
-    const result = await runPipeline(
-      pipe(constant(null), O.none<number>()).iterate().collect(),
-    );
+    const result = await pipe(constant(null), O.none<number>())
+      .iterate()
+      .collect()
+      .run();
     expect(result).toEqual([]);
   });
 
   it(".iterate() on Ok → single-element Iterator", async () => {
-    const result = await runPipeline(constant(42).ok().iterate().collect());
+    const result = await constant(42).ok().iterate().collect().run();
     expect(result).toEqual([42]);
   });
 
   it(".iterate() on Err → empty Iterator", async () => {
-    const result = await runPipeline(
-      constant("oops").err().iterate().collect(),
-    );
+    const result = await constant("oops").err().iterate().collect().run();
     expect(result).toEqual([]);
   });
 
   it(".iterate() on array → Iterator wrapping array", async () => {
-    const result = await runPipeline(constant([1, 2, 3]).iterate().collect());
+    const result = await constant([1, 2, 3]).iterate().collect().run();
     expect(result).toEqual([1, 2, 3]);
   });
 
   // -- postfix chains --
   it("postfix: array.iterate().map(f).collect()", async () => {
-    const result = await runPipeline(
-      constant([1, 2, 3]).iterate().map(constant(0)).collect(),
-    );
+    const result = await constant([1, 2, 3])
+      .iterate()
+      .map(constant(0))
+      .collect()
+      .run();
     expect(result).toEqual([0, 0, 0]);
   });
 
   it("postfix: array.iterate().filter(pred).collect()", async () => {
-    const result = await runPipeline(
-      constant([1, 2, 3]).iterate().filter(constant(true)).collect(),
-    );
+    const result = await constant([1, 2, 3])
+      .iterate()
+      .filter(constant(true))
+      .collect()
+      .run();
     expect(result).toEqual([1, 2, 3]);
   });
 
   it("postfix: array.iterate().flatMap(f_returning_option).collect()", async () => {
-    const result = await runPipeline(
-      constant([1, 2, 3])
-        .iterate()
-        .flatMap(
-          pipe(
-            identity<number>(),
-            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
-          ),
-        )
-        .collect(),
-    );
+    const result = await constant([1, 2, 3])
+      .iterate()
+      .flatMap(
+        pipe(
+          identity<number>(),
+          tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
+        ),
+      )
+      .collect()
+      .run();
     expect(result).toEqual([1, 2, 3]);
   });
 
   it("postfix: option.iterate().map(f).collect()", async () => {
-    const result = await runPipeline(
-      constant(42).some().iterate().map(constant(99)).collect(),
-    );
+    const result = await constant(42)
+      .some()
+      .iterate()
+      .map(constant(99))
+      .collect()
+      .run();
     expect(result).toEqual([99]);
   });
 
   // -- empty Iterator operations --
   it("map on empty Iterator → empty", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([] as Array<number>),
-        I.fromArray<number>(),
-        I.map<number, string>(constant("x")),
-        I.collect<string>(),
-      ),
-    );
+    const result = await pipe(
+      constant([] as Array<number>),
+      I.fromArray<number>(),
+      I.map<number, string>(constant("x")),
+      I.collect<string>(),
+    ).run();
     expect(result).toEqual([]);
   });
 
   it("filter on empty Iterator → empty", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([] as Array<number>),
-        I.fromArray<number>(),
-        I.filter<number>(constant(true)),
-        I.collect<number>(),
-      ),
-    );
+    const result = await pipe(
+      constant([] as Array<number>),
+      I.fromArray<number>(),
+      I.filter<number>(constant(true)),
+      I.collect<number>(),
+    ).run();
     expect(result).toEqual([]);
   });
 
   it("flatMap on empty Iterator → empty", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([] as Array<number>),
-        I.fromArray<number>(),
-        I.flatMap<number, string>(constant(["a"])),
-        I.collect<string>(),
-      ),
-    );
+    const result = await pipe(
+      constant([] as Array<number>),
+      I.fromArray<number>(),
+      I.flatMap<number, string>(constant(["a"])),
+      I.collect<string>(),
+    ).run();
     expect(result).toEqual([]);
   });
 });

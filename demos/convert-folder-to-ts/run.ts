@@ -13,7 +13,7 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { runPipeline, pipe, bindInput } from "@barnum/barnum/pipeline";
+import { pipe, bindInput, constant } from "@barnum/barnum/pipeline";
 import type { ProjectConfig } from "./handlers/convert";
 import { setup, listFiles, migrate } from "./handlers/convert";
 import { typeCheckFix } from "./handlers/type-check-fix";
@@ -22,21 +22,22 @@ import path from "node:path";
 
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 
-runPipeline(
-  bindInput<ProjectConfig, null>((config) =>
-    pipe(
-      setup.call(config).drop(),
-      listFiles
-        .call(config)
-        .iterate()
-        .map(migrate({ to: "Typescript" }))
-        .collect()
-        .drop(),
-      typeCheckFix,
-    ),
+bindInput<ProjectConfig, null>((config) =>
+  pipe(
+    setup.call(config).drop(),
+    listFiles
+      .call(config)
+      .iterate()
+      .map(migrate({ to: "Typescript" }))
+      .collect()
+      .drop(),
+    typeCheckFix,
   ),
-  {
-    inputDir: path.join(baseDir, "src"),
-    outputDir: path.join(baseDir, "out"),
-  },
-);
+)
+  .call(
+    constant({
+      inputDir: path.join(baseDir, "src"),
+      outputDir: path.join(baseDir, "out"),
+    }),
+  )
+  .run();

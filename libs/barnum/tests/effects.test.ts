@@ -10,7 +10,6 @@ import {
   withTimeout,
 } from "../src/ast.js";
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import { build, setup, verify } from "./handlers.js";
 import { type IsExact, assertExact, assertIO } from "./type-utils.js";
 
@@ -160,33 +159,30 @@ describe("tryCatch execution", () => {
   });
 
   it("body succeeds, returns body result", async () => {
-    const result = await runPipeline(
-      tryCatch((_throwError) => constant("success"), constant("recovery")),
-    );
+    const result = await tryCatch(
+      (_throwError) => constant("success"),
+      constant("recovery"),
+    ).run();
     expect(result).toBe("success");
   });
 
   it("body throws, recovery runs with error value", async () => {
-    const result = await runPipeline(
-      tryCatch(
-        (throwError) => pipe(constant("error-payload"), throwError),
-        identity(),
-      ),
-    );
+    const result = await tryCatch(
+      (throwError) => pipe(constant("error-payload"), throwError),
+      identity(),
+    ).run();
     expect(result).toBe("error-payload");
   });
 
   it("nested tryCatch with independent errors", async () => {
-    const result = await runPipeline(
-      tryCatch(
-        (_outerThrow) =>
-          tryCatch(
-            (innerThrow) => pipe(constant("inner-error"), innerThrow),
-            identity(),
-          ),
-        constant("outer-recovery"),
-      ),
-    );
+    const result = await tryCatch(
+      (_outerThrow) =>
+        tryCatch(
+          (innerThrow) => pipe(constant("inner-error"), innerThrow),
+          identity(),
+        ),
+      constant("outer-recovery"),
+    ).run();
     // Inner throw is caught by inner recovery, outer tryCatch sees success
     expect(result).toBe("inner-error");
   });
@@ -199,7 +195,7 @@ describe("race execution", () => {
 
   it("race returns first completed result", async () => {
     // Both branches are constant (instant), but race should still return one of them
-    const result = await runPipeline(race(constant("a"), constant("b")));
+    const result = await race(constant("a"), constant("b")).run();
     // Either "a" or "b" — both are valid. In practice, first branch wins.
     expect(["a", "b"]).toContain(result);
   });
@@ -211,7 +207,7 @@ describe("sleep execution", () => {
   });
 
   it("sleep returns null (void)", async () => {
-    const result = await runPipeline(sleep(1));
+    const result = await sleep(1).run();
     expect(result).toBeNull();
   });
 });

@@ -7,33 +7,25 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import {
-  runPipeline,
-  loop,
-  tryCatch,
-  withTimeout,
-  constant,
-} from "@barnum/barnum/pipeline";
+import { loop, tryCatch, withTimeout, constant } from "@barnum/barnum/pipeline";
 import type { TypedAction } from "@barnum/barnum/pipeline";
 import { stepA, stepB, stepC, logError } from "./handlers/steps";
 
 console.error("=== Retry-on-error demo ===\n");
 
-runPipeline(
-  loop<void, string>((recur, done) =>
-    tryCatch(
-      (throwError) => {
-        const afterA = stepA.unwrapOr(done).drop();
-        const afterB = stepBWithTimeout(throwError).call(afterA);
-        const result = stepC.unwrapOr(throwError).call(afterB);
-        return done.call(result);
-      },
+loop<void, string>((recur, done) =>
+  tryCatch(
+    (throwError) => {
+      const afterA = stepA.unwrapOr(done).drop();
+      const afterB = stepBWithTimeout(throwError).call(afterA);
+      const result = stepC.unwrapOr(throwError).call(afterB);
+      return done.call(result);
+    },
 
-      // An error occurred — log it and retry the loop
-      recur.call(logError.drop()),
-    ),
+    // An error occurred — log it and retry the loop
+    recur.call(logError.drop()),
   ),
-);
+).run();
 
 // throwError is a first-class value — you can pass it to helper functions
 // that build sub-pipelines, keeping the main pipeline flat and readable.

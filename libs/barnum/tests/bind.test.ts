@@ -8,7 +8,6 @@ import {
   resetEffectIdCounter,
 } from "../src/ast.js";
 import { constant, drop, getField, identity } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import { setup, verify } from "./handlers.js";
 import { type IsExact, assertExact, assertIO } from "./type-utils.js";
 
@@ -223,24 +222,23 @@ describe("bind execution", () => {
   });
 
   it("bind with single constant binding: body receives value", async () => {
-    const result = await runPipeline(bind([constant(42)], ([n]) => n));
+    const result = await bind([constant(42)], ([n]) => n).run();
     expect(result).toBe(42);
   });
 
   it("bind with two bindings: body receives both values", async () => {
-    const result = await runPipeline(
-      bind([constant("hello"), constant(99)], ([_s, n]) => n),
-    );
+    const result = await bind(
+      [constant("hello"), constant(99)],
+      ([_s, n]) => n,
+    ).run();
     expect(result).toBe(99);
   });
 
   it("bind: pipeline input is available in body", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant({ x: 10 }),
-        bind([constant("bound")], ([_s]) => getField("x")),
-      ),
-    );
+    const result = await pipe(
+      constant({ x: 10 }),
+      bind([constant("bound")], ([_s]) => getField("x")),
+    ).run();
     expect(result).toBe(10);
   });
 });
@@ -251,22 +249,18 @@ describe("bindInput execution", () => {
   });
 
   it("captured input is available as VarRef", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(42),
-        bindInput<number, number>((input) => input),
-      ),
-    );
+    const result = await pipe(
+      constant(42),
+      bindInput<number, number>((input) => input),
+    ).run();
     expect(result).toBe(42);
   });
 
   it("VarRef value pipes into subsequent action", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant({ artifact: "test.build" }),
-        bindInput<{ artifact: string }, { artifact: string }>((input) => input),
-      ),
-    );
+    const result = await pipe(
+      constant({ artifact: "test.build" }),
+      bindInput<{ artifact: string }, { artifact: string }>((input) => input),
+    ).run();
     expect(result).toEqual({ artifact: "test.build" });
   });
 });
@@ -281,83 +275,71 @@ describe("split execution", () => {
   });
 
   it("tuple split: both components accessible", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(["hello", 42] as [string, number]),
-        bindInput<[string, number], string>((state) => {
-          const [str, _num] = state.split();
-          return str;
-        }),
-      ),
-    );
+    const result = await pipe(
+      constant(["hello", 42] as [string, number]),
+      bindInput<[string, number], string>((state) => {
+        const [str, _num] = state.split();
+        return str;
+      }),
+    ).run();
     expect(result).toBe("hello");
   });
 
   it("tuple split: second component accessible", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(["hello", 42] as [string, number]),
-        bindInput<[string, number], number>((state) => {
-          const [_str, num] = state.split();
-          return num;
-        }),
-      ),
-    );
+    const result = await pipe(
+      constant(["hello", 42] as [string, number]),
+      bindInput<[string, number], number>((state) => {
+        const [_str, num] = state.split();
+        return num;
+      }),
+    ).run();
     expect(result).toBe(42);
   });
 
   it("object split: field accessible", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant({ name: "alice", age: 30 }),
-        bindInput<{ name: string; age: number }, string>((state) => {
-          const { name } = state.split();
-          return name;
-        }),
-      ),
-    );
+    const result = await pipe(
+      constant({ name: "alice", age: 30 }),
+      bindInput<{ name: string; age: number }, string>((state) => {
+        const { name } = state.split();
+        return name;
+      }),
+    ).run();
     expect(result).toBe("alice");
   });
 
   it("multiple splits of same VarRef yield independent results", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant({ a: { b: "nested" }, c: 99 }),
-        bindInput<{ a: { b: string }; c: number }, string>((vr) => {
-          const { a } = vr.split();
-          const { c: _c } = vr.split();
-          return a.getField("b");
-        }),
-      ),
-    );
+    const result = await pipe(
+      constant({ a: { b: "nested" }, c: 99 }),
+      bindInput<{ a: { b: string }; c: number }, string>((vr) => {
+        const { a } = vr.split();
+        const { c: _c } = vr.split();
+        return a.getField("b");
+      }),
+    ).run();
     expect(result).toBe("nested");
   });
 
   it("split same VarRef for different nested fields", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant({ a: { b: "deep" }, x: 42 }),
-        bindInput<{ a: { b: string }; x: number }, [string, number]>((vr) => {
-          const { a } = vr.split();
-          const { x } = vr.split();
-          return all(a.getField("b"), x);
-        }),
-      ),
-    );
+    const result = await pipe(
+      constant({ a: { b: "deep" }, x: 42 }),
+      bindInput<{ a: { b: string }; x: number }, [string, number]>((vr) => {
+        const { a } = vr.split();
+        const { x } = vr.split();
+        return all(a.getField("b"), x);
+      }),
+    ).run();
     expect(result).toEqual(["deep", 42]);
   });
 
   it("split VarRef then split nested field", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant({ outer: { inner: "found" } }),
-        bindInput<{ outer: { inner: string } }, string>((vr) => {
-          const { outer } = vr.split();
-          const { inner } = outer.split();
-          return inner;
-        }),
-      ),
-    );
+    const result = await pipe(
+      constant({ outer: { inner: "found" } }),
+      bindInput<{ outer: { inner: string } }, string>((vr) => {
+        const { outer } = vr.split();
+        const { inner } = outer.split();
+        return inner;
+      }),
+    ).run();
     expect(result).toBe("found");
   });
 });

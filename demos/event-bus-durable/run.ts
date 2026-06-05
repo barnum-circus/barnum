@@ -15,7 +15,6 @@ import {
   constant,
   loop,
   pipe,
-  runPipeline,
   sleep,
   type TypedAction,
 } from "@barnum/barnum/pipeline";
@@ -62,15 +61,13 @@ function makeConsumerLoop(): TypedAction<null, null> {
   );
 }
 
-runPipeline(
-  pipe(
-    clearQueue.drop(),
-    all(
-      makeProducerLoop(0),
-      makeProducerLoop(1),
-      makeProducerLoop(2),
-      makeConsumerLoop(),
-      makeConsumerLoop(),
-    ),
+pipe(
+  clearQueue.drop(),
+  all(
+    makeProducerLoop(0),
+    makeProducerLoop(1),
+    makeProducerLoop(2),
+    makeConsumerLoop(),
+    makeConsumerLoop(),
   ),
-);
+).run();

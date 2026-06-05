@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type Option, pipe } from "../src/ast.js";
 import { asOption, constant } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import { assertIO } from "./type-utils.js";
 
 // ---------------------------------------------------------------------------
@@ -31,46 +30,44 @@ describe("AsOption type tests", () => {
 
 describe("AsOption execution", () => {
   it("true → Some(void)", async () => {
-    const result = await runPipeline(constant(true).asOption());
+    const result = await constant(true).asOption().run();
     expect(result).toEqual({ kind: "Option.Some", value: null });
   });
 
   it("false → None", async () => {
-    const result = await runPipeline(constant(false).asOption());
+    const result = await constant(false).asOption().run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   it("standalone asOption() in pipe: true → Some", async () => {
-    const result = await runPipeline(pipe(constant(true), asOption()));
+    const result = await pipe(constant(true), asOption()).run();
     expect(result).toEqual({ kind: "Option.Some", value: null });
   });
 
   it("standalone asOption() in pipe: false → None", async () => {
-    const result = await runPipeline(pipe(constant(false), asOption()));
+    const result = await pipe(constant(false), asOption()).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   it("asOption + branch dispatches correctly", async () => {
-    const result = await runPipeline(
-      constant(true)
-        .asOption()
-        .branch({
-          Some: constant("was true"),
-          None: constant("was false"),
-        }),
-    );
+    const result = await constant(true)
+      .asOption()
+      .branch({
+        Some: constant("was true"),
+        None: constant("was false"),
+      })
+      .run();
     expect(result).toBe("was true");
   });
 
   it("asOption false + branch dispatches to None", async () => {
-    const result = await runPipeline(
-      constant(false)
-        .asOption()
-        .branch({
-          Some: constant("was true"),
-          None: constant("was false"),
-        }),
-    );
+    const result = await constant(false)
+      .asOption()
+      .branch({
+        Some: constant("was true"),
+        None: constant("was false"),
+      })
+      .run();
     expect(result).toBe("was false");
   });
 });

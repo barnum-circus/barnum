@@ -14,7 +14,6 @@ import {
 import { allocateRestartHandlerId } from "../src/effect-id.js";
 import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Result as R } from "../src/result.js";
-import { runPipeline } from "../src/run.js";
 import { deploy, setup } from "./handlers.js";
 import { type IsExact, assertExact, assertIO } from "./type-utils.js";
 
@@ -419,153 +418,138 @@ describe("Result AST structure", () => {
 describe("Result execution", () => {
   // -- Construction --
   it("Result.ok wraps value", async () => {
-    const result = await runPipeline(constant(42).ok());
+    const result = await constant(42).ok().run();
     expect(result).toEqual({ kind: "Result.Ok", value: 42 });
   });
 
   it("Result.err wraps error", async () => {
-    const result = await runPipeline(constant("oops").err());
+    const result = await constant("oops").err().run();
     expect(result).toEqual({ kind: "Result.Err", value: "oops" });
   });
 
   // -- map --
   it("Result.map on Ok transforms value", async () => {
-    const result = await runPipeline(
-      pipe(constant(10).ok(), R.map(constant(20))),
-    );
+    const result = await pipe(constant(10).ok(), R.map(constant(20))).run();
     expect(result).toEqual({ kind: "Result.Ok", value: 20 });
   });
 
   it("Result.map on Err stays Err", async () => {
-    const result = await runPipeline(
-      pipe(constant("fail").err(), R.map(constant(999))),
-    );
+    const result = await pipe(
+      constant("fail").err(),
+      R.map(constant(999)),
+    ).run();
     expect(result).toEqual({ kind: "Result.Err", value: "fail" });
   });
 
   // -- mapErr --
   it("Result.mapErr on Ok stays Ok", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).ok(), R.mapErr(constant("transformed"))),
-    );
+    const result = await pipe(
+      constant(42).ok(),
+      R.mapErr(constant("transformed")),
+    ).run();
     expect(result).toEqual({ kind: "Result.Ok", value: 42 });
   });
 
   it("Result.mapErr on Err transforms error", async () => {
-    const result = await runPipeline(
-      pipe(constant("fail").err(), R.mapErr(constant("transformed"))),
-    );
+    const result = await pipe(
+      constant("fail").err(),
+      R.mapErr(constant("transformed")),
+    ).run();
     expect(result).toEqual({ kind: "Result.Err", value: "transformed" });
   });
 
   // -- andThen --
   it("Result.andThen on Ok chains to inner Result", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant(5), R.ok<number, string>()),
-        R.andThen<number, number, string>(
-          pipe(constant(10), R.ok<number, string>()),
-        ),
+    const result = await pipe(
+      pipe(constant(5), R.ok<number, string>()),
+      R.andThen<number, number, string>(
+        pipe(constant(10), R.ok<number, string>()),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Result.Ok", value: 10 });
   });
 
   it("Result.andThen on Err propagates", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant("fail"), R.err<number, string>()),
-        R.andThen<number, number, string>(
-          pipe(constant(10), R.ok<number, string>()),
-        ),
+    const result = await pipe(
+      pipe(constant("fail"), R.err<number, string>()),
+      R.andThen<number, number, string>(
+        pipe(constant(10), R.ok<number, string>()),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Result.Err", value: "fail" });
   });
 
   // -- or --
   it("Result.or on Ok stays Ok", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant(42), R.ok<number, string>()),
-        R.or<number, string, string>(
-          pipe(
-            constant(99),
-            tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
-          ),
+    const result = await pipe(
+      pipe(constant(42), R.ok<number, string>()),
+      R.or<number, string, string>(
+        pipe(
+          constant(99),
+          tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
         ),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Result.Ok", value: 42 });
   });
 
   it("Result.or on Err applies fallback", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant("fail"), R.err<number, string>()),
-        R.or<number, string, string>(
-          pipe(
-            constant(99),
-            tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
-          ),
+    const result = await pipe(
+      pipe(constant("fail"), R.err<number, string>()),
+      R.or<number, string, string>(
+        pipe(
+          constant(99),
+          tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
         ),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Result.Ok", value: 99 });
   });
 
   // -- unwrap --
   it("Result.unwrap on Ok extracts value", async () => {
-    const result = await runPipeline(pipe(constant(42).ok(), R.unwrap()));
+    const result = await pipe(constant(42).ok(), R.unwrap()).run();
     expect(result).toBe(42);
   });
 
   it("Result.unwrap on Err panics", async () => {
     await expect(
-      runPipeline(pipe(constant("fail").err(), R.unwrap())),
+      pipe(constant("fail").err(), R.unwrap()).run(),
     ).rejects.toThrow();
   });
 
   // -- unwrapOr --
   it("Result.unwrapOr on Ok returns value", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).ok(), R.unwrapOr(constant(0))),
-    );
+    const result = await pipe(constant(42).ok(), R.unwrapOr(constant(0))).run();
     expect(result).toBe(42);
   });
 
   it("Result.unwrapOr on Err runs fallback", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant("fail"), R.err<number, string>()),
-        R.unwrapOr(constant(0)),
-      ),
-    );
+    const result = await pipe(
+      pipe(constant("fail"), R.err<number, string>()),
+      R.unwrapOr(constant(0)),
+    ).run();
     expect(result).toBe(0);
   });
 
   // -- asOkOption / asErrOption --
   it("Result.asOkOption on Ok -> Some", async () => {
-    const result = await runPipeline(pipe(constant(42).ok(), R.asOkOption()));
+    const result = await pipe(constant(42).ok(), R.asOkOption()).run();
     expect(result).toEqual({ kind: "Option.Some", value: 42 });
   });
 
   it("Result.asOkOption on Err -> None", async () => {
-    const result = await runPipeline(
-      pipe(constant("fail").err(), R.asOkOption()),
-    );
+    const result = await pipe(constant("fail").err(), R.asOkOption()).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   it("Result.asErrOption on Ok -> None", async () => {
-    const result = await runPipeline(pipe(constant(42).ok(), R.asErrOption()));
+    const result = await pipe(constant(42).ok(), R.asErrOption()).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   it("Result.asErrOption on Err -> Some", async () => {
-    const result = await runPipeline(
-      pipe(constant("fail").err(), R.asErrOption()),
-    );
+    const result = await pipe(constant("fail").err(), R.asErrOption()).run();
     expect(result).toEqual({ kind: "Option.Some", value: "fail" });
   });
 
@@ -577,7 +561,7 @@ describe("Result execution", () => {
       tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
       tag<"Result", ResultDef<Inner, string>, "Ok">("Ok", "Result"),
     );
-    const result = await runPipeline(pipe(okSome, R.transpose()));
+    const result = await pipe(okSome, R.transpose()).run();
     expect(result).toEqual({
       kind: "Option.Some",
       value: { kind: "Result.Ok", value: 42 },
@@ -591,7 +575,7 @@ describe("Result execution", () => {
       tag<"Option", OptionDef<number>, "None">("None", "Option"),
       tag<"Result", ResultDef<Inner, string>, "Ok">("Ok", "Result"),
     );
-    const result = await runPipeline(pipe(okNone, R.transpose()));
+    const result = await pipe(okNone, R.transpose()).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
@@ -601,7 +585,7 @@ describe("Result execution", () => {
       constant("oops"),
       tag<"Result", ResultDef<Inner, string>, "Err">("Err", "Result"),
     );
-    const result = await runPipeline(pipe(errVal, R.transpose()));
+    const result = await pipe(errVal, R.transpose()).run();
     expect(result).toEqual({
       kind: "Option.Some",
       value: { kind: "Result.Err", value: "oops" },
@@ -610,50 +594,50 @@ describe("Result execution", () => {
 
   // -- isOk / isErr --
   it("Result.isOk on Ok -> true", async () => {
-    const result = await runPipeline(pipe(constant(1).ok(), R.isOk()));
+    const result = await pipe(constant(1).ok(), R.isOk()).run();
     expect(result).toBe(true);
   });
 
   it("Result.isOk on Err -> false", async () => {
-    const result = await runPipeline(pipe(constant("e").err(), R.isOk()));
+    const result = await pipe(constant("e").err(), R.isOk()).run();
     expect(result).toBe(false);
   });
 
   it("Result.isErr on Ok -> false", async () => {
-    const result = await runPipeline(pipe(constant(1).ok(), R.isErr()));
+    const result = await pipe(constant(1).ok(), R.isErr()).run();
     expect(result).toBe(false);
   });
 
   it("Result.isErr on Err -> true", async () => {
-    const result = await runPipeline(pipe(constant("e").err(), R.isErr()));
+    const result = await pipe(constant("e").err(), R.isErr()).run();
     expect(result).toBe(true);
   });
 
   // -- Postfix dispatch --
   it("postfix .map on Result output dispatches correctly", async () => {
-    const result = await runPipeline(constant(42).ok().map(constant(99)));
+    const result = await constant(42).ok().map(constant(99)).run();
     expect(result).toEqual({ kind: "Result.Ok", value: 99 });
   });
 
   it("postfix .unwrap on Result output", async () => {
-    const result = await runPipeline(constant(42).ok().unwrap());
+    const result = await constant(42).ok().unwrap().run();
     expect(result).toBe(42);
   });
 
   it("postfix .unwrapOr on Result output", async () => {
-    const result = await runPipeline(
-      pipe(constant("fail"), R.err<number, string>()).unwrapOr(constant(99)),
-    );
+    const result = await pipe(constant("fail"), R.err<number, string>())
+      .unwrapOr(constant(99))
+      .run();
     expect(result).toBe(99);
   });
 
   it("postfix .isOk on Result output", async () => {
-    const result = await runPipeline(constant(42).ok().isOk());
+    const result = await constant(42).ok().isOk().run();
     expect(result).toBe(true);
   });
 
   it("postfix .isErr on Result output", async () => {
-    const result = await runPipeline(constant(42).ok().isErr());
+    const result = await constant(42).ok().isErr().run();
     expect(result).toBe(false);
   });
 });

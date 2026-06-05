@@ -8,7 +8,6 @@ import {
   tag,
   wrapInField,
 } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import {
   type ClassifyResult,
   type TypeError,
@@ -211,7 +210,7 @@ describe("branch execution", () => {
         Right: wrapInField("str"),
       }),
     );
-    const result = await runPipeline(action);
+    const result = await action.run();
     expect(result).toEqual({ num: 42 });
   });
 
@@ -225,7 +224,7 @@ describe("branch execution", () => {
         Right: wrapInField("str"),
       }),
     );
-    const result = await runPipeline(action);
+    const result = await action.run();
     expect(result).toEqual({ str: "hello" });
   });
 
@@ -241,7 +240,7 @@ describe("branch execution", () => {
         Blue: constant("blue"),
       }),
     );
-    const result = await runPipeline(action);
+    const result = await action.run();
     expect(result).toBe("green");
   });
 
@@ -251,7 +250,7 @@ describe("branch execution", () => {
       A: identity(),
       B: drop,
     });
-    const result = await runPipeline(action);
+    const result = await action.run();
     expect(result).toBe(10);
   });
 
@@ -265,7 +264,7 @@ describe("branch execution", () => {
         Item: getField("x"),
       }),
     );
-    const result = await runPipeline(action);
+    const result = await action.run();
     expect(result).toBe(99);
   });
 });

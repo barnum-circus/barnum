@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { config, forEach, pipe } from "../src/ast.js";
 import { constant, getField, wrapInField } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import { listFiles, migrate, setup, verify } from "./handlers.js";
 import { assertIO } from "./type-utils.js";
 
@@ -45,37 +44,39 @@ describe("forEach AST structure", () => {
 
 describe("forEach execution", () => {
   it("forEach maps action over array elements", async () => {
-    const result = await runPipeline(
-      pipe(constant([{ x: 1 }, { x: 2 }, { x: 3 }]), forEach(getField("x"))),
-    );
+    const result = await pipe(
+      constant([{ x: 1 }, { x: 2 }, { x: 3 }]),
+      forEach(getField("x")),
+    ).run();
     expect(result).toEqual([1, 2, 3]);
   });
 
   it("forEach on empty array returns []", async () => {
-    const result = await runPipeline(
-      pipe(constant([] as Array<{ x: number }>), forEach(getField("x"))),
-    );
+    const result = await pipe(
+      constant([] as Array<{ x: number }>),
+      forEach(getField("x")),
+    ).run();
     expect(result).toEqual([]);
   });
 
   it("forEach on single-element array", async () => {
-    const result = await runPipeline(
-      pipe(constant([{ x: 42 }]), forEach(getField("x"))),
-    );
+    const result = await pipe(
+      constant([{ x: 42 }]),
+      forEach(getField("x")),
+    ).run();
     expect(result).toEqual([42]);
   });
 
   it("forEach composes in pipe", async () => {
-    const result = await runPipeline(
-      pipe(constant([10, 20, 30]), forEach(wrapInField("n"))),
-    );
+    const result = await pipe(
+      constant([10, 20, 30]),
+      forEach(wrapInField("n")),
+    ).run();
     expect(result).toEqual([{ n: 10 }, { n: 20 }, { n: 30 }]);
   });
 
   it("forEach via pipe chains correctly", async () => {
-    const result = await runPipeline(
-      pipe(constant([1, 2, 3]), forEach(constant(99))),
-    );
+    const result = await pipe(constant([1, 2, 3]), forEach(constant(99))).run();
     expect(result).toEqual([99, 99, 99]);
   });
 });

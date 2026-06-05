@@ -22,7 +22,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runPipeline, constant, withResource } from "@barnum/barnum/pipeline";
+import { constant, withResource } from "@barnum/barnum/pipeline";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.resolve(__dirname, "src");
@@ -40,17 +40,16 @@ console.error("=== Running identify-and-address-refactors workflow ===\n");
 
 const files = listTargetFiles.call(constant({ folder: srcDir }));
 
-runPipeline(
-  files
-    .iterate()
-    .flatMap(analyze)
-    .flatMap(assessWorthiness)
-    .map(
-      withResource({
-        create: createBranchWorktree,
-        action: implementAndReview,
-        dispose: deleteWorktree,
-      }),
-    )
-    .collect(),
-);
+files
+  .iterate()
+  .flatMap(analyze)
+  .flatMap(assessWorthiness)
+  .map(
+    withResource({
+      create: createBranchWorktree,
+      action: implementAndReview,
+      dispose: deleteWorktree,
+    }),
+  )
+  .collect()
+  .run();

@@ -7,7 +7,6 @@ import {
   pick,
   wrapInField,
 } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
 import { assertIO } from "./type-utils.js";
 
@@ -119,49 +118,51 @@ describe("struct AST structure", () => {
 
 describe("struct execution", () => {
   it("getField extracts a field from an object", async () => {
-    const result = await runPipeline(
-      pipe(constant({ name: "alice", age: 30 }), getField("name")),
-    );
+    const result = await pipe(
+      constant({ name: "alice", age: 30 }),
+      getField("name"),
+    ).run();
     expect(result).toBe("alice");
   });
 
   it("wrapInField wraps a value in a named field", async () => {
-    const result = await runPipeline(pipe(constant(42), wrapInField("foo")));
+    const result = await pipe(constant(42), wrapInField("foo")).run();
     expect(result).toEqual({ foo: 42 });
   });
 
   it("wrapInField with complex object value", async () => {
-    const result = await runPipeline(
-      pipe(constant({ x: [1, 2] }), wrapInField("data")),
-    );
+    const result = await pipe(
+      constant({ x: [1, 2] }),
+      wrapInField("data"),
+    ).run();
     expect(result).toEqual({ data: { x: [1, 2] } });
   });
 
   it("pick selects named fields", async () => {
-    const result = await runPipeline(
-      pipe(constant({ a: 1, b: 2, c: 3 }), pick("a", "b")),
-    );
+    const result = await pipe(
+      constant({ a: 1, b: 2, c: 3 }),
+      pick("a", "b"),
+    ).run();
     expect(result).toEqual({ a: 1, b: 2 });
   });
 
   it("allObject runs actions concurrently and collects into an object", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant({ x: 10 }),
-        allObject({
-          val: getField("x"),
-          wrapped: pipe(getField("x"), wrapInField("inner")),
-          fixed: constant("hello"),
-        }),
-      ),
-    );
+    const result = await pipe(
+      constant({ x: 10 }),
+      allObject({
+        val: getField("x"),
+        wrapped: pipe(getField("x"), wrapInField("inner")),
+        fixed: constant("hello"),
+      }),
+    ).run();
     expect(result).toEqual({ val: 10, wrapped: { inner: 10 }, fixed: "hello" });
   });
 
   it("allObject with single action", async () => {
-    const result = await runPipeline(
-      pipe(constant(42), allObject({ answer: constant("yes") })),
-    );
+    const result = await pipe(
+      constant(42),
+      allObject({ answer: constant("yes") }),
+    ).run();
     expect(result).toEqual({ answer: "yes" });
   });
 });

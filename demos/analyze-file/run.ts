@@ -10,7 +10,6 @@
 
 import type { Pipeable, TypedAction, Result } from "@barnum/barnum/pipeline";
 import {
-  runPipeline,
   all,
   typed,
   loop,
@@ -18,6 +17,7 @@ import {
   bindInput,
   earlyReturn,
   tryCatch,
+  constant,
 } from "@barnum/barnum/pipeline";
 import {
   analyzeClassComponents,
@@ -52,11 +52,10 @@ function withRetry<TIn, TOut>(
 
 console.error("=== Analyze-file with retry demo ===\n");
 
-runPipeline(
-  all(
-    withRetry(analyzeClassComponents),
-    withRetry(analyzeImpossibleStates),
-    withRetry(analyzeErrorHandling),
-  ),
-  "source/index.ts",
-);
+all(
+  withRetry(analyzeClassComponents),
+  withRetry(analyzeImpossibleStates),
+  withRetry(analyzeErrorHandling),
+)
+  .call(constant("source/index.ts"))
+  .run();

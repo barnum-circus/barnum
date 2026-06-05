@@ -16,7 +16,6 @@
  */
 
 import {
-  runPipeline,
   Iterator,
   constant,
   loop,
@@ -35,26 +34,25 @@ import {
 console.error("=== Babysit PRs demo ===\n");
 console.error("Monitoring PRs: #101, #102, #103\n");
 
-runPipeline(
-  loop<number[], void>((recur, done) => {
-    const filtered = Iterator.fromArray<number>()
-      .filter(
-        bindInput<number, boolean>((prNumber) => {
-          const status = checkPR.call(prNumber);
-          return status.branch({
-            ChecksFailed: pipe(fixIssues.drop(), constant(true)),
-            ChecksPassed: pipe(landPR.drop(), constant(false)),
-            Landed: pipe(drop, constant(false)),
-          });
-        }),
-      )
-      .collect();
-    return classifyRemaining.call(filtered).branch({
-      HasPRs: bindInput<number[], never>((prs) =>
-        pipe(sleep(10_000).drop(), recur.call(prs)),
-      ),
-      AllDone: done,
-    });
-  }),
-  [101, 102, 103],
-);
+loop<number[], void>((recur, done) => {
+  const filtered = Iterator.fromArray<number>()
+    .filter(
+      bindInput<number, boolean>((prNumber) => {
+        const status = checkPR.call(prNumber);
+        return status.branch({
+          ChecksFailed: pipe(fixIssues.drop(), constant(true)),
+          ChecksPassed: pipe(landPR.drop(), constant(false)),
+          Landed: pipe(drop, constant(false)),
+        });
+      }),
+    )
+    .collect();
+  return classifyRemaining.call(filtered).branch({
+    HasPRs: bindInput<number[], never>((prs) =>
+      pipe(sleep(10_000).drop(), recur.call(prs)),
+    ),
+    AllDone: done,
+  });
+})
+  .call(constant([101, 102, 103]))
+  .run();

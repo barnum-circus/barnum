@@ -12,7 +12,6 @@ import {
   constant,
   loop,
   pipe,
-  runPipeline,
   sleep,
   type TypedAction,
 } from "@barnum/barnum/pipeline";
@@ -53,14 +52,12 @@ const consumerLoop: TypedAction<null, null> = loop<null, null>((recur, done) =>
 );
 
 // Clear queue, then run 3 producers + 1 consumer concurrently.
-runPipeline(
-  pipe(
-    clearQueue.drop(),
-    all(
-      makeProducerLoop(0),
-      makeProducerLoop(1),
-      makeProducerLoop(2),
-      consumerLoop,
-    ),
+pipe(
+  clearQueue.drop(),
+  all(
+    makeProducerLoop(0),
+    makeProducerLoop(1),
+    makeProducerLoop(2),
+    consumerLoop,
   ),
-);
+).run();

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pipe } from "../src/ast.js";
 import { constant, drop, identity, panic } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import { setup } from "./handlers.js";
 import { assertIO } from "./type-utils.js";
 
@@ -55,38 +54,40 @@ describe("scalar AST structure", () => {
 
 describe("scalar execution", () => {
   it("constant(42) returns 42", async () => {
-    const result = await runPipeline(constant(42));
+    const result = await constant(42).run();
     expect(result).toBe(42);
   });
 
   it("constant('hello') returns 'hello'", async () => {
-    const result = await runPipeline(constant("hello"));
+    const result = await constant("hello").run();
     expect(result).toBe("hello");
   });
 
   it("constant({x: 1, y: [2, 3]}) returns object", async () => {
-    const result = await runPipeline(constant({ x: 1, y: [2, 3] }));
+    const result = await constant({ x: 1, y: [2, 3] }).run();
     expect(result).toEqual({ x: 1, y: [2, 3] });
   });
 
   it("constant(null) returns null", async () => {
-    const result = await runPipeline(constant(null));
+    const result = await constant(null).run();
     expect(result).toBeNull();
   });
 
   it("identity passes through input", async () => {
-    const result = await runPipeline(identity(), { data: "passthrough" });
+    const result = await identity()
+      .call(constant({ data: "passthrough" }))
+      .run();
     expect(result).toEqual({ data: "passthrough" });
   });
 
   it("drop returns null", async () => {
-    const result = await runPipeline(pipe(constant("discard me"), drop));
+    const result = await pipe(constant("discard me"), drop).run();
     expect(result).toBeNull();
   });
 
-  it("panic causes runPipeline to reject", async () => {
+  it("panic causes run() to reject", async () => {
     await expect(
-      runPipeline(pipe(constant("trigger"), panic("test panic"))),
+      pipe(constant("trigger"), panic("test panic")).run(),
     ).rejects.toThrow();
   });
 });

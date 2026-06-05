@@ -9,7 +9,6 @@ import {
   resetEffectIdCounter,
 } from "../src/ast.js";
 import { constant, drop, splitFirst } from "../src/builtins/index.js";
-import { runPipeline } from "../src/run.js";
 import {
   classifyErrors,
   fix,
@@ -213,25 +212,23 @@ describe("loop execution", () => {
   });
 
   it("loop that immediately breaks returns break value", async () => {
-    const result = await runPipeline(
-      loop<void, number>((_, done) => pipe(constant(42), done)),
-    );
+    const result = await loop<void, number>((_, done) =>
+      pipe(constant(42), done),
+    ).run();
     expect(result).toBe(42);
   });
 
   it("loop iterates then breaks (splitFirst countdown)", async () => {
     // State: number[]. Each iter: splitFirst. Some → recur with tail. None → break.
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2, 3]),
-        loop<Array<number>, string>((recur, done) =>
-          splitFirst<number>().branch({
-            Some: pipe(drop, constant([] as Array<number>), recur),
-            None: pipe(constant("done"), done),
-          }),
-        ),
+    const result = await pipe(
+      constant([1, 2, 3]),
+      loop<Array<number>, string>((recur, done) =>
+        splitFirst<number>().branch({
+          Some: pipe(drop, constant([] as Array<number>), recur),
+          None: pipe(constant("done"), done),
+        }),
       ),
-    );
+    ).run();
     expect(result).toBe("done");
   });
 });
@@ -242,16 +239,16 @@ describe("earlyReturn execution", () => {
   });
 
   it("earlyReturn exits early with value", async () => {
-    const result = await runPipeline(
-      earlyReturn<string>((ret) => pipe(constant("early"), ret)),
-    );
+    const result = await earlyReturn<string>((ret) =>
+      pipe(constant("early"), ret),
+    ).run();
     expect(result).toBe("early");
   });
 
   it("earlyReturn completes normally without early return", async () => {
-    const result = await runPipeline(
-      earlyReturn<string, any, number>((_ret) => constant(42)),
-    );
+    const result = await earlyReturn<string, any, number>((_ret) =>
+      constant(42),
+    ).run();
     expect(result).toBe(42);
   });
 });
@@ -263,24 +260,22 @@ describe("recur execution", () => {
 
   it("recur restarts body with new input", async () => {
     // State: number[]. First iter: has elements → restart with []. Second iter: empty → return "done".
-    const result = await runPipeline(
-      pipe(
-        constant([1, 2]),
-        recurCombinator<Array<number>, string>((restart) =>
-          splitFirst<number>().branch({
-            Some: pipe(drop, constant([] as Array<number>), restart),
-            None: constant("done"),
-          }),
-        ),
+    const result = await pipe(
+      constant([1, 2]),
+      recurCombinator<Array<number>, string>((restart) =>
+        splitFirst<number>().branch({
+          Some: pipe(drop, constant([] as Array<number>), restart),
+          None: constant("done"),
+        }),
       ),
-    );
+    ).run();
     expect(result).toBe("done");
   });
 
   it("recur completes immediately without restart", async () => {
-    const result = await runPipeline(
-      recurCombinator<void, string>((_restart) => constant("immediate")),
-    );
+    const result = await recurCombinator<void, string>((_restart) =>
+      constant("immediate"),
+    ).run();
     expect(result).toBe("immediate");
   });
 });

@@ -20,11 +20,11 @@
  */
 
 import {
-  runPipeline,
   pipe,
   allObject,
   bindInput,
   drop,
+  constant,
 } from "@barnum/barnum/pipeline";
 import {
   setup,
@@ -47,35 +47,34 @@ const DESCRIPTION =
   "Use the existing fetchSuggestions function from autocomplete.ts. " +
   "Debounce at 300ms. Show suggestions in a dropdown below the input.";
 
-runPipeline(
-  bindInput<string, null>((description) => {
-    const checks = allObject({
-      bestPractices: withRetry(3, reviewBestPractices),
-      adherence: withRetry(3, reviewAdherence).call(description),
-      suppressedTests: withRetry(3, checkSuppressedTests),
-      typecheck: withRetry(3, runTypecheck),
-    });
+bindInput<string, null>((description) => {
+  const checks = allObject({
+    bestPractices: withRetry(3, reviewBestPractices),
+    adherence: withRetry(3, reviewAdherence).call(description),
+    suppressedTests: withRetry(3, checkSuppressedTests),
+    typecheck: withRetry(3, runTypecheck),
+  });
 
-    const reviewLoop = withMaxAttempts<null>(3, (recur, done) =>
-      classifyFeedback.call(checks).branch({
-        HasIssues: bindInput<string, never>((feedback) =>
-          pipe(
-            withRetry(3, incorporateFeedback)
-              .call(allObject({ description, feedback }))
-              .drop(),
-            recur,
-          ),
+  const reviewLoop = withMaxAttempts<null>(3, (recur, done) =>
+    classifyFeedback.call(checks).branch({
+      HasIssues: bindInput<string, never>((feedback) =>
+        pipe(
+          withRetry(3, incorporateFeedback)
+            .call(allObject({ description, feedback }))
+            .drop(),
+          recur,
         ),
-        AllClean: pipe(drop, done),
-      }),
-    );
+      ),
+      AllClean: pipe(drop, done),
+    }),
+  );
 
-    return pipe(
-      setup.drop(),
-      withRetry(3, implement).call(description).drop(),
-      reviewLoop,
-      splitCommits.drop(),
-    );
-  }),
-  DESCRIPTION,
-);
+  return pipe(
+    setup.drop(),
+    withRetry(3, implement).call(description).drop(),
+    reviewLoop,
+    splitCommits.drop(),
+  );
+})
+  .call(constant(DESCRIPTION))
+  .run();

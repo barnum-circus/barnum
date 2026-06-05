@@ -10,7 +10,6 @@ import {
 } from "../src/ast.js";
 import { constant, drop, identity, tag } from "../src/builtins/index.js";
 import { Option as O } from "../src/option.js";
-import { runPipeline } from "../src/run.js";
 import { verify } from "./handlers.js";
 import { type IsExact, assertExact, assertIO } from "./type-utils.js";
 
@@ -303,193 +302,177 @@ describe("Option AST structure", () => {
 describe("Option execution", () => {
   // -- Construction --
   it("Option.some wraps value", async () => {
-    const result = await runPipeline(constant(42).some());
+    const result = await constant(42).some().run();
     expect(result).toEqual({ kind: "Option.Some", value: 42 });
   });
 
   it("Option.none produces None", async () => {
-    const result = await runPipeline(pipe(constant(null), O.none<number>()));
+    const result = await pipe(constant(null), O.none<number>()).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   // -- map --
   it("Option.map on Some transforms value", async () => {
-    const result = await runPipeline(
-      pipe(constant(10).some(), O.map(constant(20))),
-    );
+    const result = await pipe(constant(10).some(), O.map(constant(20))).run();
     expect(result).toEqual({ kind: "Option.Some", value: 20 });
   });
 
   it("Option.map on None stays None", async () => {
-    const result = await runPipeline(
-      pipe(pipe(constant(null), O.none<number>()), O.map(constant(999))),
-    );
+    const result = await pipe(
+      pipe(constant(null), O.none<number>()),
+      O.map(constant(999)),
+    ).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   // -- andThen --
   it("Option.andThen on Some, action returns Some -> Some", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(5).some(),
-        O.andThen<number, number>(
-          pipe(
-            constant(10),
-            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
-          ),
+    const result = await pipe(
+      constant(5).some(),
+      O.andThen<number, number>(
+        pipe(
+          constant(10),
+          tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
         ),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Option.Some", value: 10 });
   });
 
   it("Option.andThen on Some, action returns None -> None", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(5).some(),
-        O.andThen<number, number>(
-          pipe(
-            drop,
-            tag<"Option", OptionDef<number>, "None">("None", "Option"),
-          ),
-        ),
+    const result = await pipe(
+      constant(5).some(),
+      O.andThen<number, number>(
+        pipe(drop, tag<"Option", OptionDef<number>, "None">("None", "Option")),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   it("Option.andThen on None -> None", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant(null), O.none<number>()),
-        O.andThen<number, number>(
-          pipe(
-            constant(10),
-            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
-          ),
+    const result = await pipe(
+      pipe(constant(null), O.none<number>()),
+      O.andThen<number, number>(
+        pipe(
+          constant(10),
+          tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
         ),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   // -- unwrap --
   it("Option.unwrap on Some extracts value", async () => {
-    const result = await runPipeline(pipe(constant(42).some(), O.unwrap()));
+    const result = await pipe(constant(42).some(), O.unwrap()).run();
     expect(result).toBe(42);
   });
 
   it("Option.unwrap on None panics", async () => {
     await expect(
-      runPipeline(pipe(pipe(constant(null), O.none<number>()), O.unwrap())),
+      pipe(pipe(constant(null), O.none<number>()), O.unwrap()).run(),
     ).rejects.toThrow();
   });
 
   // -- unwrapOr --
   it("Option.unwrapOr on Some returns value", async () => {
-    const result = await runPipeline(
-      pipe(constant(42).some(), O.unwrapOr(constant(0))),
-    );
+    const result = await pipe(
+      constant(42).some(),
+      O.unwrapOr(constant(0)),
+    ).run();
     expect(result).toBe(42);
   });
 
   it("Option.unwrapOr on None runs fallback", async () => {
-    const result = await runPipeline(
-      pipe(pipe(constant(null), O.none<number>()), O.unwrapOr(constant(0))),
-    );
+    const result = await pipe(
+      pipe(constant(null), O.none<number>()),
+      O.unwrapOr(constant(0)),
+    ).run();
     expect(result).toBe(0);
   });
 
   // -- filter --
   it("Option.filter on Some where predicate returns Some -> keeps", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(42).some(),
-        O.filter<number>(
-          pipe(
-            identity(),
-            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
-          ),
+    const result = await pipe(
+      constant(42).some(),
+      O.filter<number>(
+        pipe(
+          identity(),
+          tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
         ),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Option.Some", value: 42 });
   });
 
   it("Option.filter on Some where predicate returns None -> drops", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant(42).some(),
-        O.filter<number>(
-          pipe(
-            drop,
-            tag<"Option", OptionDef<number>, "None">("None", "Option"),
-          ),
-        ),
+    const result = await pipe(
+      constant(42).some(),
+      O.filter<number>(
+        pipe(drop, tag<"Option", OptionDef<number>, "None">("None", "Option")),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   it("Option.filter on None -> None", async () => {
-    const result = await runPipeline(
-      pipe(
-        pipe(constant(null), O.none<number>()),
-        O.filter<number>(
-          pipe(
-            identity(),
-            tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
-          ),
+    const result = await pipe(
+      pipe(constant(null), O.none<number>()),
+      O.filter<number>(
+        pipe(
+          identity(),
+          tag<"Option", OptionDef<number>, "Some">("Some", "Option"),
         ),
       ),
-    );
+    ).run();
     expect(result).toEqual({ kind: "Option.None", value: null });
   });
 
   // -- collect --
   it("Option.collect on [Some(1), None, Some(3)] -> [1, 3]", async () => {
-    const result = await runPipeline(
-      pipe(
-        constant([
-          { kind: "Option.Some", value: 1 },
-          { kind: "Option.None", value: null },
-          { kind: "Option.Some", value: 3 },
-        ] as Array<Option<number>>),
-        O.collect(),
-      ),
-    );
+    const result = await pipe(
+      constant([
+        { kind: "Option.Some", value: 1 },
+        { kind: "Option.None", value: null },
+        { kind: "Option.Some", value: 3 },
+      ] as Array<Option<number>>),
+      O.collect(),
+    ).run();
     expect(result).toEqual([1, 3]);
   });
 
   it("Option.collect on [] -> []", async () => {
-    const result = await runPipeline(
-      pipe(constant([] as Array<Option<number>>), O.collect()),
-    );
+    const result = await pipe(
+      constant([] as Array<Option<number>>),
+      O.collect(),
+    ).run();
     expect(result).toEqual([]);
   });
 
   // -- isSome / isNone --
   it("Option.isSome on Some -> true", async () => {
-    const result = await runPipeline(pipe(constant(1).some(), O.isSome()));
+    const result = await pipe(constant(1).some(), O.isSome()).run();
     expect(result).toBe(true);
   });
 
   it("Option.isSome on None -> false", async () => {
-    const result = await runPipeline(
-      pipe(pipe(constant(null), O.none<number>()), O.isSome()),
-    );
+    const result = await pipe(
+      pipe(constant(null), O.none<number>()),
+      O.isSome(),
+    ).run();
     expect(result).toBe(false);
   });
 
   it("Option.isNone on Some -> false", async () => {
-    const result = await runPipeline(pipe(constant(1).some(), O.isNone()));
+    const result = await pipe(constant(1).some(), O.isNone()).run();
     expect(result).toBe(false);
   });
 
   it("Option.isNone on None -> true", async () => {
-    const result = await runPipeline(
-      pipe(pipe(constant(null), O.none<number>()), O.isNone()),
-    );
+    const result = await pipe(
+      pipe(constant(null), O.none<number>()),
+      O.isNone(),
+    ).run();
     expect(result).toBe(true);
   });
 
@@ -501,7 +484,7 @@ describe("Option execution", () => {
       tag<"Result", ResultDef<number, string>, "Ok">("Ok", "Result"),
       tag<"Option", OptionDef<Inner>, "Some">("Some", "Option"),
     );
-    const result = await runPipeline(pipe(someOk, O.transpose()));
+    const result = await pipe(someOk, O.transpose()).run();
     expect(result).toEqual({
       kind: "Result.Ok",
       value: { kind: "Option.Some", value: 42 },
@@ -515,15 +498,16 @@ describe("Option execution", () => {
       tag<"Result", ResultDef<number, string>, "Err">("Err", "Result"),
       tag<"Option", OptionDef<Inner>, "Some">("Some", "Option"),
     );
-    const result = await runPipeline(pipe(someErr, O.transpose()));
+    const result = await pipe(someErr, O.transpose()).run();
     expect(result).toEqual({ kind: "Result.Err", value: "oops" });
   });
 
   it("Option.transpose None -> Ok(None)", async () => {
     type Inner = Result<number, string>;
-    const result = await runPipeline(
-      pipe(pipe(constant(null), O.none<Inner>()), O.transpose()),
-    );
+    const result = await pipe(
+      pipe(constant(null), O.none<Inner>()),
+      O.transpose(),
+    ).run();
     expect(result).toEqual({
       kind: "Result.Ok",
       value: { kind: "Option.None", value: null },
@@ -532,29 +516,29 @@ describe("Option execution", () => {
 
   // -- Postfix dispatch --
   it("postfix .map on Option output dispatches correctly", async () => {
-    const result = await runPipeline(constant(42).some().map(constant(99)));
+    const result = await constant(42).some().map(constant(99)).run();
     expect(result).toEqual({ kind: "Option.Some", value: 99 });
   });
 
   it("postfix .unwrap on Option output", async () => {
-    const result = await runPipeline(constant(42).some().unwrap());
+    const result = await constant(42).some().unwrap().run();
     expect(result).toBe(42);
   });
 
   it("postfix .unwrapOr on Option output", async () => {
-    const result = await runPipeline(
-      pipe(constant(null), O.none<number>()).unwrapOr(constant(99)),
-    );
+    const result = await pipe(constant(null), O.none<number>())
+      .unwrapOr(constant(99))
+      .run();
     expect(result).toBe(99);
   });
 
   it("postfix .isSome on Option output", async () => {
-    const result = await runPipeline(constant(42).some().isSome());
+    const result = await constant(42).some().isSome().run();
     expect(result).toBe(true);
   });
 
   it("postfix .isNone on Option output", async () => {
-    const result = await runPipeline(constant(42).some().isNone());
+    const result = await constant(42).some().isNone().run();
     expect(result).toBe(false);
   });
 });
