@@ -30,6 +30,9 @@ import {
   bind as bindStandalone,
   tap as tapStandalone,
 } from "./bind.js";
+// Lazy import — run.ts imports from ast.ts, but compileMethod/runMethod are only
+// called inside methods (after all modules load), so the cycle is safe at runtime.
+import { CompiledWorkflow, type RunOptions } from "./run.js";
 
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
@@ -481,6 +484,25 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   tap(action: Pipeable<Out, any>): TypedAction<In, Out>;
   /** Destructure into component VarRefs. Supports tuple and object patterns. */
   split(): Split<Out>;
+  /**
+   * Compile this pipeline into a runnable `CompiledWorkflow`. Only callable
+   * once the pipeline needs no input. Input is invariant, so `null`
+   * (`drop()`/`constant(null)`) and `void` (entry handlers) get separate
+   * overloads — supply any required input first
+   * (e.g. `foo.call(constant.number(123))`).
+   */
+  compile<TOut>(
+    this: TypedAction<null, TOut>,
+  ): CompiledWorkflow<TypedAction<null, TOut>>;
+  compile<TOut>(
+    this: TypedAction<void, TOut>,
+  ): CompiledWorkflow<TypedAction<void, TOut>>;
+  /**
+   * Run this pipeline to completion. Sugar for `this.compile().run()`. Only
+   * callable once the pipeline needs no input (`null` or `void`).
+   */
+  run<TOut>(this: TypedAction<null, TOut>, options?: RunOptions): Promise<TOut>;
+  run<TOut>(this: TypedAction<void, TOut>, options?: RunOptions): Promise<TOut>;
 };
 
 /**
@@ -1056,6 +1078,16 @@ function splitMethod(this: TypedAction): unknown {
   return createSplitProxy(this);
 }
 
+// CompiledWorkflow is referenced lazily inside these methods (not at
+// typedAction()-call time), so the ast.ts <-> run.ts import cycle is safe.
+function compileMethod(this: TypedAction): unknown {
+  return CompiledWorkflow.fromAction(this);
+}
+
+function runMethod(this: TypedAction, options?: RunOptions): Promise<unknown> {
+  return CompiledWorkflow.fromAction(this).run(options);
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -1110,6 +1142,8 @@ export function typedAction<In = unknown, Out = unknown>(
       bindInput: { value: bindInputMethod, configurable: true },
       tap: { value: tapMethod, configurable: true },
       split: { value: splitMethod, configurable: true },
+      compile: { value: compileMethod, configurable: true },
+      run: { value: runMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out>;

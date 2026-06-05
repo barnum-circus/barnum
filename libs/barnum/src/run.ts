@@ -8,14 +8,12 @@ import { createRequire } from "node:module";
 import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Action, Config, ExtractOutput } from "./ast.js";
-import { chain } from "./chain.js";
-import { constant } from "./builtins/index.js";
+import type { Action, ExtractOutput } from "./ast.js";
 
 /** Log verbosity for the barnum engine runtime. Passed to the CLI's `--log-level`. */
 export type LogLevel = "off" | "error" | "warn" | "info" | "debug" | "trace";
 
-export interface RunPipelineOptions {
+export interface RunOptions {
   /** Engine log verbosity. Default: "off" (only handler stderr is visible). */
   readonly logLevel?: LogLevel;
 }
@@ -123,19 +121,51 @@ function buildBinaryIfNeeded(binaryPath: string): void {
   });
 }
 
-/** Run a pipeline to completion. Returns the workflow's final output value. */
-export function runPipeline<TPipeline extends Action>(
-  pipeline: TPipeline,
-  input?: unknown,
-  options?: RunPipelineOptions,
-): Promise<ExtractOutput<TPipeline>> {
-  const workflow =
-    input === undefined ? pipeline : chain(constant(input), pipeline);
-  return spawnBarnum({ workflow }, options?.logLevel);
+/**
+ * A compiled, runnable workflow. Owns the serialized config JSON and carries
+ * the pipeline's output type as a phantom parameter so `run()` stays typed.
+ *
+ * Construct one with `pipeline.compile()` (from an in-memory AST) or
+ * `CompiledWorkflow.fromJSON(configJson)` (from a raw config-JSON string).
+ */
+export class CompiledWorkflow<TPipeline extends Action> {
+  /** The serialized config JSON — the compiled artifact, exposed directly. */
+  readonly configJson: string;
+  /** Phantom — carries ExtractOutput<TPipeline> so run() stays typed. */
+  declare readonly __output?: ExtractOutput<TPipeline>;
+
+  private constructor(configJson: string) {
+    this.configJson = configJson;
+  }
+
+  /** Build from an in-memory pipeline AST. Walks the AST and serializes the config. */
+  static fromAction<TAction extends Action>(
+    action: TAction,
+  ): CompiledWorkflow<TAction> {
+    return new CompiledWorkflow<TAction>(JSON.stringify({ workflow: action }));
+  }
+
+  /**
+   * Wrap an existing config-JSON string (e.g. read back from disk). No AST work.
+   *
+   * The output type can't be recovered from JSON, so `run()` resolves to
+   * `unknown` — the expected tradeoff for the no-TypeScript escape hatch.
+   */
+  static fromJSON(configJson: string): CompiledWorkflow<Action> {
+    return new CompiledWorkflow<Action>(configJson);
+  }
+
+  /** Run the compiled workflow to completion. Returns the final output value. */
+  run(options?: RunOptions): Promise<ExtractOutput<TPipeline>> {
+    return spawnBarnumJson(this.configJson, options?.logLevel);
+  }
 }
 
-/** Spawn the barnum CLI with the given config. Returns the parsed final value from stdout. */
-function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
+/** Spawn the barnum CLI with the given config JSON. Returns the parsed final value from stdout. */
+function spawnBarnumJson<TOut>(
+  configJson: string,
+  logLevel?: LogLevel,
+): Promise<TOut> {
   const binaryResolution = resolveBinary();
   if (binaryResolution.kind === "Local") {
     buildBinaryIfNeeded(binaryResolution.path);
@@ -143,7 +173,6 @@ function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
   const executor = resolveExecutor();
   const worker = resolveWorker();
 
-  const configJson = JSON.stringify(config);
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "barnum-"));
   const configFilePath = path.join(tmpDir, "config.json");
   writeFileSync(configFilePath, configJson);

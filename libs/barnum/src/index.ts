@@ -23,7 +23,7 @@ export {
 export { Option, first, last } from "./option.js";
 export { Result } from "./result.js";
 export { Iterator } from "./iterator.js";
-export { runPipeline, type RunPipelineOptions, type LogLevel } from "./run.js";
+export { CompiledWorkflow, type RunOptions, type LogLevel } from "./run.js";
 export { zodToCheckedJsonSchema } from "./schema.js";
 
 // Declaration merge: the explicit value exports of Option/Result from builtins
