@@ -191,6 +191,11 @@ function spawnBarnumJson<TOut>(
   }
 
   return new Promise<TOut>((resolve, reject) => {
+    // NOT detached: barnum makes ITSELF a process-group leader (setpgid(0,0) in
+    // barnum_cli) and installs its own SIGINT/SIGTERM handler that killpg()s the
+    // group — barnum plus the `tsx worker.ts` children it spawns. Spawning
+    // detached here would call setpgid in the child too and collide with that
+    // (EPERM), so we leave grouping to barnum.
     const child = nodeSpawn(binaryResolution.path, cliArgs, {
       stdio: ["inherit", "pipe", "pipe"],
     });
@@ -207,7 +212,33 @@ function spawnBarnumJson<TOut>(
       process.stderr.write(chunk);
     });
 
+    // Forward a parent termination signal to barnum, then remove our handlers
+    // and re-raise on ourselves so the parent exits with the conventional
+    // signal status. An interactive Ctrl+C already reaches barnum via the
+    // terminal's foreground group, but a programmatic kill of the parent (e.g.
+    // a supervisor, or `/loop`) does NOT — without this forward, barnum (and
+    // its workers, possibly mid-`git` holding an index.lock) would orphan.
+    // barnum's own signal handler then killpg()s its worker group.
+    const forwardAndExit = (signal: NodeJS.Signals) => {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(child.pid, signal);
+        } catch {
+          // Already exited, or we lost the race — nothing to do.
+        }
+      }
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      process.kill(process.pid, signal);
+    };
+    const onSigint = () => forwardAndExit("SIGINT");
+    const onSigterm = () => forwardAndExit("SIGTERM");
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+
     const cleanup = () => {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
       try {
         unlinkSync(configFilePath);
       } catch {
