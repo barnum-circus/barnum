@@ -38,8 +38,8 @@ function withRetry<TIn, TOut>(
   action: Pipeable<TIn, Result<TOut, string>>,
 ): TypedAction<TIn, TOut> {
   return bindInput<TIn, TOut>((originalInput) =>
-    earlyReturn<TOut>((ret) =>
-      loop<void, void>((recur, _done) =>
+    earlyReturn<TOut, null, never>((ret) =>
+      loop<void, never>((recur, _done) =>
         tryCatch((throwError) => {
           const result = typed(action).call(originalInput);
           const unwrapped = result.unwrapOr(throwError);

@@ -239,7 +239,7 @@ describe("earlyReturn execution", () => {
   });
 
   it("earlyReturn exits early with value", async () => {
-    const result = await earlyReturn<string>((ret) =>
+    const result = await earlyReturn<string, null, never>((ret) =>
       pipe(constant("early"), ret),
     ).run();
     expect(result).toBe("early");

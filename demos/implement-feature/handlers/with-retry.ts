@@ -29,8 +29,8 @@ export function withRetry<TIn, TOut>(
   action: Pipeable<TIn, Result<TOut, string>>,
 ): TypedAction<TIn, TOut> {
   return bindInput<TIn, TOut>((originalInput) =>
-    earlyReturn<TOut>((ret) => {
-      const retryLoop = loop<number, void>((recur, _done) =>
+    earlyReturn<TOut, null, never>((ret) => {
+      const retryLoop = loop<number, never>((recur, _done) =>
         bindInput<number, never>((retriesRemaining) =>
           tryCatch(
             (throwError: TypedAction<string, never>) => {

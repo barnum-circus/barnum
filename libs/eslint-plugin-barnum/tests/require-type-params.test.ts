@@ -12,60 +12,26 @@ const ruleTester = new RuleTester({
 });
 
 describe("require-type-params", () => {
-  it("enforces type parameters on loop", () => {
+  it("does not track loop (its defaults are concrete, not `any`)", () => {
     ruleTester.run("require-type-params", rule, {
       valid: [
-        // 1 type param (TIn) — minimum
-        `loop<string>((recur, done) => done)`,
-        // 2 type params (TIn, TOut)
-        `loop<string, number>((recur, done) => done)`,
-        // never is valid for output position
-        `loop<string, never>((recur, done) => recur)`,
-        // void is valid
-        `loop<void, null>((recur, done) => done)`,
+        // loop is intentionally not covered — bare loop infers a concrete
+        // output and still type-checks its body, so no type params are required.
+        `loop((recur, done) => done)`,
+        `loop<unknown>((recur, done) => done)`,
+        `loop<string, any>((recur, done) => done)`,
       ],
-      invalid: [
-        // No type params
-        {
-          code: `loop((recur, done) => done)`,
-          errors: [{ messageId: "missingTypeParams" }],
-        },
-        // unknown in TIn (input position)
-        {
-          code: `loop<unknown>((recur, done) => done)`,
-          errors: [{ messageId: "unknownInInput" }],
-        },
-        // any in TOut (output position)
-        {
-          code: `loop<string, any>((recur, done) => done)`,
-          errors: [{ messageId: "anyInOutput" }],
-        },
-        // unknown in TIn with TOut provided
-        {
-          code: `loop<unknown, number>((recur, done) => done)`,
-          errors: [{ messageId: "unknownInInput" }],
-        },
-        // both violations
-        {
-          code: `loop<unknown, any>((recur, done) => done)`,
-          errors: [
-            { messageId: "unknownInInput" },
-            { messageId: "anyInOutput" },
-          ],
-        },
-      ],
+      invalid: [],
     });
   });
 
   it("enforces type parameters on earlyReturn", () => {
     ruleTester.run("require-type-params", rule, {
       valid: [
-        // 1 type param (TEarlyReturn)
-        `earlyReturn<string>((ret) => ret)`,
-        // 3 type params
+        // All 3 params — only this prevents TIn/TOut defaulting to `any`
         `earlyReturn<string, number, boolean>((ret) => ret)`,
         // never in output positions is fine
-        `earlyReturn<never>((ret) => ret)`,
+        `earlyReturn<never, number, never>((ret) => ret)`,
       ],
       invalid: [
         // No type params
@@ -73,14 +39,24 @@ describe("require-type-params", () => {
           code: `earlyReturn((ret) => ret)`,
           errors: [{ messageId: "missingTypeParams" }],
         },
+        // Only 1 param — TIn and TOut still default to `any`
+        {
+          code: `earlyReturn<string>((ret) => ret)`,
+          errors: [{ messageId: "missingTypeParams" }],
+        },
+        // Only 2 params — TOut still defaults to `any`
+        {
+          code: `earlyReturn<string, number>((ret) => ret)`,
+          errors: [{ messageId: "missingTypeParams" }],
+        },
         // any in TEarlyReturn (output position)
         {
-          code: `earlyReturn<any>((ret) => ret)`,
+          code: `earlyReturn<any, number, boolean>((ret) => ret)`,
           errors: [{ messageId: "anyInOutput" }],
         },
         // unknown in TIn (input position, param 2)
         {
-          code: `earlyReturn<string, unknown>((ret) => ret)`,
+          code: `earlyReturn<string, unknown, boolean>((ret) => ret)`,
           errors: [{ messageId: "unknownInInput" }],
         },
         // any in TOut (output position, param 3)

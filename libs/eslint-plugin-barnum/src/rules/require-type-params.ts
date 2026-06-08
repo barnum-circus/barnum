@@ -12,10 +12,14 @@ interface CombinatorConfig {
   params: Array<"input" | "output">;
 }
 
-/** Standalone call configs: loop(...), bindInput(...), earlyReturn(...) */
+// Only combinators whose output silently degrades to `any` when type params are
+// omitted need this rule. `loop<TIn = void, TOut = void>` defaults to a concrete
+// output (and still type-checks its body), so it's intentionally absent here.
+// `earlyReturn<TEarlyReturn, TIn = any, TOut = any>` degrades both TIn and TOut
+// unless all three are supplied — hence minParams 3, not 1.
+/** Standalone call configs: bindInput(...), earlyReturn(...) */
 const STANDALONE_CONFIG = new Map<string, CombinatorConfig>([
-  ["loop", { minParams: 1, params: ["input", "output"] }], // TIn, TOut
-  ["earlyReturn", { minParams: 1, params: ["output", "input", "output"] }], // TEarlyReturn, TIn, TOut
+  ["earlyReturn", { minParams: 3, params: ["output", "input", "output"] }], // TEarlyReturn, TIn, TOut
   ["bindInput", { minParams: 2, params: ["input", "output"] }], // TIn, TOut
 ]);
 
@@ -39,13 +43,13 @@ const rule: Rule.RuleModule = {
     type: "problem",
     docs: {
       description:
-        "Require explicit type parameters on loop, earlyReturn, and bindInput. Disallow `any` in output positions and `unknown` in input positions.",
+        "Require explicit type parameters on earlyReturn and bindInput (combinators whose output degrades to `any` without them). Disallow `any` in output positions and `unknown` in input positions.",
     },
     messages: {
       missingTypeParams:
-        "'{{ name }}' requires at least {{ min }} explicit type parameter(s). TypeScript defaults mask type errors (e.g., `any` silently satisfies `never` constraints in loop bodies).",
+        "'{{ name }}' requires at least {{ min }} explicit type parameter(s). Omitting them defaults the input/output to `any`, silently disabling type checking downstream.",
       anyInOutput:
-        "Type parameter {{ position }} of '{{ name }}' is an output type — `any` defeats type checking. Use a concrete type or `never` for loop/earlyReturn bodies.",
+        "Type parameter {{ position }} of '{{ name }}' is an output type — `any` defeats type checking. Use a concrete type or `never` for early-return bodies.",
       unknownInInput:
         "Type parameter {{ position }} of '{{ name }}' is an input type — `unknown` is too wide. Use the concrete input type.",
     },
