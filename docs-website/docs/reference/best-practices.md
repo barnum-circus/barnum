@@ -684,6 +684,26 @@ allObject({
 
 Named fields survive reordering and additions without breaking downstream `.getIndex()` calls. Use `all` only when feeding directly into something that expects a tuple (like `fold`'s `[acc, element]`).
 
+### A single-field `allObject` is a smell
+
+`allObject` exists to combine *two or more* actions into a named object. With one field, it does nothing but wrap a value the next step has to immediately unwrap — you almost certainly want the action directly.
+
+```ts
+// Avoid: one-field allObject — the wrapper adds nothing
+allObject({ branch: resource.getField("branch") }).then(createPR);
+
+// Prefer: pass the action straight through
+resource.getField("branch").then(createPR);
+```
+
+If `createPR` genuinely needs `{ branch }` rather than a bare string, that's a `wrapInField`, not an `allObject`:
+
+```ts
+resource.getField("branch").wrapInField("branch").then(createPR);
+```
+
+The same applies to any one-field object you build mid-pipeline: a single-key record is a sign the structure is doing nothing. Reach for `allObject` only once there are at least two fields to combine.
+
 ### `bindInput` captures the input as a `VarRef` — the body starts fresh
 
 `bindInput<TIn>(fn)` captures the current pipeline value as a `VarRef<TIn>` and passes it to the callback. **The body's pipeline input is `any` — it does NOT receive the captured value as its natural input.** You must explicitly inject values using the VarRef's methods (`.getField()`, `.pick()`, or using the ref directly as the first step in a `pipe`).
