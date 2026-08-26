@@ -5,7 +5,13 @@
 
 import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Action, ExtractOutput } from "./ast.js";
@@ -20,14 +26,34 @@ export interface RunOptions {
 
 const __dirname = import.meta.dirname;
 
+/** `createRequire` from a path, following symlinks so a linked bin still sees the project. */
+function requireFrom(from: string): NodeJS.Require {
+  try {
+    return createRequire(realpathSync(from));
+  } catch {
+    return createRequire(from);
+  }
+}
+
 /** Resolve the TypeScript executor. Uses bun if the workflow was launched with bun, otherwise tsx. */
 function resolveExecutor(): string {
   if (process.versions.bun) {
     return "bun";
   }
-  const callerRequire = createRequire(process.argv[1] || import.meta.url);
-  const tsxPath = callerRequire.resolve("tsx/cli");
-  return `node ${tsxPath}`;
+  const froms = [
+    process.argv[1],
+    path.join(process.cwd(), "package.json"),
+  ].filter((from) => from !== undefined);
+  for (const from of froms) {
+    try {
+      return `node ${requireFrom(from).resolve("tsx/cli")}`;
+    } catch {
+      // try the next origin
+    }
+  }
+  throw new Error(
+    "Could not find tsx. Install tsx in the project that calls .run().",
+  );
 }
 
 /** Resolve the platform-specific binary from the @barnum/barnum package artifacts. */
@@ -53,22 +79,15 @@ function resolveInstalledBinary(): string | undefined {
     return undefined;
   }
 
-  const callerRequire = createRequire(process.argv[1] || import.meta.url);
-  try {
-    const packageDir = path.dirname(
-      callerRequire.resolve("@barnum/barnum/package.json"),
-    );
-    const binaryPath = path.join(
-      packageDir,
-      "artifacts",
-      artifactDir,
-      binaryName,
-    );
-    if (existsSync(binaryPath)) {
-      return binaryPath;
-    }
-  } catch {
-    // Package not installed
+  const packageDir = path.resolve(__dirname, "..");
+  const binaryPath = path.join(
+    packageDir,
+    "artifacts",
+    artifactDir,
+    binaryName,
+  );
+  if (existsSync(binaryPath)) {
+    return binaryPath;
   }
   return undefined;
 }
